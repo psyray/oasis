@@ -56,8 +56,18 @@ git clone https://github.com/psyray/oasis.git
 cd oasis
 ```
 
-2. Create a virtual environment and install dependencies with pipx:
+2. Install with pipx:
 ```bash
+# First time installation
+pipx install --editable .
+
+# Update existing installation
+pipx upgrade oasis
+```
+
+Note: If you need to reinstall or update during development:
+```bash
+pipx uninstall oasis
 pipx install --editable .
 ```
 

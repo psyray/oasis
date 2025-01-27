@@ -1421,11 +1421,14 @@ def main():
         logging.getLogger('httpx').setLevel(logging.ERROR)
         logging.getLogger('weasyprint').setLevel(logging.ERROR)
     else:
+        # Set default logging to ERROR for all loggers
         logging.basicConfig(level=logging.ERROR)
         weasyprint_logger.setLevel(logging.ERROR)
         logging.getLogger('fontTools').setLevel(logging.ERROR)
         logging.getLogger('httpx').setLevel(logging.ERROR)
         logging.getLogger('weasyprint').setLevel(logging.ERROR)
+        # Also set the root logger to ERROR
+        logging.getLogger().setLevel(logging.ERROR)
 
     if not args.audit:
         # Get available models
