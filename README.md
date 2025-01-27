@@ -1,4 +1,8 @@
 <p align="center">
+  <img src=".github/images/logo.webp" alt="OASIS Logo" width="200"/>
+</p>
+
+<p align="center">
   <a href="https://github.com/psyray/oasis/blob/main/LICENSE">
     <img src="https://img.shields.io/github/license/psyray/oasis" alt="License">
   </a>
@@ -9,6 +13,7 @@
     <img src="https://img.shields.io/badge/python-3.7+-blue.svg" alt="Python">
   </a>
 </p>
+
 # OASIS (Ollama Automated Security Intelligence Scanner)
 
 <p align="center">
@@ -77,6 +82,21 @@ Basic usage:
 ```bash
 oasis [path_to_analyze]
 ```
+
+### 🚀 Quick Test
+
+To quickly test OASIS with sample files:
+```bash
+# Clone and install
+git clone https://github.com/psyray/oasis.git
+cd oasis
+pipx install --editable .
+
+# Run analysis on test files
+oasis test_files/
+```
+
+This will analyze the provided test files and generate security reports in the `test_files/security_reports/` directory.
 
 Advanced options:
 ```bash
@@ -163,6 +183,5 @@ Contributions are welcome! Please feel free to submit a Pull Request. Check out 
 
 ## 📫 Support
 
-If you encounter any issues or have questions, please file an issue on our GitHub repository.
-```
+If you encounter any issues or have questions, please file an issue
 
