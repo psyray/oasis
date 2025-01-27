@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Ollama Automated Security Intelligence Scanner"
 readme = "README.md"
 requires-python = ">=3.7"
-license = "GPL v3"
+license = "GPL-3.0-only"
 authors = [
     { name = "psyray" }
 ]
