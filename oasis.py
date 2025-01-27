@@ -19,8 +19,15 @@ from markdown.preprocessors import Preprocessor
 from multiprocessing import Pool, cpu_count
 from functools import partial
 
-# Initialize logger but don't set level yet
-logger = logging.getLogger(__name__)
+# Initialize logger with module name
+logger = logging.getLogger('oasis')
+# Add console handler
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+logger.addHandler(console_handler)
+
+# Disable fonttools logging by default
+logging.getLogger('fontTools').setLevel(logging.ERROR)
 
 class PageBreakExtension(Extension):
     """Extension Markdown pour gérer les sauts de page"""
@@ -1412,23 +1419,24 @@ def main():
 
     # Configure logging based on arguments
     if args.debug:
-        logging.basicConfig(level=logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
+        console_handler.setLevel(logging.DEBUG)
         weasyprint_logger.setLevel(logging.DEBUG)
     elif args.verbose:
-        logging.basicConfig(level=logging.INFO)
+        logger.setLevel(logging.INFO)
+        console_handler.setLevel(logging.INFO)
         weasyprint_logger.setLevel(logging.WARNING)
         logging.getLogger('fontTools').setLevel(logging.ERROR)
         logging.getLogger('httpx').setLevel(logging.ERROR)
         logging.getLogger('weasyprint').setLevel(logging.ERROR)
     else:
-        # Set default logging to ERROR for all loggers
-        logging.basicConfig(level=logging.ERROR)
+        # Set only our logger and specific third-party loggers to ERROR
+        logger.setLevel(logging.ERROR)
+        console_handler.setLevel(logging.ERROR)
         weasyprint_logger.setLevel(logging.ERROR)
         logging.getLogger('fontTools').setLevel(logging.ERROR)
         logging.getLogger('httpx').setLevel(logging.ERROR)
         logging.getLogger('weasyprint').setLevel(logging.ERROR)
-        # Also set the root logger to ERROR
-        logging.getLogger().setLevel(logging.ERROR)
 
     if not args.audit:
         # Get available models
