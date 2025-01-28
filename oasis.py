@@ -1414,31 +1414,31 @@ def main():
     )
     parser.add_argument('input_path', type=str, 
                        help='Path to file, directory, or .txt file containing paths to analyze',
-                       nargs='?')  # Make input_path optional
-    parser.add_argument('--cache-days', type=int, default=7, 
-                       help='Maximum age of cache in days (default: 7)')
-    parser.add_argument('--threshold', type=float, default=0.5, 
+                       nargs='?')
+    parser.add_argument('-t', '--threshold', type=float, default=0.5, 
                        help='Similarity threshold (default: 0.5)')
-    parser.add_argument('--vulns', type=str, default='all', 
+    parser.add_argument('-v', '--vulns', type=str, default='all', 
                        help=get_vulnerability_help())
-    parser.add_argument('--no-pdf', action='store_true', 
+    parser.add_argument('-np', '--no-pdf', action='store_true', 
                        help='Skip PDF generation')
-    parser.add_argument('--debug', action='store_true', 
+    parser.add_argument('-d', '--debug', action='store_true', 
                        help='Enable debug mode')
-    parser.add_argument('--verbose', action='store_true', 
+    parser.add_argument('-V', '--verbose', action='store_true', 
                        help='Enable verbose output')
-    parser.add_argument('--embed-model', type=str, default='nomic-embed-text',
+    parser.add_argument('-em', '--embed-model', type=str, default='nomic-embed-text',
                       help='Model to use for embeddings (default: nomic-embed-text)')
-    parser.add_argument('--models', type=str,
+    parser.add_argument('-m', '--models', type=str,
                        help='Comma-separated list of models to use (bypasses interactive selection)')
-    parser.add_argument('--list-models', action='store_true',
+    parser.add_argument('-lm', '--list-models', action='store_true',
                        help='List available models and exit')
-    parser.add_argument('--extensions', type=str,
+    parser.add_argument('-x', '--extensions', type=str,
                        help='Comma-separated list of file extensions to analyze (e.g., "py,js,java")')
-    parser.add_argument('--clear-cache', '-cc', action='store_true',
+    parser.add_argument('-cc', '--clear-cache', action='store_true',
                        help='Clear embeddings cache before starting')
-    parser.add_argument('--audit', action='store_true',
+    parser.add_argument('-a', '--audit', action='store_true',
                        help='Run embedding distribution analysis')
+    parser.add_argument('-cd', '--cache-days', type=int, default=7, 
+                       help='Maximum age of cache in days (default: 7)')
     args = parser.parse_args()
 
     # Check if --list-models is used
