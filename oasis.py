@@ -1368,6 +1368,29 @@ def analyze_embeddings_distribution(auditor: CodeSecurityAuditor, vulnerability_
         print(f"Max similarity: {max(scores):.3f}")
         print(f"Min similarity: {min(scores):.3f}")
 
+def get_output_directory(input_path: Path, base_reports_dir: Path) -> Path:
+    """
+    Generate output directory path based on input path
+    Args:
+        input_path: Path being analyzed
+        base_reports_dir: Base directory for security reports
+    Returns:
+        Path object for the output directory
+    """
+    # Convert input path to absolute path
+    abs_input = input_path.absolute()
+    
+    # Create a sanitized directory name from the input path
+    dir_name = abs_input.name
+    if not dir_name:  # Handle root directory case
+        dir_name = 'root'
+    
+    # Create timestamped directory to avoid overwrites
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    output_dir = base_reports_dir / f"{dir_name}_{timestamp}"
+    
+    return output_dir
+
 def main():
     # Parse command line arguments
     class CustomFormatter(argparse.RawDescriptionHelpFormatter):
@@ -1466,9 +1489,13 @@ def main():
     # Get vulnerability mapping
     vuln_mapping = get_vulnerability_mapping()
 
-    # Create base reports directory
-    base_reports_dir = Path(args.input_path).parent / "security_reports"
+    # Create base reports directory relative to input path
+    base_reports_dir = Path(args.input_path).resolve().parent / "security_reports"
     base_reports_dir.mkdir(exist_ok=True)
+
+    # Get specific output directory for this analysis
+    output_dir = get_output_directory(Path(args.input_path), base_reports_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Parse extensions if provided
     custom_extensions = None
@@ -1532,7 +1559,7 @@ def main():
         report_files = generate_audit_report(
             embedding_auditor, 
             vulnerabilities,
-            base_reports_dir
+            output_dir
         )
         
         print("\nAudit analysis completed!")
@@ -1551,7 +1578,7 @@ def main():
 
         # Create model-specific directory and its format subdirectories
         model_name = sanitize_model_name(model)
-        model_dir = base_reports_dir / model_name
+        model_dir = output_dir / model_name
         model_dir.mkdir(exist_ok=True)
         
         # Create format-specific directories under the model directory
@@ -1655,14 +1682,14 @@ def main():
 
     # Print summary of generated files
     print("\nAnalysis complete!")
-    abs_report_path = os.path.abspath(base_reports_dir)
+    abs_report_path = os.path.abspath(output_dir)
     print(f"\nReports have been generated in: {abs_report_path}")
     print("\nGenerated files structure:")
     
     # Display only the models that were just analyzed
     for model in selected_models:
         model_name = sanitize_model_name(model)
-        model_dir = base_reports_dir / model_name
+        model_dir = output_dir / model_name
         if model_dir.is_dir():
             print(f"\n{model_name}/")
             for fmt_dir in model_dir.glob('*'):
