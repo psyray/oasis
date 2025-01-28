@@ -157,44 +157,53 @@ class CodeSecurityAuditor:
 
     def index_code_files(self, files: List[Path]) -> None:
         """
-        Index files and generate embeddings
+        Generate embeddings for code files
         Args:
-            files: List of files to index
+            files: List of file paths to analyze
         """
         try:
-            for file_path in tqdm(files, desc="Generating embeddings", disable=logger.level > logging.INFO):
-                try:
-                    # Skip if file is already in cache
+            print("Generating embeddings...")
+            # Add progress bar for embedding generation
+            with tqdm(files, desc="Progress", leave=True, position=1) as pbar:
+                # Add a separate line for filename display
+                #print("\033[F", end="")  # Move cursor up one line
+                for file_path in pbar:
                     if str(file_path) in self.code_base:
                         continue
                         
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        code = f.read()
-                        embedding_response = self.client.embeddings(
+                    try:
+                        # Update filename display on the line above progress bar
+                        print(f"\rProcessing: {file_path.name}" + " " * 50, end="\r")
+                        
+                        # Read file content
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+
+                        # Get embedding
+                        response = self.client.embeddings(
                             model=self.embedding_model,
-                            prompt=code
+                            prompt=content
                         )
-                        
-                        if not embedding_response or 'embedding' not in embedding_response:
-                            logger.error(f"Failed to get embedding for file {file_path}")
-                            continue
-                        
-                        # Store only the embedding vector, not the full response
-                        self.code_base[str(file_path)] = {
-                            'code': code,
-                            'embedding': embedding_response['embedding']
-                        }
-                        
-                        # Save cache after each successful embedding
-                        self.save_cache()
-                        
-                except Exception as e:
-                    logger.error(f"Error while indexing {file_path}: {str(e)}")
-                    if logger.isEnabledFor(logging.DEBUG):
-                        logger.debug("Full error:", exc_info=True)
-                    
+
+                        if response and 'embedding' in response:
+                            self.code_base[str(file_path)] = {
+                                'content': content,
+                                'embedding': response['embedding']
+                            }
+
+                    except Exception as e:
+                        logger.error(f"Error processing {file_path}: {str(e)}")
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug("Full error:", exc_info=True)
+                        continue
+
+            # Clear the filename line after completion
+            print("\r" + " " * 80, end="\r")
+            # Save updated cache
+            self.save_cache()
+
         except Exception as e:
-            logger.error(f"Error during indexing: {str(e)}")
+            logger.error(f"Error indexing files: {str(e)}")
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("Full error:", exc_info=True)
 
@@ -251,8 +260,8 @@ class CodeSecurityAuditor:
         
         for file_path in self.code_base:
             file_info = {
-                'size': len(self.code_base[file_path]['code']),
-                'embedding_dimensions': len(self.code_base[file_path]['embedding']['embedding'])
+                'size': len(self.code_base[file_path]['content']),
+                'embedding_dimensions': len(self.code_base[file_path]['embedding'])
             }
             info['files'][file_path] = file_info
             
@@ -348,7 +357,7 @@ class CodeSecurityAuditor:
             if file_path not in self.code_base:
                 return "File not found in indexed code base"
 
-            code = self.code_base[file_path]['code']
+            code = self.code_base[file_path]['content']
             
             MAX_CHUNK_SIZE = 7500
             code_chunks = self._split_code_into_chunks(code, MAX_CHUNK_SIZE)
@@ -1404,7 +1413,8 @@ def main():
         formatter_class=CustomFormatter
     )
     parser.add_argument('input_path', type=str, 
-                       help='Path to file, directory, or .txt file containing paths to analyze')
+                       help='Path to file, directory, or .txt file containing paths to analyze',
+                       nargs='?')  # Make input_path optional
     parser.add_argument('--cache-days', type=int, default=7, 
                        help='Maximum age of cache in days (default: 7)')
     parser.add_argument('--threshold', type=float, default=0.5, 
@@ -1430,6 +1440,22 @@ def main():
     parser.add_argument('--audit', action='store_true',
                        help='Run embedding distribution analysis')
     args = parser.parse_args()
+
+    # Check if --list-models is used
+    if args.list_models:
+        # Get available models
+        available_models = get_available_models()
+        if not available_models:
+            logger.error("No models available. Please check Ollama installation.")
+            return
+        print("\nAvailable models:")
+        for model in available_models:
+            print(f"- {model}")
+        return
+
+    # Check if input_path is provided when not using --list-models
+    if not args.input_path:
+        parser.error("input_path is required when not using --list-models")
 
     # Check Ollama connection before proceeding
     if not check_ollama_connection():
