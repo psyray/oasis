@@ -10,7 +10,9 @@
   </a>
 </p>
 
-<h1 style="margin: ; text-align: center;">OASIS</h2>
+<div align="center">
+  <h1>OASIS</h1>
+</div>
 <p align="center">
   <small><strong>O</strong>llama <strong>A</strong>utomated <strong>S</strong>ecurity <strong>I</strong>ntelligence <strong>S</strong>canner</small>
 </p>
