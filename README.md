@@ -1,8 +1,4 @@
 <p align="center">
-  <img src=".github/images/logo.webp" alt="OASIS Logo" width="200"/>
-</p>
-
-<p align="center">
   <a href="https://github.com/psyray/oasis/blob/main/LICENSE">
     <img src="https://img.shields.io/github/license/psyray/oasis" alt="License">
   </a>
@@ -14,7 +10,14 @@
   </a>
 </p>
 
-# OASIS (Ollama Automated Security Intelligence Scanner)
+<h1 style="margin: ; text-align: center;">OASIS</h2>
+<p align="center">
+  <small><strong>O</strong>llama <strong>A</strong>utomated <strong>S</strong>ecurity <strong>I</strong>ntelligence <strong>S</strong>canner</small>
+</p>
+
+<p align="center">
+  <img src=".github/images/logo.webp" alt="OASIS Logo" width="200"/>
+</p>
 
 <p align="center">
   🛡️ An AI-powered security auditing tool that leverages Ollama models to detect and analyze potential security vulnerabilities in your code.

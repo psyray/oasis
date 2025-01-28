@@ -1391,7 +1391,7 @@ def get_output_directory(input_path: Path, base_reports_dir: Path) -> Path:
     
     # Create a sanitized directory name from the input path
     dir_name = abs_input.name
-    if not dir_name:  # Handle root directory case
+    if not dir_name:  # Handle root directory case Error during analysis
         dir_name = 'root'
     
     # Create timestamped directory to avoid overwrites
@@ -1399,6 +1399,21 @@ def get_output_directory(input_path: Path, base_reports_dir: Path) -> Path:
     output_dir = base_reports_dir / f"{dir_name}_{timestamp}"
     
     return output_dir
+
+def display_logo():
+    logo = """
+     .d88b.    db    .d8888.  _\\\\|//_ .d8888. 
+    .8P  Y8.  d88b   88'  YP    \\\\//  88'  YP 
+    88    88 d8'`8b  `8bo.       ||     `8bo.   
+    88    88 88ooo88   `Y8b.     ||       `Y8b. 
+    `8b  d8' 88~~~88 db   8D    /||\\   db   8D 
+     `Y88P'  YP  YP  `8888Y' __/_||_\\_ `8888Y' 
+
+╔════════════════════════════════════════════════╗
+║ Ollama Automated Security Intelligence Scanner ║
+╚════════════════════════════════════════════════╝
+"""
+    print(logo)
 
 def main():
     # Parse command line arguments
@@ -1727,4 +1742,5 @@ def main():
     print(f"\nCache file: {embedding_auditor.cache_file}")
 
 if __name__ == "__main__":
+    display_logo()
     main()
