@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "oasis"
-version = "0.1.0"
+version = "0.2.0"
 description = "Ollama Automated Security Intelligence Scanner"
 readme = "README.md"
 requires-python = ">=3.7"
