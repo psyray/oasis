@@ -880,9 +880,6 @@ def convert_md_to_pdf(markdown_file: Path, output_pdf: Path = None,
             stylesheets=[CSS(string='@page { margin: 1cm; size: A4; @top-right { content: counter(page); } }')]
         )
 
-        logger.debug(f"Generated PDF: {output_pdf}")
-        logger.debug(f"Generated HTML: {output_html}")
-
     except Exception as e:
         logger.error(f"Error converting markdown to PDF: {str(e)}")
         logger.debug("Full error:", exc_info=True)
@@ -1626,6 +1623,82 @@ def detect_optimal_chunk_size(model: str) -> int:
         logger.warning("Using conservative default chunk size: 2048")
         return 2048
 
+def check_model_availability(model_name: str) -> bool:
+    """
+    Check if a model is available on Ollama server
+    Args:
+        model_name: Name of the model to check
+    Returns:
+        True if model is available, False otherwise
+    """
+    try:
+        client = ollama.Client()
+        models = client.list()
+        return any(model.model == model_name for model in models.models)
+    except Exception as e:
+        logger.error(f"Error checking model availability: {str(e)}")
+        return False
+
+def install_model(model_name: str) -> bool:
+    """
+    Install a model from Ollama
+    Args:
+        model_name: Name of the model to install
+    Returns:
+        True if installation successful, False otherwise
+    """
+    try:
+        client = ollama.Client()
+        logger.info(f"Installing model {model_name}...")
+        
+        with tqdm(desc=f"Downloading {model_name}", unit='B', unit_scale=True, unit_divisor=1024) as pbar:
+            for response in client.pull(model_name, stream=True):
+                if 'status' in response:
+                    status = response['status']
+                    if 'completed' in status:
+                        pbar.update(pbar.total - pbar.n)  # Complete the bar
+                    elif 'pulling' in status:
+                        if 'total' in response and 'completed' in response:
+                            total = int(response['total'])
+                            completed = int(response['completed'])
+                            if pbar.total != total:
+                                pbar.total = total
+                            pbar.n = completed
+                            pbar.refresh()
+        
+        logger.info(f"Model {model_name} installed successfully!")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error installing model: {str(e)}")
+        return False
+
+def ensure_model_available(model_name: str) -> bool:
+    """
+    Ensure a model is available, prompt for installation if not
+    Args:
+        model_name: Name of the model to check/install
+    Returns:
+        True if model is available or successfully installed
+    """
+    if check_model_availability(model_name):
+        logger.debug(f"Model {model_name} is available")
+        return True
+    
+    logger.warning(f"Model {model_name} is not available")
+    while True:
+        response = input(f"\nModel {model_name} is not installed. Would you like to:\n"
+                        "1. Install it now\n"
+                        "2. Quit\n"
+                        "Choose (1/2): ").strip()
+        
+        if response == "1":
+            return install_model(model_name)
+        elif response == "2":
+            return False
+        else:
+            print("Invalid choice. Please enter 1 or 2.")
+
 def main():
     # Parse command line arguments
     class CustomFormatter(argparse.RawDescriptionHelpFormatter):
@@ -1651,8 +1724,8 @@ def main():
                        help='Enable debug output')
     parser.add_argument('-s', '--silent', action='store_true',
                        help='Disable all output messages')
-    parser.add_argument('-em', '--embed-model', type=str, default='nomic-embed-text',
-                      help='Model to use for embeddings (default: nomic-embed-text)')
+    parser.add_argument('-em', '--embed-model', type=str, default='nomic-embed-text:latest',
+                      help='Model to use for embeddings (default: nomic-embed-text:latest)')
     parser.add_argument('-m', '--models', type=str,
                        help='Comma-separated list of models to use (bypasses interactive selection)')
     parser.add_argument('-lm', '--list-models', action='store_true',
@@ -1719,15 +1792,25 @@ def main():
         # Select models to use
         if args.models:
             selected_models = [m.strip() for m in args.models.split(',')]
-            invalid_models = [m for m in selected_models if m not in available_models]
-            if invalid_models:
-                logger.error(f"Invalid models: {', '.join(invalid_models)}")
+            # Check if the analysis models are available
+            for model in selected_models:
+                if not ensure_model_available(model):
+                    logger.error(f"Analysis model {model} not available. Skipping.")
+                    selected_models.remove(model)
+            
+            if not selected_models:
+                logger.error("No analysis models available. Exiting.")
                 return
         else:
             selected_models = select_models(available_models)
 
         logger.debug(f"Selected models: {', '.join(selected_models)}")
 
+    # Check if the embedding model is available
+    if not ensure_model_available(args.embed_model):
+        logger.error("Embedding model not available. Exiting.")
+        return
+    
     # Get vulnerability mapping
     vuln_mapping = get_vulnerability_mapping()
 
@@ -1875,7 +1958,6 @@ def main():
                          disable=args.silent,
                          leave=False) as file_pbar:
                     for file_path, similarity_score in file_pbar:
-                        # Update description without new line
                         file_pbar.set_postfix_str(f"File: {Path(file_path).name}")
                         analysis = analysis_auditor.analyze_vulnerability(file_path, vuln['name'])
                         detailed_results.append({
