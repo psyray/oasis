@@ -40,15 +40,53 @@ def setup_logging(debug=False, silent=False):
     class EmojiFormatter(logging.Formatter):
         def format(self, record):
             if not hasattr(record, 'formatted_message'):
+                # Keywords lists for each type of message
+                INSTALL_WORDS = ['installing', 'download', 'pulling', 'fetching']
+                ANALYSIS_WORDS = ['analyzing', 'analysis', 'scanning', 'checking', 'inspecting', 'examining']
+                GENERATION_WORDS = ['generating', 'creating', 'building', 'processing']
+                MODEL_WORDS = ['model', 'ai', 'llm']
+                CACHE_WORDS = ['cache', 'stored', 'saving']
+                SAVE_WORDS = ['saved', 'written', 'exported']
+                LOAD_WORDS = ['loading', 'reading', 'importing', 'loaded']
+                FAIL_WORDS = ['failed', 'error', 'crash', 'exception']
+
+                # Get the appropriate icon based on level and content
                 if record.levelno == logging.DEBUG:
                     record.levelname = '🪲 '  # Debug: beetle
                 elif record.levelno == logging.INFO:
-                    record.levelname = ''    # Info: no prefix
+                    msg_lower = record.msg.lower()
+                    if any(word in msg_lower for word in INSTALL_WORDS):
+                        icon = '📥 '  # Download/Install
+                    elif any(word in msg_lower for word in ANALYSIS_WORDS):
+                        icon = '🔎 '  # Analysis
+                    elif any(word in msg_lower for word in GENERATION_WORDS):
+                        icon = '⚙️  '  # Generation/Processing
+                    elif any(word in msg_lower for word in MODEL_WORDS):
+                        icon = '🤖 '  # AI/Model
+                    elif any(word in msg_lower for word in CACHE_WORDS):
+                        icon = '💾 '  # Cache/Save
+                    elif any(word in msg_lower for word in SAVE_WORDS):
+                        icon = '💾 '  # Save
+                    elif any(word in msg_lower for word in LOAD_WORDS):
+                        icon = '📂 '  # Loading
+                    else:
+                        icon = ''  # Default info
                 elif record.levelno == logging.WARNING:
-                    record.levelname = '⚠️ '   # Warning: warning sign
+                    icon = '⚠️  '  # Warning
                 elif record.levelno == logging.ERROR:
-                    record.levelname = '❌ '   # Error: cross mark
-                record.formatted_message = f"{record.levelname}{record.msg}"
+                    if any(word in record.msg.lower() for word in FAIL_WORDS):
+                        icon = '💥 '  # Crash
+                    else:
+                        icon = '❌ '  # Standard error
+                elif record.levelno == logging.CRITICAL:
+                    icon = '🚨 '  # Critical/Fatal
+
+                # Handle messages starting with newline
+                if record.msg.startswith('\n'):
+                    record.formatted_message = record.msg.replace('\n', '\n' + icon, 1)
+                else:
+                    record.formatted_message = f"{icon}{record.msg}"
+
             return record.formatted_message
 
     # Configure handlers based on silent mode
@@ -386,7 +424,7 @@ class CodeSecurityAuditor:
             self.cache_file.parent.mkdir(parents=True, exist_ok=True)
             
             if not self.cache_file.exists():
-                logger.info("Creating new cache file")
+                logger.info(f"Creating new cache file {self.cache_file}")
                 self.code_base = {}
                 self.save_cache()
                 return
@@ -421,7 +459,7 @@ class CodeSecurityAuditor:
         try:
             if self.cache_file and self.cache_file.exists():
                 self.cache_file.unlink()  # Delete the cache file
-                logger.info("Cache file deleted successfully")
+                logger.info(f"Cache file {self.cache_file} deleted successfully")
             self.code_base = {}  # Clear memory cache
             logger.debug("Memory cache cleared")
         except Exception as e:
@@ -1610,7 +1648,7 @@ def detect_optimal_chunk_size(model: str) -> int:
             if 'num_ctx' in params:
                 context_length = int(params.split()[1])
                 chunk_size = int(context_length * 0.9)
-                logger.info(f"📏 Model {model} context length: {context_length}")
+                logger.info(f"Model {model} context length: {context_length}")
                 logger.info(f"🔄 Using chunk size: {chunk_size}")
                 return chunk_size
         
@@ -1689,7 +1727,7 @@ def ensure_model_available(model_name: str) -> bool:
     while True:
         response = input(f"\nModel {model_name} is not installed. Would you like to:\n"
                         "1. Install it now\n"
-                        "2. Quit\n"
+                        "2. Continue without it\n"
                         "Choose (1/2): ").strip()
         
         if response == "1":
