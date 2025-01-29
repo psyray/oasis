@@ -23,6 +23,18 @@ import sys
 # Initialize logger with module name
 logger = logging.getLogger('oasis')
 
+# Constants
+KEYWORD_LISTS = {
+    'INSTALL_WORDS': ['installing', 'download', 'pulling', 'fetching'],
+    'ANALYSIS_WORDS': ['analyzing', 'analysis', 'scanning', 'checking', 'inspecting', 'examining'],
+    'GENERATION_WORDS': ['generating', 'creating', 'building', 'processing'],
+    'MODEL_WORDS': ['model', 'ai', 'llm'],
+    'CACHE_WORDS': ['cache', 'stored', 'saving'],
+    'SAVE_WORDS': ['saved', 'written', 'exported'],
+    'LOAD_WORDS': ['loading', 'reading', 'importing', 'loaded'],
+    'FAIL_WORDS': ['failed', 'error', 'crash', 'exception']
+}
+
 def setup_logging(debug=False, silent=False):
     """
     Setup all loggers with proper configuration
@@ -39,6 +51,15 @@ def setup_logging(debug=False, silent=False):
 
     # Configure OASIS logger with custom formatter
     class EmojiFormatter(logging.Formatter):
+        """
+        Custom formatter that adds contextual emojis to log messages.
+        
+        Handles:
+        - Automatic emoji detection
+        - Level-based icons
+        - Context-aware icons
+        - Newline preservation
+        """
         def format(self, record):
             if not hasattr(record, 'formatted_message'):
                 # Helper function to detect if string starts with emoji
@@ -2091,7 +2112,12 @@ def main():
                 embedding_auditor.save_cache()
             logger.info("✅ Progress saved successfully")
         except Exception as e:
-            logger.error(f"❌ Error saving progress: {str(e)}")
+            logger.error(f"❌ Error during saving progress: {str(e)}")
+            if 'embedding_auditor' in locals():
+                try:
+                    embedding_auditor.emergency_save()
+                except Exception as save_error:
+                    logger.critical(f"💥 Failed to save cache: {str(save_error)}")
         sys.exit(0)
     except Exception as e:
         logger.error(f"❌ Unexpected error: {str(e)}")
