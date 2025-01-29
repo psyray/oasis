@@ -30,12 +30,12 @@ logger.addHandler(console_handler)
 logging.getLogger('fontTools').setLevel(logging.ERROR)
 
 class PageBreakExtension(Extension):
-    """Extension Markdown pour gérer les sauts de page"""
+    """Markdown extension to handle page breaks"""
     def extendMarkdown(self, md):
         md.preprocessors.register(PageBreakPreprocessor(md), 'page_break', 27)
 
 class PageBreakPreprocessor(Preprocessor):
-    """Préprocesseur pour convertir le marqueur en HTML"""
+    """Preprocessor to convert marker to HTML"""
     def run(self, lines):
         new_lines = []
         for line in lines:
@@ -44,6 +44,35 @@ class PageBreakPreprocessor(Preprocessor):
             else:
                 new_lines.append(line)
         return new_lines
+
+# Static function outside the class to avoid pickling issues
+def process_file_static(args: tuple) -> Tuple[str, str, List[float]]:
+    """
+    Process a single file for parallel embedding generation
+    Args:
+        args: Tuple of (file_path, embedding_model)
+    Returns:
+        Tuple of (file_path, content, embedding)
+    """
+    file_path, embedding_model = args
+    try:
+        # Create new client for each process
+        client = ollama.Client()
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        response = client.embeddings(
+            model=embedding_model,
+            prompt=content
+        )
+
+        if response and 'embedding' in response:
+            return file_path, content, response['embedding']
+            
+    except Exception as e:
+        logger.error(f"Error processing {file_path}: {str(e)}")
+        return None
 
 class CodeSecurityAuditor:
     def __init__(self, embedding_model: str = 'nomic-embed-text', llm_model: str = None, extensions: List[str] = None):
@@ -157,71 +186,41 @@ class CodeSecurityAuditor:
 
     def index_code_files(self, files: List[Path]) -> None:
         """
-        Generate embeddings for code files
+        Generate embeddings for code files in parallel
         Args:
             files: List of file paths to analyze
         """
         try:
             print("Generating embeddings...")
-            # Add progress bar for embedding generation
-            with tqdm(files, desc="Progress", leave=True, position=1) as pbar:
-                # Add a separate line for filename display
-                #print("\033[F", end="")  # Move cursor up one line
-                for file_path in pbar:
-                    if str(file_path) in self.code_base:
-                        continue
-                        
-                    try:
-                        # Update filename display on the line above progress bar
-                        print(f"\rProcessing: {file_path.name}" + " " * 50, end="\r")
-                        
-                        # Read file content
-                        with open(file_path, 'r', encoding='utf-8') as f:
-                            content = f.read()
+            # Calculate optimal number of processes
+            num_processes = max(1, min(cpu_count(), len(files)))
+            
+            # Prepare arguments for parallel processing
+            process_args = [
+                (str(file_path), self.embedding_model)  # Convert Path to string
+                for file_path in files 
+                if str(file_path) not in self.code_base
+            ]
+            
+            if not process_args:
+                return
 
-                        # Get embedding
-                        response = self.client.embeddings(
-                            model=self.embedding_model,
-                            prompt=content
-                        )
-
-                        if response and 'embedding' in response:
-                            self.code_base[str(file_path)] = {
+            # Process files in parallel with progress bar
+            with Pool(processes=num_processes) as pool:
+                with tqdm(total=len(process_args), desc="Progress", leave=True) as pbar:
+                    for result in pool.imap_unordered(process_file_static, process_args):
+                        if result:
+                            file_path, content, embedding = result
+                            self.code_base[file_path] = {
                                 'content': content,
-                                'embedding': response['embedding']
+                                'embedding': embedding
                             }
-
-                    except Exception as e:
-                        logger.error(f"Error processing {file_path}: {str(e)}")
-                        if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug("Full error:", exc_info=True)
-                        continue
-
-            # Clear the filename line after completion
-            print("\r" + " " * 80, end="\r")
-            # Save updated cache
-            self.save_cache()
+                        pbar.update(1)
 
         except Exception as e:
-            logger.error(f"Error indexing files: {str(e)}")
+            logger.error(f"Error during parallel embedding generation: {str(e)}")
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("Full error:", exc_info=True)
-
-    def load_cache(self):
-        """Load embedding cache from file"""
-        try:
-            with open(self.cache_file, 'rb') as f:
-                try:
-                    cached_data = pickle.load(f)
-                    self.code_base = cached_data
-                except EOFError:
-                    # Cache file is empty or corrupted
-                    print("Cache file is empty or corrupted. Starting with fresh cache.")
-                    self.code_base = {}
-        except FileNotFoundError:
-            # Cache file doesn't exist yet
-            print("No cache file found. Starting with fresh cache.")
-            self.code_base = {}
 
     def save_cache(self):
         """Save embeddings to cache"""
@@ -239,6 +238,23 @@ class CodeSecurityAuditor:
             logger.info(f"Saved {len(self.code_base)} embeddings to cache")
         except Exception as e:
             logger.error(f"Error saving cache: {str(e)}")
+
+    def load_cache(self):
+        """Load embedding cache from file"""
+        try:
+            with open(self.cache_file, 'rb') as f:
+                try:
+                    cached_data = pickle.load(f)
+                    if isinstance(cached_data, dict) and 'embeddings' in cached_data:
+                        self.code_base = cached_data['embeddings']
+                    else:
+                        self.code_base = cached_data  # Pour la rétrocompatibilité
+                except EOFError:
+                    print("Cache file is empty or corrupted. Starting with fresh cache.")
+                    self.code_base = {}
+        except FileNotFoundError:
+            print("No cache file found. Starting with fresh cache.")
+            self.code_base = {}
 
     def clear_cache(self) -> None:
         """Clear embeddings cache file and memory"""
