@@ -45,43 +45,117 @@ class PageBreakPreprocessor(Preprocessor):
                 new_lines.append(line)
         return new_lines
 
-# Static function outside the class to avoid pickling issues
+def chunk_content(content: str, max_length: int = 2048) -> List[str]:
+    """
+    Split content into chunks of maximum length while preserving line integrity
+    Args:
+        content: Text content to split
+        max_length: Maximum length of each chunk (reduced to 2048 to be safe)
+    Returns:
+        List of content chunks
+    """
+    if len(content) <= max_length:
+        return [content]
+    
+    chunks = []
+    lines = content.splitlines()
+    current_chunk = []
+    current_length = 0
+    
+    for line in lines:
+        line_length = len(line) + 1  # +1 for newline
+        if current_length + line_length > max_length:
+            if current_chunk:
+                chunks.append('\n'.join(current_chunk))
+            current_chunk = [line]
+            current_length = line_length
+        else:
+            current_chunk.append(line)
+            current_length += line_length
+    
+    if current_chunk:
+        chunks.append('\n'.join(current_chunk))
+    
+    if len(content) > max_length:
+        logger.debug(f"Split content of {len(content)} chars into {len(chunks)} chunks")
+    
+    return chunks
+
 def process_file_static(args: tuple) -> Tuple[str, str, List[float]]:
     """
     Process a single file for parallel embedding generation
     Args:
-        args: Tuple of (file_path, embedding_model)
+        args: Tuple of (file_path, embedding_model, chunk_size)
     Returns:
-        Tuple of (file_path, content, embedding)
+        Tuple of (file_path, content, embedding) or None if error
     """
-    file_path, embedding_model = args
+    file_path, embedding_model, chunk_size = args
     try:
-        # Create new client for each process
         client = ollama.Client()
         
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
+        # Try different encodings
+        encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+        content = None
+        
+        for encoding in encodings:
+            try:
+                with open(file_path, 'r', encoding=encoding) as f:
+                    content = f.read()
+                break
+            except UnicodeDecodeError:
+                continue
+            except Exception as e:
+                logger.error(f"Error reading {file_path} with {encoding}: {str(e)}")
+                continue
+        
+        if content is None:
+            logger.error(f"Failed to read {file_path} with any supported encoding")
+            return None
 
-        response = client.embeddings(
-            model=embedding_model,
-            prompt=content
-        )
+        # Split content into chunks if necessary
+        chunks = chunk_content(content, max_length=chunk_size)
+        embeddings = []
+        
+        # Get embeddings for each chunk
+        for i, chunk in enumerate(chunks):
+            try:
+                if len(chunk) > chunk_size:  # Additional verification
+                    logger.warning(f"Chunk {i+1} size ({len(chunk)}) exceeds limit ({chunk_size})")
+                    chunk = chunk[:chunk_size]  # Truncate if necessary
+                    
+                response = client.embeddings(
+                    model=embedding_model,
+                    prompt=chunk  # Use chunk instead of full content
+                )
+                if response and 'embedding' in response:
+                    embeddings.append(response['embedding'])
+                else:
+                    logger.warning(f"Invalid response for chunk {i+1} of {file_path}")
+            except Exception as e:
+                logger.error(f"Error processing chunk {i+1} of {file_path}: {str(e)}")
+                continue
 
-        if response and 'embedding' in response:
-            return file_path, content, response['embedding']
+        # Average the embeddings if we had multiple chunks
+        if embeddings:
+            if len(embeddings) == 1:
+                final_embedding = embeddings[0]
+            else:
+                final_embedding = np.mean(embeddings, axis=0).tolist()
+            return file_path, content, final_embedding
             
     except Exception as e:
         logger.error(f"Error processing {file_path}: {str(e)}")
         return None
 
 class CodeSecurityAuditor:
-    def __init__(self, embedding_model: str = 'nomic-embed-text', llm_model: str = None, extensions: List[str] = None):
+    def __init__(self, embedding_model: str = 'nomic-embed-text', llm_model: str = None, extensions: List[str] = None, chunk_size: int = 2048):
         """
         Initialize the security auditor
         Args:
             embedding_model: Model to use for embeddings
             llm_model: Model to use for analysis
             extensions: List of file extensions to analyze (without dots)
+            chunk_size: Maximum size of text chunks for embedding
         """
         try:
             self.client = ollama.Client()
@@ -173,6 +247,7 @@ class CodeSecurityAuditor:
             # Version Control
             'gitignore', 'gitattributes', 'gitmodules'
         ]
+        self.chunk_size = chunk_size
 
     def _is_valid_file(self, file_path: Path) -> bool:
         """
@@ -197,7 +272,7 @@ class CodeSecurityAuditor:
             
             # Prepare arguments for parallel processing
             process_args = [
-                (str(file_path), self.embedding_model)  # Convert Path to string
+                (str(file_path), self.embedding_model, self.chunk_size)
                 for file_path in files 
                 if str(file_path) not in self.code_base
             ]
@@ -248,7 +323,7 @@ class CodeSecurityAuditor:
                     if isinstance(cached_data, dict) and 'embeddings' in cached_data:
                         self.code_base = cached_data['embeddings']
                     else:
-                        self.code_base = cached_data  # Pour la rétrocompatibilité
+                        self.code_base = cached_data  # For backwards compatibility
                 except EOFError:
                     print("Cache file is empty or corrupted. Starting with fresh cache.")
                     self.code_base = {}
@@ -420,14 +495,14 @@ class CodeSecurityAuditor:
         current_size = 0
         
         for line in lines:
-            line_size = len(line)
+            line_size = len(line) + 1  # +1 for newline
             if current_size + line_size > max_chunk_size and current_chunk:
                 chunks.append('\n'.join(current_chunk))
-                current_chunk = []
-                current_size = 0
-            
-            current_chunk.append(line)
-            current_size += line_size
+                current_chunk = [line]
+                current_size = line_size
+            else:
+                current_chunk.append(line)
+                current_size += line_size
         
         if current_chunk:
             chunks.append('\n'.join(current_chunk))
@@ -1470,6 +1545,8 @@ def main():
                        help='Run embedding distribution analysis')
     parser.add_argument('-cd', '--cache-days', type=int, default=7, 
                        help='Maximum age of cache in days (default: 7)')
+    parser.add_argument('--chunk-size', '-ch', type=int, default=2048,
+                       help='Maximum size of text chunks for embedding (default: 2048)')
     args = parser.parse_args()
 
     # Check if --list-models is used
@@ -1565,7 +1642,8 @@ def main():
     embedding_auditor = CodeSecurityAuditor(
         embedding_model=args.embed_model,
         llm_model=None,  # No need for LLM model here
-        extensions=custom_extensions
+        extensions=custom_extensions,
+        chunk_size=args.chunk_size
     )
     
     # Set cache file path and load cache
@@ -1653,7 +1731,8 @@ def main():
         analysis_auditor = CodeSecurityAuditor(
             embedding_model=args.embed_model,
             llm_model=model,
-            extensions=custom_extensions
+            extensions=custom_extensions,
+            chunk_size=args.chunk_size
         )
         
         # Share the embeddings from the embedding auditor
