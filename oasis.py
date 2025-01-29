@@ -208,19 +208,19 @@ class CodeSecurityAuditor:
                 logger.debug("Full error:", exc_info=True)
 
     def load_cache(self):
-        """Load cached embeddings if they exist"""
-        if not self.cache_file:
-            logger.warning("Cache file path not set")
-            self.code_base = {}
-            return
-
+        """Load embedding cache from file"""
         try:
             with open(self.cache_file, 'rb') as f:
-                cached_data = pickle.load(f)
-                self.code_base = cached_data.get('embeddings', {})
-                logger.info(f"Loaded {len(self.code_base)} cached embeddings")
+                try:
+                    cached_data = pickle.load(f)
+                    self.code_base = cached_data
+                except EOFError:
+                    # Cache file is empty or corrupted
+                    print("Cache file is empty or corrupted. Starting with fresh cache.")
+                    self.code_base = {}
         except FileNotFoundError:
-            logger.info("No cache file found, starting fresh")
+            # Cache file doesn't exist yet
+            print("No cache file found. Starting with fresh cache.")
             self.code_base = {}
 
     def save_cache(self):
