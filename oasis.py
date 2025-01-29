@@ -21,13 +21,61 @@ from functools import partial
 
 # Initialize logger with module name
 logger = logging.getLogger('oasis')
-# Add console handler
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
-logger.addHandler(console_handler)
 
-# Disable fonttools logging by default
-logging.getLogger('fontTools').setLevel(logging.ERROR)
+def setup_logging(debug=False, silent=False):
+    """
+    Setup all loggers with proper configuration
+    Args:
+        debug: Enable debug logging
+        silent: Disable all output
+    """
+    # Set root logger level
+    root_logger = logging.getLogger()
+    if debug:
+        root_logger.setLevel(logging.DEBUG)
+    else:
+        root_logger.setLevel(logging.WARNING)
+
+    # Configure OASIS logger with custom formatter
+    class EmojiFormatter(logging.Formatter):
+        def format(self, record):
+            if not hasattr(record, 'formatted_message'):
+                if record.levelno == logging.DEBUG:
+                    record.levelname = '🪲 '  # Debug: beetle
+                elif record.levelno == logging.INFO:
+                    record.levelname = ''    # Info: no prefix
+                elif record.levelno == logging.WARNING:
+                    record.levelname = '⚠️ '   # Warning: warning sign
+                elif record.levelno == logging.ERROR:
+                    record.levelname = '❌ '   # Error: cross mark
+                record.formatted_message = f"{record.levelname}{record.msg}"
+            return record.formatted_message
+
+    # Configure handlers based on silent mode
+    if not silent:
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(EmojiFormatter())
+        logger.addHandler(console_handler)
+    
+    logger.propagate = False  # Prevent duplicate logging
+    
+    # Set OASIS logger level based on mode
+    if silent:
+        logger.setLevel(logging.CRITICAL + 1)  # Above all levels
+    elif debug:
+        logger.setLevel(logging.DEBUG)         # Show all messages
+    else:
+        logger.setLevel(logging.INFO)          # Show info, warning, error
+
+    # Configure other loggers
+    fonttools_logger = logging.getLogger('fontTools')
+    fonttools_logger.setLevel(logging.ERROR)
+    
+    weasyprint_logger.setLevel(logging.ERROR)
+
+    # Disable other verbose loggers
+    logging.getLogger('PIL').setLevel(logging.WARNING)
+    logging.getLogger('markdown').setLevel(logging.WARNING)
 
 class PageBreakExtension(Extension):
     """Markdown extension to handle page breaks"""
@@ -120,7 +168,7 @@ def process_file_static(args: tuple) -> Tuple[str, str, List[float]]:
         for i, chunk in enumerate(chunks):
             try:
                 if len(chunk) > chunk_size:  # Additional verification
-                    logger.warning(f"Chunk {i+1} size ({len(chunk)}) exceeds limit ({chunk_size})")
+                    logger.debug(f"Chunk {i+1} size ({len(chunk)}) exceeds limit ({chunk_size})")
                     chunk = chunk[:chunk_size]  # Truncate if necessary
                     
                 response = client.embeddings(
@@ -130,7 +178,7 @@ def process_file_static(args: tuple) -> Tuple[str, str, List[float]]:
                 if response and 'embedding' in response:
                     embeddings.append(response['embedding'])
                 else:
-                    logger.warning(f"Invalid response for chunk {i+1} of {file_path}")
+                    logger.debug(f"Invalid response for chunk {i+1} of {file_path}")
             except Exception as e:
                 logger.error(f"Error processing chunk {i+1} of {file_path}: {str(e)}")
                 continue
@@ -266,7 +314,6 @@ class CodeSecurityAuditor:
             files: List of file paths to analyze
         """
         try:
-            print("Generating embeddings...")
             # Calculate optimal number of processes
             num_processes = max(1, min(cpu_count(), len(files)))
             
@@ -288,14 +335,17 @@ class CodeSecurityAuditor:
                             file_path, content, embedding = result
                             self.code_base[file_path] = {
                                 'content': content,
-                                'embedding': embedding
+                                'embedding': embedding,
+                                'chunks': chunk_content(content, self.chunk_size),
+                                'timestamp': datetime.now().isoformat()
                             }
                         pbar.update(1)
 
+            # Save after batch processing
+            self.save_cache()
+
         except Exception as e:
             logger.error(f"Error during parallel embedding generation: {str(e)}")
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug("Full error:", exc_info=True)
 
     def save_cache(self):
         """Save embeddings to cache"""
@@ -304,32 +354,67 @@ class CodeSecurityAuditor:
             return
 
         try:
-            cache_data = {
-                'embeddings': self.code_base,
-                'timestamp': datetime.now().isoformat()
-            }
+            # Ensure each entry has the correct structure
+            for file_path, data in self.code_base.items():
+                if not isinstance(data, dict):
+                    # Si ce n'est pas un dictionnaire, créer la structure
+                    self.code_base[file_path] = {
+                        'content': data if isinstance(data, str) else '',
+                        'embedding': [],
+                        'chunks': [],
+                        'timestamp': datetime.now().isoformat()
+                    }
+                elif not all(k in data for k in ['content', 'embedding', 'chunks', 'timestamp']):
+                    # Si la structure est incomplète, la compléter
+                    self.code_base[file_path].update({
+                        'content': data.get('content', ''),
+                        'embedding': data.get('embedding', []),
+                        'chunks': data.get('chunks', []),
+                        'timestamp': data.get('timestamp', datetime.now().isoformat())
+                    })
+
             with open(self.cache_file, 'wb') as f:
-                pickle.dump(cache_data, f)
-            logger.info(f"Saved {len(self.code_base)} embeddings to cache")
+                pickle.dump(self.code_base, f)
+            logger.debug(f"Saved {len(self.code_base)} entries to cache")
         except Exception as e:
             logger.error(f"Error saving cache: {str(e)}")
 
-    def load_cache(self):
-        """Load embedding cache from file"""
+    def load_cache(self) -> None:
+        """Load embeddings from cache file"""
         try:
+            # Ensure cache directory exists
+            self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            if not self.cache_file.exists():
+                logger.info("Creating new cache file")
+                self.code_base = {}
+                self.save_cache()
+                return
+
             with open(self.cache_file, 'rb') as f:
                 try:
                     cached_data = pickle.load(f)
-                    if isinstance(cached_data, dict) and 'embeddings' in cached_data:
-                        self.code_base = cached_data['embeddings']
+                    # Strict check of cache structure
+                    if (isinstance(cached_data, dict) and 
+                        all(isinstance(v, dict) and 
+                            'embedding' in v and 
+                            'chunks' in v and 
+                            'timestamp' in v 
+                            for v in cached_data.values())):
+                        self.code_base = cached_data
+                        logger.debug(f"Loaded {len(self.code_base)} valid entries from cache")
                     else:
-                        self.code_base = cached_data  # For backwards compatibility
+                        logger.warning("Invalid cache structure, starting fresh")
+                        self.code_base = {}
+                        self.save_cache()
                 except EOFError:
-                    print("Cache file is empty or corrupted. Starting with fresh cache.")
+                    logger.error("Cache file is empty or corrupted. Starting with fresh cache.")
                     self.code_base = {}
-        except FileNotFoundError:
-            print("No cache file found. Starting with fresh cache.")
+                    self.save_cache()
+        except Exception as e:
+            logger.error(f"Error loading cache: {str(e)}")
             self.code_base = {}
+            self.save_cache()
 
     def clear_cache(self) -> None:
         """Clear embeddings cache file and memory"""
@@ -652,7 +737,7 @@ def get_vulnerability_mapping():
     }
 
 def convert_md_to_pdf(markdown_file: Path, output_pdf: Path = None, 
-                     output_html: Path = None, debug: bool = False) -> None:
+                     output_html: Path = None) -> None:
     """
     Convert markdown file to PDF and optionally HTML
     Args:
@@ -795,14 +880,12 @@ def convert_md_to_pdf(markdown_file: Path, output_pdf: Path = None,
             stylesheets=[CSS(string='@page { margin: 1cm; size: A4; @top-right { content: counter(page); } }')]
         )
 
-        if debug:
-            logger.debug(f"Generated PDF: {output_pdf}")
-            logger.debug(f"Generated HTML: {output_html}")
+        logger.debug(f"Generated PDF: {output_pdf}")
+        logger.debug(f"Generated HTML: {output_html}")
 
     except Exception as e:
         logger.error(f"Error converting markdown to PDF: {str(e)}")
-        if debug:
-            logger.debug("Full error:", exc_info=True)
+        logger.debug("Full error:", exc_info=True)
 
 def parse_input(input_path: str) -> List[Path]:
     """
@@ -1143,10 +1226,10 @@ def generate_audit_report(auditor: CodeSecurityAuditor, vulnerability_types: Lis
     num_processes = min(cpu_count(), len(auditor.code_base))
     all_results = {}
     
-    print(f"\nUsing {num_processes} processes for parallel analysis\n")
+    logger.info(f"\nUsing {num_processes} processes for parallel analysis\n")
     
     for i, vuln in enumerate(vulnerability_types):
-        print(f"\nAnalyzing {vuln['name']} ({i+1}/{len(vulnerability_types)})")
+        logger.info(f"\nAnalyzing {vuln['name']} ({i+1}/{len(vulnerability_types)})")
         
         if i > 0:
             report.append('\n<div class="page-break"></div>\n')
@@ -1348,9 +1431,9 @@ def select_models(available_models: List[str]) -> List[str]:
     Returns:
         List of selected model names
     """
-    print("\nAvailable models:")
+    logger.info("\nAvailable models:")
     for i, model in enumerate(available_models, 1):
-        print(f"{i}. {model}")
+        logger.info(f"{i}. {model}")
     
     while True:
         choice = input("\nSelect models (comma-separated numbers or 'all'): ").strip().lower()
@@ -1365,7 +1448,7 @@ def select_models(available_models: List[str]) -> List[str]:
         except (ValueError, IndexError):
             pass
         
-        print("Invalid selection. Please try again.")
+        logger.error("Invalid selection. Please try again.")
 
 def sanitize_model_name(model: str) -> str:
     """
@@ -1406,12 +1489,12 @@ def analyze_embeddings_distribution(auditor: CodeSecurityAuditor, vulnerability_
         vulnerability_types: List of vulnerability types to analyze
         thresholds: List of thresholds to test
     """
-    print("\nEmbeddings Distribution Analysis")
-    print("================================\n")
+    logger.info("\nEmbeddings Distribution Analysis")
+    logger.info("================================\n")
 
     for vuln in vulnerability_types:
-        print(f"\nAnalyzing: {vuln['name']}")
-        print("-" * (11 + len(vuln['name'])))
+        logger.info(f"\nAnalyzing: {vuln['name']}")
+        logger.info("-" * (11 + len(vuln['name'])))
         
         # Get similarity scores for all files
         results = []
@@ -1436,37 +1519,37 @@ def analyze_embeddings_distribution(auditor: CodeSecurityAuditor, vulnerability_
                 continue
 
         if not results:
-            print("No results found")
+            logger.warning("No results found")
             continue
 
         # Sort by similarity score
         results.sort(key=lambda x: x[1], reverse=True)
         
         # Print threshold analysis
-        print("\nThreshold Analysis:")
-        print("------------------")
+        logger.info("\nThreshold Analysis:")
+        logger.info("------------------")
         for threshold in thresholds:
             matching_files = sum(1 for _, score in results if score >= threshold)
             percentage = (matching_files / len(results)) * 100
-            print(f"Threshold {threshold:.1f}: {matching_files:3d} files ({percentage:5.1f}%)")
+            logger.info(f"Threshold {threshold:.1f}: {matching_files:3d} files ({percentage:5.1f}%)")
 
         # Print top 5 most similar files
-        print("\nTop 5 Most Similar Files:")
-        print("------------------------")
+        logger.info("\nTop 5 Most Similar Files:")
+        logger.info("------------------------")
         for file_path, score in results[:5]:
-            print(f"{score:.3f} - {file_path}")
+            logger.info(f"{score:.3f} - {file_path}")
 
         # Basic statistical analysis
         scores = [score for _, score in results]
         avg_score = sum(scores) / len(scores)
         median_score = sorted(scores)[len(scores)//2]
         
-        print("\nStatistics:")
-        print("-----------")
-        print(f"Average similarity: {avg_score:.3f}")
-        print(f"Median similarity: {median_score:.3f}")
-        print(f"Max similarity: {max(scores):.3f}")
-        print(f"Min similarity: {min(scores):.3f}")
+        logger.info("\nStatistics:")
+        logger.info("-----------")
+        logger.info(f"Average similarity: {avg_score:.3f}")
+        logger.info(f"Median similarity: {median_score:.3f}")
+        logger.info(f"Max similarity: {max(scores):.3f}")
+        logger.info(f"Min similarity: {min(scores):.3f}")
 
 def get_output_directory(input_path: Path, base_reports_dir: Path) -> Path:
     """
@@ -1504,7 +1587,44 @@ def display_logo():
 ║ Ollama Automated Security Intelligence Scanner ║
 ╚════════════════════════════════════════════════╝
 """
-    print(logo)
+    logger.info(logo)
+
+def detect_optimal_chunk_size(model: str) -> int:
+    """
+    Detect optimal chunk size by querying Ollama model parameters
+    Args:
+        model: Name of the embedding model
+    Returns:
+        Optimal chunk size in characters
+    """
+    try:
+        client = ollama.Client()
+        logger.debug(f"Querying model information for {model}...")
+        
+        # Query model information
+        model_info = client.show(model)
+        logger.debug(f"Raw model info type: {type(model_info)}")
+        
+        # Try to get num_ctx from parameters
+        if hasattr(model_info, 'parameters'):
+            params = model_info.parameters
+            logger.debug(f"Parameters: {params}")
+            
+            if 'num_ctx' in params:
+                context_length = int(params.split()[1])
+                chunk_size = int(context_length * 0.9)
+                logger.info(f"📏 Model {model} context length: {context_length}")
+                logger.info(f"🔄 Using chunk size: {chunk_size}")
+                return chunk_size
+        
+        # If we couldn't get the information, use a conservative default
+        logger.warning(f"Could not detect context length for {model}, using default size: 2048")
+        return 2048
+        
+    except Exception as e:
+        logger.error(f"Error detecting chunk size: {str(e)}")
+        logger.warning("Using conservative default chunk size: 2048")
+        return 2048
 
 def main():
     # Parse command line arguments
@@ -1515,7 +1635,7 @@ def main():
             return super()._split_lines(text, width)
 
     parser = argparse.ArgumentParser(
-        description='Code Security Auditor',
+        description='OASIS - Ollama Automated Security Intelligence Scanner',
         formatter_class=CustomFormatter
     )
     parser.add_argument('input_path', type=str, 
@@ -1527,10 +1647,10 @@ def main():
                        help=get_vulnerability_help())
     parser.add_argument('-np', '--no-pdf', action='store_true', 
                        help='Skip PDF generation')
-    parser.add_argument('-d', '--debug', action='store_true', 
-                       help='Enable debug mode')
-    parser.add_argument('-V', '--verbose', action='store_true', 
-                       help='Enable verbose output')
+    parser.add_argument('-d', '--debug', action='store_true',
+                       help='Enable debug output')
+    parser.add_argument('-s', '--silent', action='store_true',
+                       help='Disable all output messages')
     parser.add_argument('-em', '--embed-model', type=str, default='nomic-embed-text',
                       help='Model to use for embeddings (default: nomic-embed-text)')
     parser.add_argument('-m', '--models', type=str,
@@ -1545,9 +1665,19 @@ def main():
                        help='Run embedding distribution analysis')
     parser.add_argument('-cd', '--cache-days', type=int, default=7, 
                        help='Maximum age of cache in days (default: 7)')
-    parser.add_argument('--chunk-size', '-ch', type=int, default=2048,
-                       help='Maximum size of text chunks for embedding (default: 2048)')
+    parser.add_argument('-ch', '--chunk-size', type=int,
+                       help='Maximum size of text chunks for embedding (default: auto-detected)')
+
     args = parser.parse_args()
+    
+    # Setup logging BEFORE detecting chunk size
+    setup_logging(debug=args.debug)
+    
+    # Auto-detect chunk size if not specified
+    if args.chunk_size is None:
+        args.chunk_size = detect_optimal_chunk_size(args.embed_model)
+    else:
+        logger.info(f"Using manual chunk size: {args.chunk_size}")
 
     # Check if --list-models is used
     if args.list_models:
@@ -1556,9 +1686,9 @@ def main():
         if not available_models:
             logger.error("No models available. Please check Ollama installation.")
             return
-        print("\nAvailable models:")
+        logger.info("\nAvailable models:")
         for model in available_models:
-            print(f"- {model}")
+            logger.info(f"- {model}")
         return
 
     # Check if input_path is provided when not using --list-models
@@ -1567,33 +1697,12 @@ def main():
 
     # Check Ollama connection before proceeding
     if not check_ollama_connection():
-        print("\nError: Could not connect to Ollama server")
-        print("Please ensure that:")
-        print("1. Ollama is installed (https://ollama.ai)")
-        print("2. Ollama server is running (usually with 'ollama serve')")
-        print("3. Ollama is accessible (default: http://localhost:11434)")
+        logger.error("\nError: Could not connect to Ollama server")
+        logger.error("Please ensure that:")
+        logger.error("1. Ollama is installed (https://ollama.ai)")
+        logger.error("2. Ollama server is running (usually with 'ollama serve')")
+        logger.error("3. Ollama is accessible (default: http://localhost:11434)")
         return
-
-    # Configure logging based on arguments
-    if args.debug:
-        logger.setLevel(logging.DEBUG)
-        console_handler.setLevel(logging.DEBUG)
-        weasyprint_logger.setLevel(logging.DEBUG)
-    elif args.verbose:
-        logger.setLevel(logging.INFO)
-        console_handler.setLevel(logging.INFO)
-        weasyprint_logger.setLevel(logging.WARNING)
-        logging.getLogger('fontTools').setLevel(logging.ERROR)
-        logging.getLogger('httpx').setLevel(logging.ERROR)
-        logging.getLogger('weasyprint').setLevel(logging.ERROR)
-    else:
-        # Set only our logger and specific third-party loggers to ERROR
-        logger.setLevel(logging.ERROR)
-        console_handler.setLevel(logging.ERROR)
-        weasyprint_logger.setLevel(logging.ERROR)
-        logging.getLogger('fontTools').setLevel(logging.ERROR)
-        logging.getLogger('httpx').setLevel(logging.ERROR)
-        logging.getLogger('weasyprint').setLevel(logging.ERROR)
 
     if not args.audit:
         # Get available models
@@ -1602,9 +1711,9 @@ def main():
             logger.error("No models available. Please check Ollama installation.")
             return
         if args.list_models:
-            print("\nAvailable models:")
+            logger.info("\nAvailable models:")
             for model in available_models:
-                print(f"- {model}")
+                logger.info(f"- {model}")
             return
 
         # Select models to use
@@ -1617,8 +1726,7 @@ def main():
         else:
             selected_models = select_models(available_models)
 
-        if args.verbose or args.debug:
-            logger.info(f"Selected models: {', '.join(selected_models)}")
+        logger.debug(f"Selected models: {', '.join(selected_models)}")
 
     # Get vulnerability mapping
     vuln_mapping = get_vulnerability_mapping()
@@ -1635,8 +1743,7 @@ def main():
     custom_extensions = None
     if args.extensions:
         custom_extensions = [ext.strip().lower() for ext in args.extensions.split(',')]
-        if args.verbose or args.debug:
-            logger.info(f"Using custom extensions: {', '.join(custom_extensions)}")
+        logger.debug(f"Using custom extensions: {', '.join(custom_extensions)}")
 
     # Create a single embeddings auditor for all models
     embedding_auditor = CodeSecurityAuditor(
@@ -1663,25 +1770,27 @@ def main():
         return
 
     # Filter files and generate embeddings only for new ones
-    files_to_analyze = [f for f in files_to_analyze if embedding_auditor._is_valid_file(f)]
-    if not files_to_analyze:
-        logger.error("No supported files found to analyze")
-        return
-
-    # Generate embeddings for files not in cache
-    new_files = [f for f in files_to_analyze if str(f) not in embedding_auditor.code_base]
+    new_files = []
+    for file_path in files_to_analyze:
+        file_key = str(file_path)
+        # Strict check of cache structure
+        if (file_key not in embedding_auditor.code_base or 
+            not isinstance(embedding_auditor.code_base[file_key], dict) or
+            'embedding' not in embedding_auditor.code_base[file_key] or 
+            'chunks' not in embedding_auditor.code_base[file_key] or
+            'timestamp' not in embedding_auditor.code_base[file_key]):
+            new_files.append(file_path)
+            
     if new_files:
-        if args.verbose or args.debug:
-            logger.info(f"Generating embeddings for {len(new_files)} new files")
+        logger.info(f"Generating embeddings for {len(new_files)} new files")
         embedding_auditor.index_code_files(new_files)
     else:
-        if args.verbose or args.debug:
-            logger.info("All files found in cache")
+        logger.debug("All files found in cache with valid structure")
 
     # If audit mode is enabled, only analyze embeddings distribution
     if args.audit:
-        print("\nRunning in Audit Mode")
-        print("====================")
+        logger.info("\nRunning in Audit Mode")
+        logger.info("====================")
 
         # Get vulnerability types
         vuln_mapping = get_vulnerability_mapping()
@@ -1690,26 +1799,23 @@ def main():
         #analyze_embeddings_distribution(embedding_auditor, vulnerabilities)
 
         # Generate and save analysis report with progress indication
-        print("\nGenerating audit report...")
+        logger.info("\nGenerating audit report...")
         report_files = generate_audit_report(
             embedding_auditor, 
             vulnerabilities,
             output_dir
         )
         
-        print("\nAudit analysis completed!")
-        print("\nReports generated:")
+        logger.info("\nAudit analysis completed!")
+        logger.info("\nReports generated:")
         for fmt, path in report_files.items():
-            print(f"- {fmt.upper()}: {path}")
+            logger.info(f"- {fmt.upper()}: {path}")
         
         return
 
     # Analyze with each selected model
     for model in selected_models:
-        if args.verbose or args.debug:
-            logger.info(f"\nAnalyzing with model: {model}")
-        else:
-            print(f"\nAnalyzing with model: {model}")
+        logger.info(f"\nAnalyzing with model: {model}")
 
         # Create model-specific directory and its format subdirectories
         model_name = sanitize_model_name(model)
@@ -1755,27 +1861,22 @@ def main():
         all_results = {}
 
         # Analysis for each vulnerability type
-        with tqdm(total=len(vulnerabilities), desc="Analyzing vulnerabilities", 
-                 disable=args.verbose or args.debug) as vuln_pbar:
+        with tqdm(total=len(vulnerabilities), 
+                 desc="Analyzing vulnerabilities", 
+                 disable=args.silent) as vuln_pbar:
             for vuln in vulnerabilities:
-                if args.verbose or args.debug:
-                    logger.info(f"\nSearching for vulnerabilities: {vuln['name']}")
-                else:
-                    vuln_pbar.set_description(f"Analyzing {vuln['name']}")
-                
                 # First, find potentially vulnerable files
                 results = analysis_auditor.search_vulnerabilities(vuln['name'], threshold=args.threshold)
                 
                 # Then analyze each file in detail with progress bar
                 detailed_results = []
-                with tqdm(results, desc=f"Analyzing {vuln['name']} details", 
-                         disable=args.verbose or args.debug, leave=False) as file_pbar:
+                with tqdm(results, 
+                         desc=f"Analyzing {vuln['name']} details", 
+                         disable=args.silent,
+                         leave=False) as file_pbar:
                     for file_path, similarity_score in file_pbar:
-                        if args.verbose or args.debug:
-                            logger.info(f"Analyzing file: {file_path}")
-                        else:
-                            file_pbar.set_description(f"Analyzing {Path(file_path).name}")
-                        
+                        # Update description without new line
+                        file_pbar.set_postfix_str(f"File: {Path(file_path).name}")
                         analysis = analysis_auditor.analyze_vulnerability(file_path, vuln['name'])
                         detailed_results.append({
                             'file_path': file_path,
@@ -1806,8 +1907,7 @@ def main():
                     convert_md_to_pdf(
                         markdown_file=report_files['md'],
                         output_pdf=report_files['pdf'],
-                        output_html=report_files['html'],
-                        debug=args.debug
+                        output_html=report_files['html']
                     )
 
                 # Update main progress bar
@@ -1817,24 +1917,24 @@ def main():
             generate_executive_summary(all_results, model_dir, model)
 
     # Print summary of generated files
-    print("\nAnalysis complete!")
+    logger.info("\nAnalysis complete!")
     abs_report_path = os.path.abspath(output_dir)
-    print(f"\nReports have been generated in: {abs_report_path}")
-    print("\nGenerated files structure:")
+    logger.info(f"\nReports have been generated in: {abs_report_path}")
+    logger.info("\nGenerated files structure:")
     
     # Display only the models that were just analyzed
     for model in selected_models:
         model_name = sanitize_model_name(model)
         model_dir = output_dir / model_name
         if model_dir.is_dir():
-            print(f"\n{model_name}/")
+            logger.info(f"\n{model_name}/")
             for fmt_dir in model_dir.glob('*'):
                 if fmt_dir.is_dir():
-                    print(f"  └── {fmt_dir.name}/")
+                    logger.info(f"  └── {fmt_dir.name}/")
                     for report in fmt_dir.glob('*.*'):
-                        print(f"       └── {report.name}")
+                        logger.info(f"       └── {report.name}")
 
-    print(f"\nCache file: {embedding_auditor.cache_file}")
+    logger.info(f"\nCache file: {embedding_auditor.cache_file}")
 
 if __name__ == "__main__":
     display_logo()
