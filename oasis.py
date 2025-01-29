@@ -18,6 +18,7 @@ from markdown.extensions import Extension
 from markdown.preprocessors import Preprocessor
 from multiprocessing import Pool, cpu_count
 from functools import partial
+import sys
 
 # Initialize logger with module name
 logger = logging.getLogger('oasis')
@@ -40,6 +41,27 @@ def setup_logging(debug=False, silent=False):
     class EmojiFormatter(logging.Formatter):
         def format(self, record):
             if not hasattr(record, 'formatted_message'):
+                # Helper function to detect if string starts with emoji
+                def has_emoji_prefix(text: str) -> bool:
+                    # Common emoji ranges in Unicode
+                    emoji_ranges = [
+                        (0x1F300, 0x1F9FF),  # Miscellaneous Symbols and Pictographs
+                        (0x2600, 0x26FF),    # Miscellaneous Symbols
+                        (0x2700, 0x27BF),    # Dingbats
+                        (0x1F600, 0x1F64F),  # Emoticons
+                        (0x1F680, 0x1F6FF),  # Transport and Map Symbols
+                    ]
+                    
+                    if not text:
+                        return False
+                        
+                    # Get the first character code
+                    first_char = text.strip()[0]
+                    code = ord(first_char)
+                    
+                    # Check if it falls in emoji ranges
+                    return any(start <= code <= end for start, end in emoji_ranges)
+
                 # Keywords lists for each type of message
                 INSTALL_WORDS = ['installing', 'download', 'pulling', 'fetching']
                 ANALYSIS_WORDS = ['analyzing', 'analysis', 'scanning', 'checking', 'inspecting', 'examining']
@@ -49,43 +71,46 @@ def setup_logging(debug=False, silent=False):
                 SAVE_WORDS = ['saved', 'written', 'exported']
                 LOAD_WORDS = ['loading', 'reading', 'importing', 'loaded']
                 FAIL_WORDS = ['failed', 'error', 'crash', 'exception']
+                
+                # Get the appropriate icon based on level and content if no emoji exists
+                if not has_emoji_prefix(record.msg.strip()):
+                    if record.levelno == logging.DEBUG:
+                        icon = '🪲 '  # Debug: beetle
+                    elif record.levelno == logging.INFO:
+                        msg_lower = record.msg.lower()
+                        if any(word in msg_lower for word in INSTALL_WORDS):
+                            icon = '📥 '  # Download/Install
+                        elif any(word in msg_lower for word in ANALYSIS_WORDS):
+                            icon = '🔎 '  # Analysis
+                        elif any(word in msg_lower for word in GENERATION_WORDS):
+                            icon = '⚙️  '  # Generation/Processing
+                        elif any(word in msg_lower for word in MODEL_WORDS):
+                            icon = '🤖 '  # AI/Model
+                        elif any(word in msg_lower for word in CACHE_WORDS):
+                            icon = '💾 '  # Cache/Save
+                        elif any(word in msg_lower for word in SAVE_WORDS):
+                            icon = '💾 '  # Save
+                        elif any(word in msg_lower for word in LOAD_WORDS):
+                            icon = '📂 '  # Loading
+                        else:
+                            icon = ''  # Default info
+                    elif record.levelno == logging.WARNING:
+                        icon = '⚠️  '  # Warning
+                    elif record.levelno == logging.ERROR:
+                        if any(word in record.msg.lower() for word in FAIL_WORDS):
+                            icon = '💥 '  # Crash
+                        else:
+                            icon = '❌ '  # Standard error
+                    elif record.levelno == logging.CRITICAL:
+                        icon = '🚨 '  # Critical/Fatal
 
-                # Get the appropriate icon based on level and content
-                if record.levelno == logging.DEBUG:
-                    record.levelname = '🪲 '  # Debug: beetle
-                elif record.levelno == logging.INFO:
-                    msg_lower = record.msg.lower()
-                    if any(word in msg_lower for word in INSTALL_WORDS):
-                        icon = '📥 '  # Download/Install
-                    elif any(word in msg_lower for word in ANALYSIS_WORDS):
-                        icon = '🔎 '  # Analysis
-                    elif any(word in msg_lower for word in GENERATION_WORDS):
-                        icon = '⚙️  '  # Generation/Processing
-                    elif any(word in msg_lower for word in MODEL_WORDS):
-                        icon = '🤖 '  # AI/Model
-                    elif any(word in msg_lower for word in CACHE_WORDS):
-                        icon = '💾 '  # Cache/Save
-                    elif any(word in msg_lower for word in SAVE_WORDS):
-                        icon = '💾 '  # Save
-                    elif any(word in msg_lower for word in LOAD_WORDS):
-                        icon = '📂 '  # Loading
+                    # Handle messages starting with newline
+                    if record.msg.startswith('\n'):
+                        record.formatted_message = record.msg.replace('\n', '\n' + icon, 1)
                     else:
-                        icon = ''  # Default info
-                elif record.levelno == logging.WARNING:
-                    icon = '⚠️  '  # Warning
-                elif record.levelno == logging.ERROR:
-                    if any(word in record.msg.lower() for word in FAIL_WORDS):
-                        icon = '💥 '  # Crash
-                    else:
-                        icon = '❌ '  # Standard error
-                elif record.levelno == logging.CRITICAL:
-                    icon = '🚨 '  # Critical/Fatal
-
-                # Handle messages starting with newline
-                if record.msg.startswith('\n'):
-                    record.formatted_message = record.msg.replace('\n', '\n' + icon, 1)
+                        record.formatted_message = f"{icon}{record.msg}"
                 else:
-                    record.formatted_message = f"{icon}{record.msg}"
+                    record.formatted_message = record.msg
 
             return record.formatted_message
 
@@ -1738,323 +1763,341 @@ def ensure_model_available(model_name: str) -> bool:
             print("Invalid choice. Please enter 1 or 2.")
 
 def main():
-    # Parse command line arguments
-    class CustomFormatter(argparse.RawDescriptionHelpFormatter):
-        def _split_lines(self, text, width):
-            if text.startswith('Vulnerability types'):
-                return text.splitlines()
-            return super()._split_lines(text, width)
+    try:
+        # Parse command line arguments
+        class CustomFormatter(argparse.RawDescriptionHelpFormatter):
+            def _split_lines(self, text, width):
+                if text.startswith('Vulnerability types'):
+                    return text.splitlines()
+                return super()._split_lines(text, width)
 
-    parser = argparse.ArgumentParser(
-        description='OASIS - Ollama Automated Security Intelligence Scanner',
-        formatter_class=CustomFormatter
-    )
-    parser.add_argument('input_path', type=str, 
-                       help='Path to file, directory, or .txt file containing paths to analyze',
-                       nargs='?')
-    parser.add_argument('-t', '--threshold', type=float, default=0.5, 
-                       help='Similarity threshold (default: 0.5)')
-    parser.add_argument('-v', '--vulns', type=str, default='all', 
-                       help=get_vulnerability_help())
-    parser.add_argument('-np', '--no-pdf', action='store_true', 
-                       help='Skip PDF generation')
-    parser.add_argument('-d', '--debug', action='store_true',
-                       help='Enable debug output')
-    parser.add_argument('-s', '--silent', action='store_true',
-                       help='Disable all output messages')
-    parser.add_argument('-em', '--embed-model', type=str, default='nomic-embed-text:latest',
-                      help='Model to use for embeddings (default: nomic-embed-text:latest)')
-    parser.add_argument('-m', '--models', type=str,
-                       help='Comma-separated list of models to use (bypasses interactive selection)')
-    parser.add_argument('-lm', '--list-models', action='store_true',
-                       help='List available models and exit')
-    parser.add_argument('-x', '--extensions', type=str,
-                       help='Comma-separated list of file extensions to analyze (e.g., "py,js,java")')
-    parser.add_argument('-cc', '--clear-cache', action='store_true',
-                       help='Clear embeddings cache before starting')
-    parser.add_argument('-a', '--audit', action='store_true',
-                       help='Run embedding distribution analysis')
-    parser.add_argument('-cd', '--cache-days', type=int, default=7, 
-                       help='Maximum age of cache in days (default: 7)')
-    parser.add_argument('-ch', '--chunk-size', type=int,
-                       help='Maximum size of text chunks for embedding (default: auto-detected)')
+        parser = argparse.ArgumentParser(
+            description='OASIS - Ollama Automated Security Intelligence Scanner',
+            formatter_class=CustomFormatter
+        )
+        parser.add_argument('input_path', type=str, 
+                           help='Path to file, directory, or .txt file containing paths to analyze',
+                           nargs='?')
+        parser.add_argument('-t', '--threshold', type=float, default=0.5, 
+                           help='Similarity threshold (default: 0.5)')
+        parser.add_argument('-v', '--vulns', type=str, default='all', 
+                           help=get_vulnerability_help())
+        parser.add_argument('-np', '--no-pdf', action='store_true', 
+                           help='Skip PDF generation')
+        parser.add_argument('-d', '--debug', action='store_true',
+                           help='Enable debug output')
+        parser.add_argument('-s', '--silent', action='store_true',
+                           help='Disable all output messages')
+        parser.add_argument('-em', '--embed-model', type=str, default='nomic-embed-text:latest',
+                          help='Model to use for embeddings (default: nomic-embed-text:latest)')
+        parser.add_argument('-m', '--models', type=str,
+                           help='Comma-separated list of models to use (bypasses interactive selection)')
+        parser.add_argument('-lm', '--list-models', action='store_true',
+                           help='List available models and exit')
+        parser.add_argument('-x', '--extensions', type=str,
+                           help='Comma-separated list of file extensions to analyze (e.g., "py,js,java")')
+        parser.add_argument('-cc', '--clear-cache', action='store_true',
+                           help='Clear embeddings cache before starting')
+        parser.add_argument('-a', '--audit', action='store_true',
+                           help='Run embedding distribution analysis')
+        parser.add_argument('-cd', '--cache-days', type=int, default=7, 
+                           help='Maximum age of cache in days (default: 7)')
+        parser.add_argument('-ch', '--chunk-size', type=int,
+                           help='Maximum size of text chunks for embedding (default: auto-detected)')
 
-    args = parser.parse_args()
-    
-    # Setup logging BEFORE detecting chunk size
-    setup_logging(debug=args.debug)
-    
-    # Auto-detect chunk size if not specified
-    if args.chunk_size is None:
-        args.chunk_size = detect_optimal_chunk_size(args.embed_model)
-    else:
-        logger.info(f"Using manual chunk size: {args.chunk_size}")
+        args = parser.parse_args()
+        
+        # Setup logging BEFORE detecting chunk size
+        setup_logging(debug=args.debug)
+        
+        # Auto-detect chunk size if not specified
+        if args.chunk_size is None:
+            args.chunk_size = detect_optimal_chunk_size(args.embed_model)
+        else:
+            logger.info(f"Using manual chunk size: {args.chunk_size}")
 
-    # Check if --list-models is used
-    if args.list_models:
-        # Get available models
-        available_models = get_available_models()
-        if not available_models:
-            logger.error("No models available. Please check Ollama installation.")
-            return
-        logger.info("\nAvailable models:")
-        for model in available_models:
-            logger.info(f"- {model}")
-        return
-
-    # Check if input_path is provided when not using --list-models
-    if not args.input_path:
-        parser.error("input_path is required when not using --list-models")
-
-    # Check Ollama connection before proceeding
-    if not check_ollama_connection():
-        logger.error("\nError: Could not connect to Ollama server")
-        logger.error("Please ensure that:")
-        logger.error("1. Ollama is installed (https://ollama.ai)")
-        logger.error("2. Ollama server is running (usually with 'ollama serve')")
-        logger.error("3. Ollama is accessible (default: http://localhost:11434)")
-        return
-
-    if not args.audit:
-        # Get available models
-        available_models = get_available_models()
-        if not available_models:
-            logger.error("No models available. Please check Ollama installation.")
-            return
+        # Check if --list-models is used
         if args.list_models:
+            # Get available models
+            available_models = get_available_models()
+            if not available_models:
+                logger.error("No models available. Please check Ollama installation.")
+                return
             logger.info("\nAvailable models:")
             for model in available_models:
                 logger.info(f"- {model}")
             return
 
-        # Select models to use
-        if args.models:
-            selected_models = [m.strip() for m in args.models.split(',')]
-            # Check if the analysis models are available
-            for model in selected_models:
-                if not ensure_model_available(model):
-                    logger.error(f"Analysis model {model} not available. Skipping.")
-                    selected_models.remove(model)
-            
-            if not selected_models:
-                logger.error("No analysis models available. Exiting.")
+        # Check if input_path is provided when not using --list-models
+        if not args.input_path:
+            parser.error("input_path is required when not using --list-models")
+
+        # Check Ollama connection before proceeding
+        if not check_ollama_connection():
+            logger.error("\nError: Could not connect to Ollama server")
+            logger.error("Please ensure that:")
+            logger.error("1. Ollama is installed (https://ollama.ai)")
+            logger.error("2. Ollama server is running (usually with 'ollama serve')")
+            logger.error("3. Ollama is accessible (default: http://localhost:11434)")
+            return
+
+        if not args.audit:
+            # Get available models
+            available_models = get_available_models()
+            if not available_models:
+                logger.error("No models available. Please check Ollama installation.")
                 return
-        else:
-            selected_models = select_models(available_models)
+            if args.list_models:
+                logger.info("\nAvailable models:")
+                for model in available_models:
+                    logger.info(f"- {model}")
+                return
 
-        logger.debug(f"Selected models: {', '.join(selected_models)}")
+            # Select models to use
+            if args.models:
+                selected_models = [m.strip() for m in args.models.split(',')]
+                # Check if the analysis models are available
+                for model in selected_models:
+                    if not ensure_model_available(model):
+                        logger.error(f"Analysis model {model} not available. Skipping.")
+                        selected_models.remove(model)
+                
+                if not selected_models:
+                    logger.error("No analysis models available. Exiting.")
+                    return
+            else:
+                selected_models = select_models(available_models)
 
-    # Check if the embedding model is available
-    if not ensure_model_available(args.embed_model):
-        logger.error("Embedding model not available. Exiting.")
-        return
-    
-    # Get vulnerability mapping
-    vuln_mapping = get_vulnerability_mapping()
+            logger.debug(f"Selected models: {', '.join(selected_models)}")
 
-    # Create base reports directory relative to input path
-    base_reports_dir = Path(args.input_path).resolve().parent / "security_reports"
-    base_reports_dir.mkdir(exist_ok=True)
-
-    # Get specific output directory for this analysis
-    output_dir = get_output_directory(Path(args.input_path), base_reports_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Parse extensions if provided
-    custom_extensions = None
-    if args.extensions:
-        custom_extensions = [ext.strip().lower() for ext in args.extensions.split(',')]
-        logger.debug(f"Using custom extensions: {', '.join(custom_extensions)}")
-
-    # Create a single embeddings auditor for all models
-    embedding_auditor = CodeSecurityAuditor(
-        embedding_model=args.embed_model,
-        llm_model=None,  # No need for LLM model here
-        extensions=custom_extensions,
-        chunk_size=args.chunk_size
-    )
-    
-    # Set cache file path and load cache
-    embedding_auditor.cache_file = Path(args.input_path).parent / "embeddings_cache.pkl"
-
-    # Clear cache if requested
-    if args.clear_cache:
-        logger.info("Clearing embeddings cache...")
-        embedding_auditor.clear_cache()
-
-    embedding_auditor.load_cache()  # Load existing cache first
-    
-    # Generate embeddings once for all files
-    files_to_analyze = parse_input(args.input_path)
-    if not files_to_analyze:
-        logger.error("No valid files to analyze")
-        return
-
-    # Filter files and generate embeddings only for new ones
-    new_files = []
-    for file_path in files_to_analyze:
-        file_key = str(file_path)
-        # Strict check of cache structure
-        if (file_key not in embedding_auditor.code_base or 
-            not isinstance(embedding_auditor.code_base[file_key], dict) or
-            'embedding' not in embedding_auditor.code_base[file_key] or 
-            'chunks' not in embedding_auditor.code_base[file_key] or
-            'timestamp' not in embedding_auditor.code_base[file_key]):
-            new_files.append(file_path)
-            
-    if new_files:
-        logger.info(f"Generating embeddings for {len(new_files)} new files")
-        embedding_auditor.index_code_files(new_files)
-    else:
-        logger.debug("All files found in cache with valid structure")
-
-    # If audit mode is enabled, only analyze embeddings distribution
-    if args.audit:
-        logger.info("\nRunning in Audit Mode")
-        logger.info("====================")
-
-        # Get vulnerability types
+        # Check if the embedding model is available
+        if not ensure_model_available(args.embed_model):
+            logger.error("Embedding model not available. Exiting.")
+            return
+        
+        # Get vulnerability mapping
         vuln_mapping = get_vulnerability_mapping()
-        vulnerabilities = list(vuln_mapping.values())
-        # Analyze embeddings distribution
-        #analyze_embeddings_distribution(embedding_auditor, vulnerabilities)
 
-        # Generate and save analysis report with progress indication
-        logger.info("\nGenerating audit report...")
-        report_files = generate_audit_report(
-            embedding_auditor, 
-            vulnerabilities,
-            output_dir
-        )
-        
-        logger.info("\nAudit analysis completed!")
-        logger.info("\nReports generated:")
-        for fmt, path in report_files.items():
-            logger.info(f"- {fmt.upper()}: {path}")
-        
-        return
+        # Create base reports directory relative to input path
+        base_reports_dir = Path(args.input_path).resolve().parent / "security_reports"
+        base_reports_dir.mkdir(exist_ok=True)
 
-    # Analyze with each selected model
-    for model in selected_models:
-        logger.info(f"\nAnalyzing with model: {model}")
+        # Get specific output directory for this analysis
+        output_dir = get_output_directory(Path(args.input_path), base_reports_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create model-specific directory and its format subdirectories
-        model_name = sanitize_model_name(model)
-        model_dir = output_dir / model_name
-        model_dir.mkdir(exist_ok=True)
-        
-        # Create format-specific directories under the model directory
-        report_dirs = {
-            'md': model_dir / 'markdown',
-            'pdf': model_dir / 'pdf',
-            'html': model_dir / 'html'
-        }
-        
-        # Create all format directories
-        for dir_path in report_dirs.values():
-            dir_path.mkdir(exist_ok=True)
+        # Parse extensions if provided
+        custom_extensions = None
+        if args.extensions:
+            custom_extensions = [ext.strip().lower() for ext in args.extensions.split(',')]
+            logger.debug(f"Using custom extensions: {', '.join(custom_extensions)}")
 
-        # Create analysis auditor with shared embeddings
-        analysis_auditor = CodeSecurityAuditor(
+        # Create a single embeddings auditor for all models
+        embedding_auditor = CodeSecurityAuditor(
             embedding_model=args.embed_model,
-            llm_model=model,
+            llm_model=None,  # No need for LLM model here
             extensions=custom_extensions,
             chunk_size=args.chunk_size
         )
         
-        # Share the embeddings from the embedding auditor
-        analysis_auditor.code_base = embedding_auditor.code_base
-        analysis_auditor.cache_file = embedding_auditor.cache_file
+        # Set cache file path and load cache
+        embedding_auditor.cache_file = Path(args.input_path).parent / "embeddings_cache.pkl"
 
-        # Determine which vulnerabilities to check
-        if args.vulns.lower() == 'all':
-            vulnerabilities = list(vuln_mapping.values())
+        # Clear cache if requested
+        if args.clear_cache:
+            logger.info("Clearing embeddings cache...")
+            embedding_auditor.clear_cache()
+
+        embedding_auditor.load_cache()  # Load existing cache first
+        
+        # Generate embeddings once for all files
+        files_to_analyze = parse_input(args.input_path)
+        if not files_to_analyze:
+            logger.error("No valid files to analyze")
+            return
+
+        # Filter files and generate embeddings only for new ones
+        new_files = []
+        for file_path in files_to_analyze:
+            file_key = str(file_path)
+            # Strict check of cache structure
+            if (file_key not in embedding_auditor.code_base or 
+                not isinstance(embedding_auditor.code_base[file_key], dict) or
+                'embedding' not in embedding_auditor.code_base[file_key] or 
+                'chunks' not in embedding_auditor.code_base[file_key] or
+                'timestamp' not in embedding_auditor.code_base[file_key]):
+                new_files.append(file_path)
+                
+        if new_files:
+            logger.info(f"Generating embeddings for {len(new_files)} new files")
+            embedding_auditor.index_code_files(new_files)
         else:
-            selected_tags = [tag.strip() for tag in args.vulns.split(',')]
-            invalid_tags = [tag for tag in selected_tags if tag not in vuln_mapping]
-            if invalid_tags:
-                logger.error(f"Invalid vulnerability tags: {', '.join(invalid_tags)}")
-                logger.error("Use --help to see available tags")
-                continue
-            vulnerabilities = [vuln_mapping[tag] for tag in selected_tags]
+            logger.debug("All files found in cache with valid structure")
 
-        # Store all results for executive summary
-        all_results = {}
+        # If audit mode is enabled, only analyze embeddings distribution
+        if args.audit:
+            logger.info("\nRunning in Audit Mode")
+            logger.info("====================")
 
-        # Analysis for each vulnerability type
-        with tqdm(total=len(vulnerabilities), 
-                 desc="Analyzing vulnerabilities", 
-                 disable=args.silent) as vuln_pbar:
-            for vuln in vulnerabilities:
-                # First, find potentially vulnerable files
-                results = analysis_auditor.search_vulnerabilities(vuln['name'], threshold=args.threshold)
-                
-                # Then analyze each file in detail with progress bar
-                detailed_results = []
-                with tqdm(results, 
-                         desc=f"Analyzing {vuln['name']} details", 
-                         disable=args.silent,
-                         leave=False) as file_pbar:
-                    for file_path, similarity_score in file_pbar:
-                        file_pbar.set_postfix_str(f"File: {Path(file_path).name}")
-                        analysis = analysis_auditor.analyze_vulnerability(file_path, vuln['name'])
-                        detailed_results.append({
-                            'file_path': file_path,
-                            'similarity_score': similarity_score,
-                            'analysis': analysis
-                        })
-                
-                # Store results for executive summary
-                all_results[vuln['name']] = detailed_results
+            # Get vulnerability types
+            vuln_mapping = get_vulnerability_mapping()
+            vulnerabilities = list(vuln_mapping.values())
+            # Analyze embeddings distribution
+            #analyze_embeddings_distribution(embedding_auditor, vulnerabilities)
 
-                # Create report files in appropriate directories
-                report_files = {
-                    'md': report_dirs['md'] / f"{vuln['name'].lower().replace(' ', '_')}.md",
-                    'pdf': report_dirs['pdf'] / f"{vuln['name'].lower().replace(' ', '_')}.pdf",
-                    'html': report_dirs['html'] / f"{vuln['name'].lower().replace(' ', '_')}.html"
-                }
-                
-                # Generate markdown report with detailed analysis
-                generate_markdown_report(
-                    vulnerability_type=vuln['name'],
-                    results=detailed_results,
-                    output_file=report_files['md'],
-                    model_name=model
-                )
-                
-                # Convert to PDF if not disabled
-                if not args.no_pdf:
-                    convert_md_to_pdf(
-                        markdown_file=report_files['md'],
-                        output_pdf=report_files['pdf'],
-                        output_html=report_files['html']
+            # Generate and save analysis report with progress indication
+            logger.info("\nGenerating audit report...")
+            report_files = generate_audit_report(
+                embedding_auditor, 
+                vulnerabilities,
+                output_dir
+            )
+            
+            logger.info("\nAudit analysis completed!")
+            logger.info("\nReports generated:")
+            for fmt, path in report_files.items():
+                logger.info(f"- {fmt.upper()}: {path}")
+            
+            return
+
+        # Analyze with each selected model
+        for model in selected_models:
+            logger.info(f"\nAnalyzing with model: {model}")
+
+            # Create model-specific directory and its format subdirectories
+            model_name = sanitize_model_name(model)
+            model_dir = output_dir / model_name
+            model_dir.mkdir(exist_ok=True)
+            
+            # Create format-specific directories under the model directory
+            report_dirs = {
+                'md': model_dir / 'markdown',
+                'pdf': model_dir / 'pdf',
+                'html': model_dir / 'html'
+            }
+            
+            # Create all format directories
+            for dir_path in report_dirs.values():
+                dir_path.mkdir(exist_ok=True)
+
+            # Create analysis auditor with shared embeddings
+            analysis_auditor = CodeSecurityAuditor(
+                embedding_model=args.embed_model,
+                llm_model=model,
+                extensions=custom_extensions,
+                chunk_size=args.chunk_size
+            )
+            
+            # Share the embeddings from the embedding auditor
+            analysis_auditor.code_base = embedding_auditor.code_base
+            analysis_auditor.cache_file = embedding_auditor.cache_file
+
+            # Determine which vulnerabilities to check
+            if args.vulns.lower() == 'all':
+                vulnerabilities = list(vuln_mapping.values())
+            else:
+                selected_tags = [tag.strip() for tag in args.vulns.split(',')]
+                invalid_tags = [tag for tag in selected_tags if tag not in vuln_mapping]
+                if invalid_tags:
+                    logger.error(f"Invalid vulnerability tags: {', '.join(invalid_tags)}")
+                    logger.error("Use --help to see available tags")
+                    continue
+                vulnerabilities = [vuln_mapping[tag] for tag in selected_tags]
+
+            # Store all results for executive summary
+            all_results = {}
+
+            # Analysis for each vulnerability type
+            with tqdm(total=len(vulnerabilities), 
+                     desc="Analyzing vulnerabilities", 
+                     disable=args.silent) as vuln_pbar:
+                for vuln in vulnerabilities:
+                    # First, find potentially vulnerable files
+                    results = analysis_auditor.search_vulnerabilities(vuln['name'], threshold=args.threshold)
+                    
+                    # Then analyze each file in detail with progress bar
+                    detailed_results = []
+                    with tqdm(results, 
+                             desc=f"Analyzing {vuln['name']} details", 
+                             disable=args.silent,
+                             leave=False) as file_pbar:
+                        for file_path, similarity_score in file_pbar:
+                            file_pbar.set_postfix_str(f"File: {Path(file_path).name}")
+                            analysis = analysis_auditor.analyze_vulnerability(file_path, vuln['name'])
+                            detailed_results.append({
+                                'file_path': file_path,
+                                'similarity_score': similarity_score,
+                                'analysis': analysis
+                            })
+                    
+                    # Store results for executive summary
+                    all_results[vuln['name']] = detailed_results
+
+                    # Create report files in appropriate directories
+                    report_files = {
+                        'md': report_dirs['md'] / f"{vuln['name'].lower().replace(' ', '_')}.md",
+                        'pdf': report_dirs['pdf'] / f"{vuln['name'].lower().replace(' ', '_')}.pdf",
+                        'html': report_dirs['html'] / f"{vuln['name'].lower().replace(' ', '_')}.html"
+                    }
+                    
+                    # Generate markdown report with detailed analysis
+                    generate_markdown_report(
+                        vulnerability_type=vuln['name'],
+                        results=detailed_results,
+                        output_file=report_files['md'],
+                        model_name=model
                     )
+                    
+                    # Convert to PDF if not disabled
+                    if not args.no_pdf:
+                        convert_md_to_pdf(
+                            markdown_file=report_files['md'],
+                            output_pdf=report_files['pdf'],
+                            output_html=report_files['html']
+                        )
 
-                # Update main progress bar
-                vuln_pbar.update(1)
+                    # Update main progress bar
+                    vuln_pbar.update(1)
 
-            # Generate executive summary after all vulnerabilities are analyzed
-            generate_executive_summary(all_results, model_dir, model)
+                # Generate executive summary after all vulnerabilities are analyzed
+                generate_executive_summary(all_results, model_dir, model)
 
-    # Print summary of generated files
-    logger.info("\nAnalysis complete!")
-    abs_report_path = os.path.abspath(output_dir)
-    logger.info(f"\nReports have been generated in: {abs_report_path}")
-    logger.info("\nGenerated files structure:")
-    
-    # Display only the models that were just analyzed
-    for model in selected_models:
-        model_name = sanitize_model_name(model)
-        model_dir = output_dir / model_name
-        if model_dir.is_dir():
-            logger.info(f"\n{model_name}/")
-            for fmt_dir in model_dir.glob('*'):
-                if fmt_dir.is_dir():
-                    logger.info(f"  └── {fmt_dir.name}/")
-                    for report in fmt_dir.glob('*.*'):
-                        logger.info(f"       └── {report.name}")
+        # Print summary of generated files
+        logger.info("\nAnalysis complete!")
+        abs_report_path = os.path.abspath(output_dir)
+        logger.info(f"\nReports have been generated in: {abs_report_path}")
+        logger.info("\nGenerated files structure:")
+        
+        # Display only the models that were just analyzed
+        for model in selected_models:
+            model_name = sanitize_model_name(model)
+            model_dir = output_dir / model_name
+            if model_dir.is_dir():
+                logger.info(f"\n{model_name}/")
+                for fmt_dir in model_dir.glob('*'):
+                    if fmt_dir.is_dir():
+                        logger.info(f"  └── {fmt_dir.name}/")
+                        for report in fmt_dir.glob('*.*'):
+                            logger.info(f"       └── {report.name}")
 
-    logger.info(f"\nCache file: {embedding_auditor.cache_file}")
+        logger.info(f"\nCache file: {embedding_auditor.cache_file}")
+
+    except KeyboardInterrupt:
+        logger.info("\n\n🛑 Analysis interrupted by user")
+        logger.info("Cleaning up and saving current progress...")
+        try:
+            # Save any pending cache
+            if 'embedding_auditor' in locals():
+                embedding_auditor.save_cache()
+            logger.info("✅ Progress saved successfully")
+        except Exception as e:
+            logger.error(f"❌ Error saving progress: {str(e)}")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"❌ Unexpected error: {str(e)}")
+        if args.debug:
+            logger.debug("Full error:", exc_info=True)
+        sys.exit(1)
 
 if __name__ == "__main__":
     display_logo()
