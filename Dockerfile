@@ -1,10 +1,10 @@
-# Use a slim and specific Python base image to minimize attack surface
+# Use a slim and specific Debian base image to minimize attack surface
 FROM debian:12.9-slim
 
 # Set non-root user for better security
 RUN useradd -ms /bin/bash appuser
 
-# Installs
+# Installs (requires root privileges)
 RUN apt-get update && \
     apt-get install -y git curl python3 python3-pip python3-venv && \
     apt-get clean
@@ -36,9 +36,11 @@ RUN curl -fsSL https://ollama.com/install.sh | sh
 RUN ollama pull mistral && ollama pull nomic-embed-text
 
 # Clone the repository 
-RUN git clone  $GIT_REPO repo && \
+RUN git clone $GIT_REPO repo && \
     oasis /app/repo | echo ${MODEL_NB}
 
 # Move security reports to the designated volume for access
 RUN mv /app/security_reports/ /app/reports/
 
+# Switch to the non-root user for improved security during runtime
+USER appuser
