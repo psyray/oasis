@@ -10,6 +10,7 @@
 - Progress bar for model installation
 - Model availability check before analysis
 - Interactive model installation
+- Docker integration
 
 ### Changed
 - Moved keyword lists to global constants
