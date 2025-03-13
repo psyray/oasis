@@ -1937,9 +1937,23 @@ def main():
             logger.error("No valid files to analyze")
             return
 
+        # Filter files by supported extensions first
+        valid_files = []
+        for file_path in files_to_analyze:
+            if embedding_auditor._is_valid_file(file_path):
+                valid_files.append(file_path)
+            else:
+                logger.debug(f"Skipping unsupported file: {file_path}")
+
+        if not valid_files:
+            logger.error("No files with supported extensions found for analysis")
+            return
+
+        logger.info(f"Found {len(valid_files)} files with supported extensions out of {len(files_to_analyze)} total files")
+
         # Filter files and generate embeddings only for new ones
         new_files = []
-        for file_path in files_to_analyze:
+        for file_path in valid_files:
             file_key = str(file_path)
             # Strict check of cache structure
             if (file_key not in embedding_auditor.code_base or 
