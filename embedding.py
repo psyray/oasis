@@ -2,13 +2,47 @@ from pathlib import Path
 import ollama
 import pickle
 from datetime import datetime
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Any, Optional
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 import numpy as np
 
+# Import configuration
+from config import SUPPORTED_EXTENSIONS
+
 # Import from other modules
-from tools import logger, chunk_content, calculate_similarity
+from tools import logger, chunk_content, calculate_similarity, parse_input, sanitize_model_name
+
+def normalize_cache_entry(entry: Any) -> Dict:
+    """
+    Normalize a cache entry to ensure it has the correct structure
+    Args:
+        entry: Cache entry to normalize
+    Returns:
+        Dict with normalized cache entry
+    """
+    # Create default values for all required fields
+    default = {
+        'content': entry if isinstance(entry, str) else '',
+        'embedding': [],
+        'chunks': [],
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    # If entry is already a dict, update missing fields
+    if isinstance(entry, dict):
+        # Make a copy to avoid modifying the original
+        normalized = entry.copy()
+        
+        # Ensure all required fields are present
+        for key, default_value in default.items():
+            if key not in normalized:
+                normalized[key] = default_value
+                
+        return normalized
+        
+    # If entry is not a dict, return the default
+    return default
 
 def process_file_static(args: tuple) -> Tuple[str, str, List[float]]:
     """
@@ -113,8 +147,83 @@ def analyze_vulnerability_parallel(args: tuple) -> Dict:
             'error': str(e)
         }
 
+def process_input_files(args, embedding_manager):
+    """Process input files and update embeddings"""
+    # Parse input files and generate embeddings
+    files_to_analyze = parse_input(args.input_path)
+    if not files_to_analyze:
+        logger.error("No valid files to analyze")
+        return []
+
+    # Filter files by supported extensions
+    valid_files = []
+    for file_path in files_to_analyze:
+        if embedding_manager.is_valid_file(file_path):
+            valid_files.append(file_path)
+        else:
+            logger.debug(f"Skipping unsupported file: {file_path}")
+
+    if not valid_files:
+        logger.error("No files with supported extensions found for analysis")
+        return []
+
+    logger.info(f"Found {len(valid_files)} files with supported extensions out of {len(files_to_analyze)} total files")
+
+    # Generate embeddings only for new files
+    new_files = []
+    for file_path in valid_files:
+        file_key = str(file_path)
+        if (file_key not in embedding_manager.code_base or 
+            not isinstance(embedding_manager.code_base[file_key], dict) or
+            'embedding' not in embedding_manager.code_base[file_key] or 
+            'chunks' not in embedding_manager.code_base[file_key] or
+            'timestamp' not in embedding_manager.code_base[file_key]):
+            new_files.append(file_path)
+
+    if new_files:
+        logger.info(f"Generating embeddings for {len(new_files)} new files")
+        embedding_manager.index_code_files(new_files)
+    else:
+        logger.debug("All files found in cache with valid structure")
+        
+    return valid_files
+
+def setup_embedding_manager(args):
+    """Initialize and configure the embedding manager"""
+    # Parse extensions if provided
+    extensions = None
+    if args.extensions:
+        extensions = [ext.strip() for ext in args.extensions.split(',')]
+        logger.info(f"Using custom file extensions: {', '.join(extensions)}")
+    
+    # Initialize embedding manager with specified model and extensions
+    embedding_manager = EmbeddingManager(
+        embedding_model=args.embed_model,
+        extensions=extensions,
+        chunk_size=args.chunk_size
+    )
+    
+    # Setup cache file based on input path
+    cache_path = Path(args.input_path).resolve().parent / ".oasis_cache"
+    cache_path.mkdir(exist_ok=True)
+    
+    sanitized_path = sanitize_model_name(str(Path(args.input_path).resolve().name))
+    embedding_manager.cache_file = cache_path / f"{sanitized_path}_{args.embed_model.replace(':','_')}.cache"
+    
+    # Clear cache if requested
+    if args.clear_cache:
+        logger.info("Clearing embeddings cache...")
+        embedding_manager.clear_cache()
+    
+    # Check if cache is valid based on age
+    if not args.clear_cache and embedding_manager.is_cache_valid(args.cache_days):
+        logger.info(f"Using valid cache file: {embedding_manager.cache_file}")
+        embedding_manager.load_cache()
+    
+    return embedding_manager
+
 class EmbeddingManager:
-    def __init__(self, embedding_model: str, extensions: List[str] = None, chunk_size: int = 2048):
+    def __init__(self, embedding_model: str, extensions: Optional[List[str]] = None, chunk_size: int = 2048):
         """
         Initialize the embedding manager
         Args:
@@ -136,82 +245,8 @@ class EmbeddingManager:
         self.code_base: Dict = {}
         self.cache_file = None  # Will be set when directory is provided
         
-        # Default extensions if none provided
-        self.supported_extensions = extensions or [
-            # Web Development
-            'html', 'htm', 'css', 'js', 'jsx', 'ts', 'tsx', 'php', 'asp', 'aspx', 'jsp',
-            'vue', 'svelte',
-            
-            # Programming Languages
-            'py', 'pyc', 'pyd', 'pyo', 'pyw',  # Python
-            'java', 'class', 'jar',              # Java
-            'cpp', 'c', 'cc', 'cxx', 'h', 'hpp', 'hxx',  # C/C++
-            'cs',                                  # C#
-            'go',                                  # Go
-            'rs',                                  # Rust
-            'rb', 'rbw',                         # Ruby
-            'swift',                              # Swift
-            'kt', 'kts',                         # Kotlin
-            'scala',                              # Scala
-            'pl', 'pm',                          # Perl
-            'php', 'phtml', 'php3', 'php4', 'php5', 'phps',  # PHP
-            
-            # Mobile Development
-            'swift',                              # iOS
-            'm', 'mm',                           # Objective-C
-            'java', 'kt',                        # Android
-            'dart',                               # Flutter
-            
-            # Shell Scripts
-            'sh', 'bash', 'csh', 'tcsh', 'zsh', 'fish',
-            'bat', 'cmd', 'ps1',                # Windows Scripts
-            
-            # Database
-            'sql', 'mysql', 'pgsql', 'sqlite',
-            
-            # Configuration & Data
-            'xml', 'yaml', 'yml', 'json', 'ini', 'conf', 'config',
-            'toml', 'env',
-            
-            # System Programming
-            'asm', 's',                          # Assembly
-            'f', 'for', 'f90', 'f95',         # Fortran
-            
-            # Other Languages
-            'lua',                                # Lua
-            'r', 'R',                           # R
-            'matlab', 'm',                      # MATLAB
-            'groovy',                            # Groovy
-            'pl',                                # Prolog
-            'erl',                               # Erlang
-            'ex', 'exs',                        # Elixir
-            'hs',                                # Haskell
-            'lisp', 'lsp', 'cl',              # Lisp
-            'clj', 'cljs',                     # Clojure
-            
-            # Smart Contracts
-            'sol',                               # Solidity
-            
-            # Template Files
-            'tpl', 'tmpl', 'template',
-            
-            # Documentation
-            'md', 'rst', 'adoc',              # Documentation files
-            
-            # Build & Package
-            'gradle', 'maven',
-            'rake', 'gemspec',
-            'cargo', 'cabal',
-            'cmake', 'make',
-            
-            # Container & Infrastructure
-            'dockerfile', 'containerfile',
-            'tf', 'tfvars',                    # Terraform
-            'yaml', 'yml',                     # Kubernetes, Docker Compose
-            
-            # Version Control
-            'gitignore', 'gitattributes', 'gitmodules'
-        ]
+        # Use imported extensions or defaults
+        self.supported_extensions = extensions or list(SUPPORTED_EXTENSIONS)
         self.chunk_size = chunk_size
 
     def is_valid_file(self, file_path: Path) -> bool:
@@ -271,27 +306,9 @@ class EmbeddingManager:
             return
 
         try:
-            # Ensure each entry has the correct structure
+            # Normalize all cache entries
             for file_path, data in self.code_base.items():
-                if not isinstance(data, dict):
-                    # Si ce n'est pas un dictionnaire, créer la structure
-                    self.code_base[file_path] = {
-                        'content': data if isinstance(data, str) else '',
-                        'embedding': [],
-                        'chunks': [],
-                        'timestamp': datetime.now().isoformat()
-                    }
-                elif any(
-                    k not in data
-                    for k in ['content', 'embedding', 'chunks', 'timestamp']
-                ):
-                    # Si la structure est incomplète, la compléter
-                    self.code_base[file_path].update({
-                        'content': data.get('content', ''),
-                        'embedding': data.get('embedding', []),
-                        'chunks': data.get('chunks', []),
-                        'timestamp': data.get('timestamp', datetime.now().isoformat())
-                    })
+                self.code_base[file_path] = normalize_cache_entry(data)
 
             with open(self.cache_file, 'wb') as f:
                 pickle.dump(self.code_base, f)
@@ -301,6 +318,11 @@ class EmbeddingManager:
 
     def load_cache(self) -> None:
         """Load embeddings from cache file"""
+        if self.cache_file is None:
+            logger.warning("Cache file path not set, cannot load cache")
+            self.code_base = {}
+            return
+        
         try:
             # Ensure cache directory exists
             self.cache_file.parent.mkdir(parents=True, exist_ok=True)
@@ -322,7 +344,11 @@ class EmbeddingManager:
                             'timestamp' in v 
                             for v in cached_data.values())):
                         self.code_base = cached_data
-                        logger.debug(f"Loaded {len(self.code_base)} valid entries from cache")
+                        logger.debug(f"Loaded {len(self.code_base)} entries from cache")
+                        
+                        # Filter code_base by supported extensions
+                        self.filter_code_base_by_extensions()
+                        
                     else:
                         logger.warning("Invalid cache structure, starting fresh")
                         self.code_base = {}
@@ -339,10 +365,13 @@ class EmbeddingManager:
     def clear_cache(self) -> None:
         """Clear embeddings cache file and memory"""
         try:
-            if self.cache_file and self.cache_file.exists():
+            if self.cache_file is None:
+                logger.warning("Cache file path not set, cannot clear cache file")
+            elif self.cache_file.exists():
                 self.cache_file.unlink()  # Delete the cache file
                 logger.info(f"Cache file {self.cache_file} deleted successfully")
-            self.code_base = {}  # Clear memory cache
+            
+            self.code_base = {}  # Clear memory cache anyway
             logger.debug("Memory cache cleared")
         except Exception as e:
             logger.error(f"Error clearing cache: {str(e)}")
@@ -371,7 +400,7 @@ class EmbeddingManager:
         Returns:
             bool: True if cache is valid, False otherwise
         """
-        if not self.cache_file or not self.cache_file.exists():
+        if self.cache_file is None or not self.cache_file.exists():
             return False
             
         # Check cache age
@@ -387,3 +416,26 @@ class EmbeddingManager:
         except Exception as e:
             logger.debug(f"Cache validation failed: {str(e)}")
             return False 
+
+    def filter_code_base_by_extensions(self) -> None:
+        """
+        Filter code_base to only include files with supported extensions
+        """
+        if not self.code_base:
+            return
+        
+        # Create a copy of keys to avoid modifying dict during iteration
+        file_paths = list(self.code_base.keys())
+        
+        # Count files before filtering
+        initial_count = len(file_paths)
+        
+        for file_path in file_paths:
+            path = Path(file_path)
+            if not self.is_valid_file(path):
+                del self.code_base[file_path]
+        
+        # Log the filtering results
+        filtered_count = initial_count - len(self.code_base)
+        if filtered_count > 0:
+            logger.info(f"Filtered out {filtered_count} files that don't match the specified extensions") 

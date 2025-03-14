@@ -1,0 +1,94 @@
+@page {
+    margin: 1cm;
+    size: A4;
+    @top-right {
+        content: counter(page);
+    }
+}
+
+/* Force page break - multiple approaches */
+div[style*="page-break-after: always"],
+div.page-break {
+    page-break-after: always !important;
+    break-after: page !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    height: 0 !important;
+    visibility: hidden !important;
+}
+
+body { 
+    font-family: Arial, sans-serif;
+    font-size: 11pt;
+    line-height: 1.4;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+}
+
+code {
+    background-color: #f5f5f5;
+    padding: 2px 4px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 9pt;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+}
+
+pre {
+    background-color: #f5f5f5;
+    padding: 1em;
+    border-radius: 4px;
+    margin: 1em 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-size: 9pt;
+}
+
+h1 { 
+    color: #2c3e50;
+    font-size: 20pt;
+    margin-top: 0;
+}
+
+h2 { 
+    color: #34495e;
+    font-size: 16pt;
+    margin-top: 1em;
+}
+
+h3 { 
+    color: #7f8c8d;
+    font-size: 14pt;
+}
+
+p {
+    margin: 0.5em 0;
+}
+
+ul, ol {
+    margin: 0.5em 0;
+    padding-left: 2em;
+}
+
+table { 
+    border-collapse: collapse; 
+    width: 100%; 
+    margin: 1em 0;
+}
+
+th, td { 
+    border: 1px solid #ddd; 
+    padding: 8px; 
+    text-align: left;
+}
+
+th { 
+    background-color: #f5f5f5;
+    font-weight: bold;
+}
+
+.risk-high { color: #d73a49; }
+.risk-medium { color: #e36209; }
+.risk-low { color: #2cbe4e; } 

@@ -22,8 +22,11 @@ def get_ollama_client() -> ollama.Client:
         client.list()
         return client
     except Exception as e:
-        logger.error("Failed to connect to Ollama server")
-        logger.error("Please make sure Ollama is running and accessible")
+        logger.error("\nError: Could not connect to Ollama server")
+        logger.error("Please ensure that:")
+        logger.error("1. Ollama is installed (https://ollama.ai)")
+        logger.error("2. Ollama server is running (usually with 'ollama serve')")
+        logger.error("3. Ollama is accessible (default: http://localhost:11434)")
         logger.debug(f"Connection error: {str(e)}")
         raise ConnectionError(f"Cannot connect to Ollama server: {str(e)}") from e
 
@@ -226,16 +229,19 @@ def select_models(available_models: List[str]) -> List[str]:
         List of selected model names
     """
     from tqdm import tqdm
-    
+
     logger.info("\nGetting detailed model information...")
-    
+
     # Pre-format all models with progress bar
     formatted_models = []
-    
+
     # Use tqdm to display progress
-    for i, model in enumerate(tqdm(available_models, desc="Getting model details", unit="model")):
-        formatted_models.append((i+1, format_model_display(model), model))
-    
+    formatted_models.extend(
+        (i + 1, format_model_display(model), model)
+        for i, model in enumerate(
+            tqdm(available_models, desc="Getting model details", unit="model")
+        )
+    )
     # Display all formatted models in one block
     logger.info("\nAvailable models:")
     for idx, formatted_model, _ in formatted_models:
@@ -315,48 +321,41 @@ def _format_model_with_info(model_name: str, model_info, default_emoji: str = "�
 def _extract_parameter_info(model_info) -> str:
     """Extract and format parameter information from model info"""
     parameters = 0
-    
+
     # Try different paths to parameter information
     # 1. Check in details.parameter_size (might be a string like "8.0B")
     if hasattr(model_info, 'details') and model_info.details:
         details = model_info.details
         if hasattr(details, 'parameter_size') and details.parameter_size:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 # Handle strings like "8.0B"
                 param_size = details.parameter_size
-                if isinstance(param_size, str):
-                    if 'B' in param_size:
-                        parameters = float(param_size.replace('B', '')) * 1_000_000_000
-                    elif 'M' in param_size:
-                        parameters = float(param_size.replace('M', '')) * 1_000_000
-                    else:
-                        parameters = float(param_size)
+                if isinstance(param_size, str) and 'B' in param_size:
+                    parameters = float(param_size.replace('B', '')) * 1_000_000_000
+                elif isinstance(param_size, str) and 'M' in param_size:
+                    parameters = float(param_size.replace('M', '')) * 1_000_000
                 else:
                     parameters = float(param_size)
-            except (ValueError, TypeError):
-                pass
-    
     # 2. Check in modelinfo['general.parameter_count']
     if parameters == 0 and hasattr(model_info, 'modelinfo') and model_info.modelinfo:
         modelinfo = model_info.modelinfo
         if isinstance(modelinfo, dict) and 'general.parameter_count' in modelinfo:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 parameters = int(modelinfo['general.parameter_count'])
-            except (ValueError, TypeError):
-                pass
-    
+
     # Format parameter count in billions or millions
     if parameters >= 1_000_000_000:
         return f"{parameters/1_000_000_000:.1f}B params"
     elif parameters >= 1_000_000:
         return f"{parameters/1_000_000:.1f}M params"
-    else:
-        return f"{parameters:,} params" if parameters > 0 else ""
+    elif parameters > 0:  # Fusionné les conditions pour éviter la redondance
+        return f"{parameters:,} params"
+    return ""  # Retourne une chaîne vide si parameters = 0
 
 def _extract_context_info(model_info) -> str:
     """Extract and format context length information from model info"""
     context_length = 0
-    
+
     # Try different paths to context length
     # 1. Check in modelinfo['llama.context_length']
     if hasattr(model_info, 'modelinfo') and model_info.modelinfo:
@@ -365,21 +364,15 @@ def _extract_context_info(model_info) -> str:
             # Look for context length in various possible keys
             for key in ['llama.context_length', 'phi.context_length', 'general.context_length']:
                 if key in modelinfo:
-                    try:
+                    with contextlib.suppress(ValueError, TypeError):
                         context_length = int(modelinfo[key])
                         break
-                    except (ValueError, TypeError):
-                        pass
-    
     # 2. Check in details.context_length if still not found
     if context_length == 0 and hasattr(model_info, 'details') and model_info.details:
         details = model_info.details
         if hasattr(details, 'context_length') and details.context_length:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 context_length = int(details.context_length)
-            except (ValueError, TypeError):
-                pass
-    
     # Format context length in K tokens
     if context_length >= 1000:
         return f"{context_length/1000:.0f}K ctx"
@@ -432,34 +425,29 @@ def _determine_model_emoji(model_name: str, model_info, default_emoji: str) -> s
 
 def _extract_parent_model_info(model_info, default_emoji: str = "🤖 ") -> str:
     """Extract and format parent model information"""
-    parent_model = ""
-    
     # Try to get parent model from details
-    if hasattr(model_info, 'details') and model_info.details:
-        details = model_info.details
-        if hasattr(details, 'parent_model') and details.parent_model:
-            parent_model = details.parent_model
-    
-    # If no parent model found, return empty string
-    if not parent_model:
-        return ""
-    
-    # Get emoji for parent model
-    parent_emoji = default_emoji
+    if not (hasattr(model_info, 'details') and model_info.details and 
+            hasattr(model_info.details, 'parent_model') and model_info.details.parent_model):
+        return ""  # Return early if no parent model
+
+    # Extract parent model
+    parent_model = model_info.details.parent_model
     parent_lower = parent_model.lower()
     # Extract base name without version
     parent_basename = parent_lower.split('/')[-1].split(':')[0]
+
+    # Get emoji for parent model
+    parent_emoji = next(
+        (
+            emoji
+            for model_id, emoji in EmojiFormatter.MODEL_EMOJIS.items()
+            if model_id in parent_basename or model_id in parent_lower
+        ),
+        default_emoji,
+    )
     
-    # Find matching emoji
-    for model_id, emoji in EmojiFormatter.MODEL_EMOJIS.items():
-        if model_id in parent_basename or model_id in parent_lower:
-            parent_emoji = emoji
-            break
-    
-    # Format parent model name (remove version tag)
-    parent_display = parent_model.split(':')[0]
-    
-    return f"{parent_emoji}{parent_display}"
+    # Return formatted parent model info
+    return f"{parent_emoji}{parent_model.split(':')[0]}"
 
 def _build_formatted_string(model_name: str, model_emoji: str, param_str: str, ctx_str: str, parent_info: str = "") -> str:
     """Build the final formatted string with all available information"""
@@ -494,11 +482,30 @@ def format_model_display_batch(model_names: List[str]) -> List[str]:
         List of formatted model strings
     """
     from tqdm import tqdm
-    
+
     logger.info("Getting detailed model information...")
-    formatted_models = []
     
-    for model in tqdm(model_names, desc="Getting model information", unit="model"):
-        formatted_models.append(format_model_display(model))
-        
-    return formatted_models 
+    return [
+        format_model_display(model)
+        for model in tqdm(
+            model_names, desc="Getting model information", unit="model"
+        )
+    ]
+
+def select_analysis_models(args, available_models):
+    """Select models for security analysis"""
+    if not args.models:
+        # Let user select models interactively
+        return select_models(available_models)
+    # Parse comma-separated list of models
+    requested_models = [m.strip() for m in args.models.split(',')]
+
+    if unavailable := [
+        m for m in requested_models if m not in available_models
+    ]:
+        logger.error(f"The following requested models are not available: {', '.join(unavailable)}")
+        logger.error("Use --list-models to see available models")
+        return None
+
+    logger.info(f"Using specified models: {', '.join(requested_models)}")
+    return requested_models

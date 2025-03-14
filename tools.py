@@ -65,20 +65,6 @@ class EmojiFormatter(logging.Formatter):
         "nous": "👥 "
     }
     
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # Constants
-        self.KEYWORD_LISTS = {
-            'INSTALL_WORDS': ['installing', 'download', 'pulling', 'fetching'],
-            'ANALYSIS_WORDS': ['analyzing', 'analysis', 'scanning', 'checking', 'inspecting', 'examining'],
-            'GENERATION_WORDS': ['generating', 'creating', 'building', 'processing'],
-            'MODEL_WORDS': ['model', 'ai', 'llm'],
-            'CACHE_WORDS': ['cache', 'stored', 'saving'],
-            'SAVE_WORDS': ['saved', 'written', 'exported'],
-            'LOAD_WORDS': ['loading', 'reading', 'importing', 'loaded'],
-            'FAIL_WORDS': ['failed', 'error', 'crash', 'exception']
-        }
     def format(self, record):
         if not hasattr(record, 'formatted_message'):
             # Helper function to detect if string starts with emoji
@@ -162,12 +148,13 @@ class EmojiFormatter(logging.Formatter):
 
         return record.formatted_message
 
-def setup_logging(debug=False, silent=False):
+def setup_logging(debug=False, silent=False, error_log_file=None):
     """
     Setup all loggers with proper configuration
     Args:
         debug: Enable debug logging
         silent: Disable all output
+        error_log_file: Path to error log file (used only in silent mode)
     """
     # Set root logger level
     root_logger = logging.getLogger()
@@ -181,12 +168,22 @@ def setup_logging(debug=False, silent=False):
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(EmojiFormatter())
         logger.addHandler(console_handler)
-    
+
+    # Add file handler for errors in silent mode
+    if silent and error_log_file:
+        file_handler = logging.FileHandler(error_log_file)
+        file_handler.setLevel(logging.ERROR)  # Only log errors and above
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+
     logger.propagate = False  # Prevent duplicate logging
-    
+
     # Set OASIS logger level based on mode
-    if silent:
-        logger.setLevel(logging.CRITICAL + 1)  # Above all levels
+    if silent and not error_log_file:
+        logger.setLevel(logging.CRITICAL + 1)  # Above all levels (complete silence)
+    elif silent:
+        logger.setLevel(logging.ERROR)         # Only errors and above if logging to file
     elif debug:
         logger.setLevel(logging.DEBUG)         # Show all messages
     else:
@@ -195,7 +192,7 @@ def setup_logging(debug=False, silent=False):
     # Configure other loggers
     fonttools_logger = logging.getLogger('fontTools')
     fonttools_logger.setLevel(logging.ERROR)
-    
+
     weasyprint_logger.setLevel(logging.ERROR)
 
     # Disable other verbose loggers
