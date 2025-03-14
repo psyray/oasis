@@ -1,4 +1,3 @@
-import ollama
 from typing import List, Dict, Tuple
 from pathlib import Path
 from tqdm import tqdm
@@ -7,6 +6,7 @@ import logging
 from datetime import datetime
 
 # Import from other modules
+from ollama_manager import get_ollama_client
 from tools import chunk_content, logger, calculate_similarity
 from embedding import analyze_vulnerability_parallel
 from report import convert_md_to_pdf, generate_executive_summary, generate_markdown_report
@@ -21,9 +21,7 @@ class SecurityAnalyzer:
             code_base: Dictionary of code files with embeddings
         """
         try:
-            self.client = ollama.Client()
-            # Verify connection by trying to list models
-            self.client.list()
+            self.client = get_ollama_client()
         except Exception as e:
             logger.error("Failed to initialize Ollama client")
             logger.error("Please make sure Ollama is running and accessible")

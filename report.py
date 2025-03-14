@@ -17,8 +17,13 @@ template_env = Environment(loader=FileSystemLoader(searchpath=str(template_dir))
 
 def render_template(content: str) -> str:
     """Render HTML content using Jinja2 template"""
-    template = template_env.get_template('report_template.html')
-    return template.render(content=content)
+    try:
+        template = template_env.get_template('report_template.html')
+        return template.render(content=content)
+    except Exception as e:
+        logger.error(f"Error rendering template: {str(e)}")
+        # Fallback to basic HTML if template fails
+        return f"<html><body>{content}</body></html>"
 
 class PageBreakExtension(Extension):
     """Markdown extension to handle page breaks"""

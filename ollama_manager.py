@@ -2,6 +2,7 @@ import contextlib
 import ollama
 from typing import List
 from tqdm import tqdm
+import logging
 
 # Import from other modules
 from tools import logger, EmojiFormatter
@@ -65,13 +66,15 @@ def get_available_models(show_formatted: bool = False) -> List[str]:
         if show_formatted and model_names:
             logger.info("\nAvailable models:")
             formatted_models = format_model_display_batch(model_names)
-            for i, formatted_model in enumerate(formatted_models, 1):
+            for i, (model_name, formatted_model) in enumerate(zip(model_names, formatted_models), 1):
                 logger.info(f"{i}. {formatted_model}")
+                logger.info(f"   Use with --models: '{model_name}' or '{i}'")
                 
         return model_names
     except Exception as e:
         logger.error(f"Error fetching models: {str(e)}")
-        logger.debug("Full error:", exc_info=True)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("Full error:", exc_info=True)
 
         # Fallback to default models if API fails
         default_models = [
@@ -488,7 +491,7 @@ def format_model_display_batch(model_names: List[str]) -> List[str]:
     return [
         format_model_display(model)
         for model in tqdm(
-            model_names, desc="Getting model information", unit="model"
+            model_names, desc="Getting model details", unit="model"
         )
     ]
 
@@ -497,15 +500,27 @@ def select_analysis_models(args, available_models):
     if not args.models:
         # Let user select models interactively
         return select_models(available_models)
-    # Parse comma-separated list of models
-    requested_models = [m.strip() for m in args.models.split(',')]
-
-    if unavailable := [
-        m for m in requested_models if m not in available_models
-    ]:
-        logger.error(f"The following requested models are not available: {', '.join(unavailable)}")
-        logger.error("Use --list-models to see available models")
-        return None
-
-    logger.info(f"Using specified models: {', '.join(requested_models)}")
-    return requested_models
+    
+    # Parse comma-separated list of models or indices
+    requested_items = [item.strip() for item in args.models.split(',')]
+    selected_models = []
+    
+    for item in requested_items:
+        # Check if item is a number (index)
+        if item.isdigit():
+            index = int(item) - 1  # Convert to 0-based index
+            if 0 <= index < len(available_models):
+                selected_models.append(available_models[index])
+            else:
+                logger.error(f"Invalid model index: {item} (must be between 1 and {len(available_models)})")
+                return None
+        # Otherwise treat as model name
+        elif item in available_models:
+            selected_models.append(item)
+        else:
+            logger.error(f"Model not available: {item}")
+            logger.error("Use --list-models to see available models")
+            return None
+    
+    logger.info(f"Using specified models: {', '.join(selected_models)}")
+    return selected_models

@@ -35,15 +35,23 @@ def get_vulnerability_help() -> str:
     )
 
 def handle_list_models_option(args):
-    """Handle the --list-models option"""
-    available_models = get_available_models()
-    if not available_models:
-        logger.error("No models available. Please check Ollama installation.")
+    """Handle --list-models option"""
+    try:
+        logger.info("Querying available models from Ollama...")
+        
+        # Use True for the show_formatted parameter to display numbers 
+        available_models = get_available_models(show_formatted=True)
+        
+        if not available_models:
+            logger.error("No models available. Please check your Ollama installation.")
+            return True
+
+        return True
+    except Exception as e:
+        logger.error(f"Error listing models: {str(e)}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("Full error:", exc_info=True)
         return False
-    logger.info("\nAvailable models:")
-    for model in available_models:
-        logger.info(format_model_display(model))
-    return True
 
 def setup_argument_parser():
     """Configure and return argument parser"""

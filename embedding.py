@@ -1,5 +1,4 @@
 from pathlib import Path
-import ollama
 import pickle
 from datetime import datetime
 from typing import List, Tuple, Dict, Any, Optional
@@ -11,6 +10,7 @@ import numpy as np
 from config import SUPPORTED_EXTENSIONS
 
 # Import from other modules
+from ollama_manager import get_ollama_client
 from tools import logger, chunk_content, calculate_similarity, parse_input, sanitize_model_name
 
 def normalize_cache_entry(entry: Any) -> Dict:
@@ -54,7 +54,7 @@ def process_file_static(args: tuple) -> Tuple[str, str, List[float]]:
     """
     file_path, embedding_model, chunk_size = args
     try:
-        client = ollama.Client()
+        client = get_ollama_client()
         
         # Try different encodings
         encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
@@ -121,7 +121,7 @@ def analyze_vulnerability_parallel(args: tuple) -> Dict:
     file_path, data, vulnerability_type, embedding_model = args
     try:
         # Create a new Ollama client for each process
-        client = ollama.Client()
+        client = get_ollama_client()
         
         # Get vulnerability embedding
         vuln_response = client.embeddings(
@@ -232,9 +232,8 @@ class EmbeddingManager:
             chunk_size: Maximum size of text chunks for embedding
         """
         try:
-            self.client = ollama.Client()
-            # Verify connection by trying to list models
-            self.client.list()
+            self.client = get_ollama_client()
+
         except Exception as e:
             logger.error("Failed to initialize Ollama client")
             logger.error("Please make sure Ollama is running and accessible")
@@ -424,16 +423,15 @@ class EmbeddingManager:
         if not self.code_base:
             return
         
-        # Create a copy of keys to avoid modifying dict during iteration
-        file_paths = list(self.code_base.keys())
+        # Store initial count
+        initial_count = len(self.code_base)
         
-        # Count files before filtering
-        initial_count = len(file_paths)
-        
-        for file_path in file_paths:
-            path = Path(file_path)
-            if not self.is_valid_file(path):
-                del self.code_base[file_path]
+        # Filter code_base using dictionary comprehension
+        self.code_base = {
+            file_path: data 
+            for file_path, data in self.code_base.items() 
+            if self.is_valid_file(Path(file_path))
+        }
         
         # Log the filtering results
         filtered_count = initial_count - len(self.code_base)
