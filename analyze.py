@@ -5,6 +5,9 @@ from multiprocessing import Pool, cpu_count
 import logging
 from datetime import datetime
 
+# Import from configuration
+from config import VULNERABILITY_MAPPING, VULNERABILITY_PROMPT_EXTENSION
+
 # Import from other modules
 from ollama_manager import get_ollama_client
 from tools import chunk_content, logger, calculate_similarity
@@ -117,6 +120,8 @@ class SecurityAnalyzer:
 
                 Code segment to analyze:
                 {chunk}
+
+                {VULNERABILITY_PROMPT_EXTENSION}
                 """
 
                 response = self.client.chat(
@@ -132,104 +137,8 @@ class SecurityAnalyzer:
             return f"Error during analysis: {str(e)}"
 
 def get_vulnerability_mapping() -> Dict[str, Dict[str, any]]:
-    """Return mapping of vulnerability tags to their full names and search patterns"""
-    return {
-        'sqli': {
-            'name': "SQL Injection",
-            'patterns': [
-                "SQL Injection",
-                "SQL query vulnerability",
-                "database injection vulnerability",
-                "unsafe database query",
-                "SQL string concatenation vulnerability"
-            ]
-        },
-        'xss': {
-            'name': "Cross-Site Scripting (XSS)",
-            'patterns': [
-                "Cross-Site Scripting",
-                "XSS vulnerability",
-                "unsafe HTML output",
-                "unescaped user input",
-                "DOM-based XSS"
-            ]
-        },
-        'input': {
-            'name': "Insufficient Input Validation",
-            'patterns': [
-                "input validation missing",
-                "unvalidated user input",
-                "unsafe type casting",
-                "buffer overflow risk",
-                "command injection risk",
-                "path traversal vulnerability",
-                "unsafe deserialization"
-            ]
-        },
-        'data': {
-            'name': "Sensitive Data Exposure",
-            'patterns': [
-                "sensitive data exposure",
-                "plaintext credentials",
-                "hardcoded secrets",
-                "API keys in code",
-                "unencrypted sensitive data",
-                "information disclosure",
-                "data leakage"
-            ]
-        },
-        'session': {
-            'name': "Session Management Issues",
-            'patterns': [
-                "session fixation",
-                "insecure session handling",
-                "session hijacking risk",
-                "missing session timeout",
-                "weak session ID generation",
-                "session token exposure",
-                "cookie security missing"
-            ]
-        },
-        'config': {
-            'name': "Security Misconfiguration",
-            'patterns': [
-                "security misconfiguration",
-                "default credentials",
-                "debug mode enabled",
-                "insecure permissions",
-                "unnecessary features enabled",
-                "missing security headers",
-                "verbose error messages",
-                "directory listing enabled"
-            ]
-        },
-        'logging': {
-            'name': "Sensitive Data Logging",
-            'patterns': [
-                "sensitive data in logs",
-                "password logging",
-                "PII in logs",
-                "credit card logging",
-                "token logging",
-                "unsafe error logging",
-                "debug logging in production"
-            ]
-        },
-        'crypto': {
-            'name': "Insecure Cryptographic Function Usage",
-            'patterns': [
-                "weak encryption",
-                "insecure random number generation",
-                "weak hash algorithm",
-                "MD5 usage",
-                "SHA1 usage",
-                "ECB mode encryption",
-                "static initialization vector",
-                "hardcoded encryption key",
-                "insufficient key size"
-            ]
-        }
-    }
+    """Return the vulnerability mapping"""
+    return VULNERABILITY_MAPPING
 
 def analyze_embeddings_distribution(embedding_manager, vulnerability_types: List[Dict], thresholds: List[float] = None) -> None:
     """

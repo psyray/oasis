@@ -5,6 +5,9 @@ from typing import List
 from datetime import datetime
 from weasyprint.logger import LOGGER as weasyprint_logger
 
+# Import configuration
+from config import KEYWORD_LISTS, MODEL_EMOJIS
+
 # Initialize logger with module name
 logger = logging.getLogger('oasis')
 
@@ -21,50 +24,9 @@ class EmojiFormatter(logging.Formatter):
     - Context-aware icons
     - Newline preservation
     """
-    # Constants
-    KEYWORD_LISTS = {
-        'INSTALL_WORDS': ['installing', 'download', 'pulling', 'fetching'],
-        'ANALYSIS_WORDS': ['analyzing', 'analysis', 'scanning', 'checking', 'inspecting', 'examining'],
-        'GENERATION_WORDS': ['generating', 'creating', 'building', 'processing'],
-        'MODEL_WORDS': ['model', 'ai', 'llm'],
-        'CACHE_WORDS': ['cache', 'stored', 'saving'],
-        'SAVE_WORDS': ['saved', 'written', 'exported'],
-        'LOAD_WORDS': ['loading', 'reading', 'importing', 'loaded'],
-        'FAIL_WORDS': ['failed', 'error', 'crash', 'exception']
-    }    
-    # Dictionary of model identifiers and their emojis (attribut de classe)
-    MODEL_EMOJIS = {
-        # General models
-        "deepseek": "🧠 ",
-        "llama": "🦙 ",
-        "gemma": "💎 ",
-        "mistral": "💨 ",
-        "mixtral": "🌪️ ", 
-        "qwen": "🐧 ",
-        "phi": "φ ",
-        "yi": "🌐 ",
-        
-        # Code models
-        "codestral": "🌠 ",
-        "starcoder": "⭐ ",
-        
-        # Interaction models
-        "instruct": "💬 ",
-        "chat": "💬 ",
-        
-        # Cybersecurity models
-        "cybersecurity": "🛡️  ",
-        "whiterabbit": "🐇 ",
-        "sast": "🛡️  ",
-        
-        # Other models
-        "research": "🔬 ",
-        "openhermes": "🌟 ",
-        "solar": "☀️ ",
-        "neural-chat": "🧠💬 ",
-        "nous": "👥 "
-    }
-    
+    KEYWORD_LISTS = KEYWORD_LISTS
+    MODEL_EMOJIS = MODEL_EMOJIS
+
     def format(self, record):
         if not hasattr(record, 'formatted_message'):
             # Helper function to detect if string starts with emoji

@@ -7,6 +7,9 @@ import logging
 # Import from other modules
 from tools import logger, EmojiFormatter
 
+# Import configuration
+from config import OLLAMA_API_URL, EXCLUDED_MODELS, DEFAULT_MODELS, MAX_CHUNK_SIZE
+
 def get_ollama_client() -> ollama.Client:
     """
     Get the Ollama client instance, checking connection first
@@ -19,6 +22,8 @@ def get_ollama_client() -> ollama.Client:
     """
     try:
         client = ollama.Client()
+        # Use the configured API URL
+        client.BASE_URL = OLLAMA_API_URL
         # Try to list models to verify connection
         client.list()
         return client
@@ -51,16 +56,8 @@ def get_available_models(show_formatted: bool = False) -> List[str]:
     Returns:
         List of model names
     """
-    excluded_models = [
-        'embed',
-        'instructor',
-        'text-',
-        'minilm',
-        'e5-',
-        'cline'
-    ]
     try:
-        model_names = _get_models(excluded_models)
+        model_names = _get_models(EXCLUDED_MODELS)
         
         # If requested, display formatted list
         if show_formatted and model_names:
@@ -76,19 +73,9 @@ def get_available_models(show_formatted: bool = False) -> List[str]:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("Full error:", exc_info=True)
 
-        # Fallback to default models if API fails
-        default_models = [
-            'llama2',
-            'llama2:13b',
-            'codellama',
-            'codellama:13b',
-            'gemma:2b',
-            'gemma:7b',
-            'mistral',
-            'mixtral'
-        ]
-        logger.warning(f"Using default model list: {', '.join(default_models)}")
-        return default_models
+
+        logger.warning(f"Using default model list: {', '.join(DEFAULT_MODELS)}")
+        return DEFAULT_MODELS
 
 def _get_models(excluded_models):
     try:
@@ -139,13 +126,13 @@ def detect_optimal_chunk_size(model: str) -> int:
                 return chunk_size
         
         # If we couldn't get the information, use a conservative default
-        logger.warning(f"Could not detect context length for {model}, using default size: 2048")
-        return 2048
+        logger.warning(f"Could not detect context length for {model}, using default size: {MAX_CHUNK_SIZE}")
+        return MAX_CHUNK_SIZE
         
     except Exception as e:
         logger.error(f"Error detecting chunk size: {str(e)}")
-        logger.warning("Using conservative default chunk size: 2048")
-        return 2048
+        logger.warning("Using conservative default chunk size: {MAX_CHUNK_SIZE}")
+        return MAX_CHUNK_SIZE
 
 def check_model_availability(model_name: str) -> bool:
     """
