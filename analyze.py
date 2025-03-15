@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 
 # Import from configuration
-from config import VULNERABILITY_MAPPING, VULNERABILITY_PROMPT_EXTENSION
+from config import VULNERABILITY_MAPPING, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS
 
 # Import from other modules
 from ollama_manager import get_ollama_client
@@ -149,7 +149,8 @@ def analyze_embeddings_distribution(embedding_manager, vulnerability_types: List
         thresholds: List of thresholds to test
     """
     if thresholds is None:
-        thresholds = [0.5, 0.6, 0.7, 0.8, 0.9]
+        thresholds = EMBEDDING_THRESHOLDS
+        
     logger.info("\nEmbeddings Distribution Analysis")
     logger.info("================================\n")
 
@@ -318,16 +319,12 @@ def generate_audit_report(embedding_manager, vulnerability_types: List[Dict], ou
     
     # Main function logic
     if thresholds is None:
-        thresholds = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+        thresholds = EMBEDDING_THRESHOLDS
         
     report = _init_report()
     output_dir = output_dir / 'audit'
     all_results = {}
-    
-    # Use constants instead of magic numbers
-    HIGH_THRESHOLD = 0.8
-    MEDIUM_THRESHOLD = 0.6
-    
+
     # Calculate optimal number of processes
     num_processes = min(cpu_count(), len(embedding_manager.code_base))
     logger.info(f"\nUsing {num_processes} processes for parallel analysis\n")
@@ -392,6 +389,8 @@ def _save_reports(report_content, output_dir):
 
 def process_analysis_with_model(model, vulnerabilities, embedding_manager, args, report_dirs):
     """Process vulnerability analysis with a specific model"""
+    min_threshold = 0.3
+    
     # Create analyzer with current model
     analyzer = SecurityAnalyzer(
         llm_model=model,
@@ -408,11 +407,13 @@ def process_analysis_with_model(model, vulnerabilities, embedding_manager, args,
              disable=args.silent) as vuln_pbar:
         for vuln in vulnerabilities:
             # First, find potentially vulnerable files
-            results = analyzer.search_vulnerabilities(vuln['name'], threshold=args.threshold)
-
+            results = analyzer.search_vulnerabilities(vuln['name'], threshold=min_threshold)
+            
+            filtered_results = [(path, score) for path, score in results if score >= args.threshold]
+            
             # Then analyze each file in detail with progress bar
             detailed_results = []
-            with tqdm(results, 
+            with tqdm(filtered_results, 
                      desc=f"Analyzing {vuln['name']} details", 
                      disable=args.silent,
                      leave=False) as file_pbar:

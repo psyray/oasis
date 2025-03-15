@@ -78,7 +78,8 @@ SUPPORTED_EXTENSIONS: Set[str] = {
 } 
 
 # Maximum chunk size for embedding text
-MAX_CHUNK_SIZE = 8192
+MAX_CHUNK_SIZE = 2048
+EMBEDDING_THRESHOLDS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
 # Ollama API endpoint
 OLLAMA_API_URL = "http://localhost:11434"
