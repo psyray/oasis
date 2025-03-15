@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.3.0] - 2025-03-15
+
+Codebase refactoring and improvements.
+
+### Added
+- Added support for new vulnerability types (RCE, SSRF, XXE, Path Traversal, IDOR, CSRF)
+- Added detailed vulnerability descriptions and examples
+- Added HTML template and CSS styling for better report readability
+- Added better emoji support in logging for better readability
+- Added more comprehensive test files with vulnerability examples
+
+### Changed
+- Improved cache management with dedicated .oasis_cache/ directory
+- Enhanced logging system with custom EmojiFormatter
+- Improved report generation with better styling and formatting
+- Refactored package structure for better organization
+- Updated dependency management in pyproject.toml
+
+### Fixed
+- Fixed embeddings cache storage and validation
+- Fixed report rendering with proper page breaks
+
+### Technical
+- Added configuration constants for better maintainability
+- Added Jinja2 templating for report generation
+- Implemented normalized heading levels in reports
+
+### Documentation
+- Enhanced code documentation with proper docstrings
+
 ## [0.2.0] - 2025-01-29
 
 ### Added
