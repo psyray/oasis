@@ -48,4 +48,73 @@ function encryptPassword($password) {
     // Vulnerable: Using weak hashing
     return md5($password);
 }
+
+// Remote Code Execution (RCE) vulnerability
+function runCommand($cmd) {
+    // Vulnerable: Direct command execution
+    return shell_exec($cmd);
+}
+
+function evaluateCode($code) {
+    // Vulnerable: Direct eval of user input
+    return eval($code);
+}
+
+// Server-Side Request Forgery (SSRF) vulnerability
+function fetchExternalResource($url) {
+    // Vulnerable: No URL validation
+    return file_get_contents($url);
+}
+
+// XML External Entity (XXE) vulnerability
+function parseXmlDocument($xml) {
+    // Vulnerable: No protection against XXE
+    $doc = new DOMDocument();
+    $doc->loadXML($xml, LIBXML_NOENT);
+    return $doc;
+}
+
+// Path Traversal vulnerability
+function getFileContents($fileName) {
+    // Vulnerable: No path validation
+    return file_get_contents($fileName);
+}
+
+function saveUploadedFile($fileName) {
+    // Vulnerable: Path traversal
+    $filePath = "uploads/" . $fileName;
+    return $filePath;
+}
+
+// Insecure Direct Object Reference (IDOR) vulnerability
+function getUserProfile($userId) {
+    // Vulnerable: No access control checks
+    $filePath = "users/" . $userId . ".json";
+    return json_decode(file_get_contents($filePath), true);
+}
+
+// Authentication Issues
+function loginUser($username, $password) {
+    // Vulnerable: Weak password policy, no MFA
+    $users = [
+        "admin" => "password123",
+        "user" => "123456"
+    ];
+    
+    return isset($users[$username]) && $users[$username] === $password;
+}
+
+// Cross-Site Request Forgery (CSRF) vulnerability
+function processMoneyTransfer($fromAccount, $toAccount, $amount) {
+    // Vulnerable: No CSRF token validation
+    // Just process the transfer based on parameters
+    return "Transferred $amount from $fromAccount to $toAccount";
+}
+
+// Create a session without proper security
+function createUserSession($userId) {
+    session_start();
+    $_SESSION['user_id'] = $userId;
+    // No CSRF token, no session regeneration
+}
 ?> 
