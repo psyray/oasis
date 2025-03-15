@@ -5,10 +5,10 @@ from tqdm import tqdm
 import logging
 
 # Import from other modules
-from tools import logger, EmojiFormatter
+from .tools import logger, EmojiFormatter
 
 # Import configuration
-from config import OLLAMA_API_URL, EXCLUDED_MODELS, DEFAULT_MODELS, MAX_CHUNK_SIZE
+from .config import OLLAMA_API_URL, EXCLUDED_MODELS, DEFAULT_MODELS, MAX_CHUNK_SIZE
 
 def get_ollama_client() -> ollama.Client:
     """

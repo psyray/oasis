@@ -1,7 +1,7 @@
 import markdown
 from markdown.extensions import Extension
 from markdown.preprocessors import Preprocessor
-from weasyprint import HTML, CSS
+from weasyprint import HTML
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict
@@ -9,7 +9,7 @@ import logging
 from jinja2 import Environment, FileSystemLoader
 
 # Import from other modules
-from tools import logger, sanitize_model_name
+from .tools import logger, sanitize_model_name
 
 # Configurer l'environnement Jinja2
 template_dir = Path(__file__).parent / 'templates'

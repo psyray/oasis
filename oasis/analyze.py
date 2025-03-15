@@ -6,13 +6,14 @@ import logging
 from datetime import datetime
 
 # Import from configuration
-from config import VULNERABILITY_MAPPING, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS
+from .config import VULNERABILITY_MAPPING, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS
 
 # Import from other modules
-from ollama_manager import get_ollama_client
-from tools import chunk_content, logger, calculate_similarity
-from embedding import analyze_vulnerability_parallel
-from report import convert_md_to_pdf, generate_executive_summary, generate_markdown_report
+from .ollama_manager import get_ollama_client
+from .tools import chunk_content, logger, calculate_similarity
+from .embedding import analyze_vulnerability_parallel
+from .report import convert_md_to_pdf, generate_executive_summary, generate_markdown_report
+
 
 class SecurityAnalyzer:
     def __init__(self, llm_model: str, embedding_model: str, code_base: Dict):

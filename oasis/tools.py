@@ -6,7 +6,7 @@ from datetime import datetime
 from weasyprint.logger import LOGGER as weasyprint_logger
 
 # Import configuration
-from config import KEYWORD_LISTS, MODEL_EMOJIS
+from .config import KEYWORD_LISTS, MODEL_EMOJIS
 
 # Initialize logger with module name
 logger = logging.getLogger('oasis')
@@ -348,4 +348,4 @@ def calculate_similarity(embedding1: List[float], embedding2: List[float]) -> fl
     if norm1 == 0 or norm2 == 0:
         return 0.0
         
-    return float(dot_product / (norm1 * norm2)) 
+    return float(dot_product / (norm1 * norm2))

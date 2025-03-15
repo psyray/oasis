@@ -7,11 +7,11 @@ from tqdm import tqdm
 import numpy as np
 
 # Import configuration
-from config import SUPPORTED_EXTENSIONS
+from .config import SUPPORTED_EXTENSIONS
 
 # Import from other modules
-from ollama_manager import get_ollama_client
-from tools import logger, chunk_content, calculate_similarity, parse_input, sanitize_model_name
+from .ollama_manager import get_ollama_client
+from .tools import logger, chunk_content, calculate_similarity, parse_input, sanitize_model_name
 
 def normalize_cache_entry(entry: Any) -> Dict:
     """

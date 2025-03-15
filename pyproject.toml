@@ -27,4 +27,4 @@ dependencies = [
 oasis = "oasis:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["."] 
+packages = ["oasis"] 
