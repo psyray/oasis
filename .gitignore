@@ -37,7 +37,6 @@ env/
 security_reports/
 models.md
 *.pdf
-*.html
 
 # Logs
 *.log
