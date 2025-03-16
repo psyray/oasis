@@ -110,6 +110,7 @@ KEYWORD_LISTS = {
     'INSTALL_WORDS': ['installing', 'download', 'pulling', 'fetching'],
     'ANALYSIS_WORDS': ['analyzing', 'analysis', 'scanning', 'checking', 'inspecting', 'examining'],
     'GENERATION_WORDS': ['generating', 'creating', 'building', 'processing'],
+    'REPORT_WORDS': ['report'],
     'MODEL_WORDS': ['model', 'ai', 'llm'],
     'CACHE_WORDS': ['cache', 'stored', 'saving'],
     'SAVE_WORDS': ['saved', 'written', 'exported'],
@@ -274,4 +275,34 @@ When analyzing code for security vulnerabilities:
 4. Look for insecure dependencies or API usage
 5. Identify potential logic flaws that could lead to security bypasses
 6. Consider the context and environment in which the code will run
-""" 
+"""
+
+# Model and prompt for function extraction
+EXTRACT_FUNCTIONS_MODEL = 'llama3.2:latest'
+EXTRACT_FUNCTIONS_ANALYSIS_TYPE = 'file'
+EXTRACT_FUNCTIONS_PROMPT = """
+    For each function, return:
+    1. The function name
+    2. The exact start and end position (character index) in the source code
+    3. The source code, it's mandatory to be base64 encoded
+    4. The entire function body, it's mandatory to be base64 encoded
+    5. The function parameters
+    6. The function return type
+
+    Format your response as JSON:
+    {{
+        "functions": [
+            {{
+                "name": "function_name",
+                "start": 123,
+                "end": 456,
+                "source_code": "source_code",
+                "body": "function_body",
+                "parameters": ["param1", "param2"],
+                "return_type": "return_type"
+            }}
+        ]
+    }}
+    I want the Full List of Functions, not just a few.
+    Do not have any other text, advice or thinking.
+    """

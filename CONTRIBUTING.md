@@ -1,6 +1,6 @@
 # Contributors Guide
 
-Contributions are what make the open-source community such an amazing place to learn, inspire and create. Every contributions you make is **greatly appreciated**. Your contributions can be as simple as fixing the indentation or UI, or as complex as adding new modules and features.
+Contributions are what make the open-source community such an amazing place to learn, inspire and create. Every contribution you make is **greatly appreciated**. Your contributions can be as simple as fixing the indentation or UI, or as complex as adding new modules and features.
 
 ## For who is this guide?
 

@@ -1,12 +1,12 @@
 import logging
 from pathlib import Path
 import numpy as np
-from typing import List
+from typing import List, Dict
 from datetime import datetime
 from weasyprint.logger import LOGGER as weasyprint_logger
 
 # Import configuration
-from .config import KEYWORD_LISTS, MODEL_EMOJIS
+from .config import KEYWORD_LISTS, MODEL_EMOJIS, VULNERABILITY_MAPPING
 
 # Initialize logger with module name
 logger = logging.getLogger('oasis')
@@ -77,6 +77,8 @@ class EmojiFormatter(logging.Formatter):
                                 icon = '🔎 '  # Analysis
                             elif any(word in msg_lower for word in self.KEYWORD_LISTS['GENERATION_WORDS']):
                                 icon = '⚙️  '  # Generation/Processing
+                            elif any(word in msg_lower for word in self.KEYWORD_LISTS['REPORT_WORDS']):
+                                icon = '📄 '  # Report
                             elif any(word in msg_lower for word in self.KEYWORD_LISTS['MODEL_WORDS']):
                                 icon = '🤖 '  # AI/Model
                             elif any(word in msg_lower for word in self.KEYWORD_LISTS['CACHE_WORDS']):
@@ -196,7 +198,7 @@ def chunk_content(content: str, max_length: int = 2048) -> List[str]:
 
     return chunks
 
-def extract_clean_path(input_path):
+def extract_clean_path(input_path: str | Path) -> Path:
     """
     Extract a clean path from input that might contain additional arguments
     
@@ -227,7 +229,7 @@ def extract_clean_path(input_path):
     # Return in the same format as input
     return Path(actual_path) if is_path_object else actual_path
 
-def parse_input(input_path: str) -> List[Path]:
+def parse_input(input_path: str | Path) -> List[Path]:
     """
     Parse input path and return list of files to analyze
     Args:
@@ -276,7 +278,7 @@ def parse_input(input_path: str) -> List[Path]:
 
     return files_to_analyze
 
-def get_output_directory(input_path: str, base_reports_dir: Path) -> Path:
+def get_output_directory(input_path: str | Path, base_reports_dir: Path) -> Path:
     """
     Generate a unique output directory name based on input path and timestamp
     
@@ -349,3 +351,41 @@ def calculate_similarity(embedding1: List[float], embedding2: List[float]) -> fl
         return 0.0
         
     return float(dot_product / (norm1 * norm2))
+
+def open_file(file_path: str) -> str:
+    """
+    Open a file and return its content
+    Args:
+        file_path: Path to the file
+    Returns:
+        Content of the file
+    """
+    # Try different encodings
+    encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+    content = None
+    
+    errors = []
+    for encoding in encodings:
+        try:
+            with open(file_path, 'r', encoding=encoding) as f:
+                content = f.read()
+            break
+        except UnicodeDecodeError:
+            errors.append(f"Failed to decode with {encoding}")
+            continue
+        except Exception as e:
+            error_msg = f"Error reading {file_path} with {encoding}: {e.__class__.__name__}: {str(e)}"
+            logger.error(error_msg)
+            errors.append(error_msg)
+            continue
+    
+    if content is None:
+        error_details = "; ".join(errors)
+        logger.error(f"Failed to read {file_path}: Tried encodings {', '.join(encodings)}. Errors: {error_details}")
+        return None
+    
+    return content
+
+def get_vulnerability_mapping() -> Dict[str, Dict[str, any]]:
+    """Return the vulnerability mapping"""
+    return VULNERABILITY_MAPPING
