@@ -4,11 +4,11 @@ from typing import List, Optional, Any
 from tqdm import tqdm
 import logging
 
-# Import from other modules
-from .tools import logger, EmojiFormatter
+# Import from configuration
+from .config import MODEL_EMOJIS,OLLAMA_API_URL, EXCLUDED_MODELS, DEFAULT_MODELS, MAX_CHUNK_SIZE
 
-# Import configuration
-from .config import OLLAMA_API_URL, EXCLUDED_MODELS, DEFAULT_MODELS, MAX_CHUNK_SIZE
+# Import from other modules
+from .tools import logger
 
 class OllamaManager:
     """Class for managing Ollama interactions and model operations"""
@@ -42,12 +42,7 @@ class OllamaManager:
             client.list()
             return client
         except Exception as e:
-            logger.error("\nError: Could not connect to Ollama server")
-            logger.error("Please ensure that:")
-            logger.error("1. Ollama is installed (https://ollama.ai)")
-            logger.error("2. Ollama server is running (usually with 'ollama serve')")
-            logger.error("3. Ollama is accessible (default: http://localhost:11434)")
-            logger.debug(f"Connection error: {str(e)}")
+            self._log_connection_error(e)
             raise ConnectionError(f"Cannot connect to Ollama server: {str(e)}") from e
     
     def check_connection(self) -> bool:
@@ -75,8 +70,8 @@ class OllamaManager:
             
             # If requested, display formatted list
             if show_formatted and model_names:
-                logger.info("\nAvailable models:")
                 formatted_models = self.format_model_display_batch(model_names)
+                logger.info("\nAvailable models:")
                 for i, (model_name, formatted_model) in enumerate(zip(model_names, formatted_models), 1):
                     # Align model numbers with proper spacing
                     prefix = " " if i < 10 else ""
@@ -121,6 +116,12 @@ class OllamaManager:
             logger.error(f"Connection error while getting models: {str(e)}")
             raise
     
+    def _get_model_info(self, model: str):
+        """Get detailed information about a model from Ollama API"""
+        client = self.get_client()
+        logger.debug(f"Querying model information for {model}...")
+        return client.show(model)
+        
     def detect_optimal_chunk_size(self, model: str) -> int:
         """
         Detect optimal chunk size by querying Ollama model parameters
@@ -130,33 +131,29 @@ class OllamaManager:
             Optimal chunk size in characters
         """
         try:
-            client = self.get_client()
-            logger.debug(f"Querying model information for {model}...")
-            
-            # Query model information
-            model_info = client.show(model)
-            logger.debug(f"Raw model info type: {type(model_info)}")
-            
-            # Try to get num_ctx from parameters
-            if hasattr(model_info, 'parameters'):
-                params = model_info.parameters
-                logger.debug(f"Parameters: {params}")
-                
-            if 'num_ctx' in params:
-                context_length = int(params.split()[1])
-                chunk_size = int(context_length * 0.9)
-                logger.info(f"Model {model} context length: {context_length}")
-                logger.info(f"🔄 Using chunk size: {chunk_size}")
-                return chunk_size
-            
-            # If we couldn't detect, return default
-            logger.warning(f"Could not detect context length for {model}, using default size: {MAX_CHUNK_SIZE}")
-            return MAX_CHUNK_SIZE
-            
+            return self._detect_optimal_chunk_size(model)
         except Exception as e:
             logger.warning(f"Error detecting chunk size: {str(e)}")
             logger.debug("Using default chunk size", exc_info=True)
             return MAX_CHUNK_SIZE
+
+    def _detect_optimal_chunk_size(self, model):
+        model_info = self._get_model_info(model)
+        logger.debug(f"Raw model info type: {type(model_info)}")
+
+        if hasattr(model_info, 'parameters'):
+            params = model_info.parameters
+            logger.debug(f"Parameters: {params}")
+
+        if 'num_ctx' in params:
+            context_length = int(params.split()[1])
+            chunk_size = int(context_length * 0.9)
+            logger.info(f"Model {model} context length: {context_length}")
+            logger.info(f"🔄 Using chunk size: {chunk_size}")
+            return chunk_size
+
+        logger.warning(f"Could not detect context length for {model}, using default size: {MAX_CHUNK_SIZE}")
+        return MAX_CHUNK_SIZE
     
     def select_models(self, available_models: List[str], show_formatted: bool = True) -> List[str]:
         """
@@ -220,6 +217,95 @@ class OllamaManager:
             logger.info("\nModel selection interrupted")
             return []
     
+    def format_model_display(self, model_name: str) -> str:
+        """
+        Format a model name with emoji and technical info
+        
+        Args:
+            model_name: Name of the model
+            
+        Returns:
+            Formatted string with emoji and technical info
+        """
+        try:
+            # Get model information using Ollama API
+            model_info = self._get_model_info(model_name)
+            
+            # Extract emoji, parameters, context, and parent model info
+            model_emoji = self._get_model_emoji(model_name)
+            param_str = self._extract_model_parameters(model_info) or ""
+            ctx_str = self._extract_token_context(model_info) or ""
+            parent_info = self._extract_parent_model_info(model_info)
+            
+            # Build final formatted string
+            return self._build_formatted_string(model_name, model_emoji, param_str, ctx_str, parent_info)
+            
+        except Exception as e:
+            # Fallback to simple formatting if API fails
+            logger.debug(f"Error fetching model details: {str(e)}")
+            model_emoji = self._get_model_emoji(model_name)
+            return f"{model_emoji}{model_name.split(':')[0]}"
+    
+    def format_model_display_batch(self, model_names: List[str]) -> List[str]:
+        """
+        Format multiple model names with progress bar
+        
+        Args:
+            model_names: List of model names to format
+            
+        Returns:
+            List of formatted model strings
+        """
+        from tqdm import tqdm
+
+        logger.info("Getting detailed model information...")
+        
+        return [
+            self.format_model_display(model)
+            for model in tqdm(
+                model_names, desc="Getting model details", unit="model"
+            )
+        ]
+    
+    def select_analysis_models(self, args, available_models: List[str]) -> List[str]:
+        """
+        Select models for security analysis
+        
+        Args:
+            args: Command-line arguments
+            available_models: List of available model names
+            
+        Returns:
+            List of selected model names
+        """
+        if not args.models:
+            # Let user select models interactively
+            return self.select_models(available_models)
+        
+        # Parse comma-separated list of models or indices
+        requested_items = [item.strip() for item in args.models.split(',')]
+        selected_models = []
+        
+        for item in requested_items:
+            # Check if item is a number (index)
+            if item.isdigit():
+                index = int(item) - 1  # Convert to 0-based index
+                if 0 <= index < len(available_models):
+                    selected_models.append(available_models[index])
+                else:
+                    logger.error(f"Invalid model index: {item} (must be between 1 and {len(available_models)})")
+                    return None
+            # Otherwise treat as model name
+            elif item in available_models:
+                selected_models.append(item)
+            else:
+                logger.error(f"Model not available: {item}")
+                logger.error("Use --list-models to see available models")
+                return None
+        
+        logger.info(f"Using specified models: {', '.join(selected_models)}")
+        return selected_models
+
     def ensure_model_available(self, model: str) -> bool:
         """
         Ensure a model is available, pull if needed
@@ -265,7 +351,16 @@ class OllamaManager:
         except Exception as e:
             logger.error(f"Error checking model availability: {str(e)}")
             return False
-    
+
+    def _log_connection_error(self, error):
+        """Log detailed Ollama connection error messages"""
+        logger.error("\nError: Could not connect to Ollama server")
+        logger.error("Please ensure that:")
+        logger.error("1. Ollama is installed (https://ollama.ai)")
+        logger.error("2. Ollama server is running (usually with 'ollama serve')")
+        logger.error("3. Ollama is accessible (default: http://localhost:11434)")
+        logger.debug(f"Connection error: {str(error)}")
+
     def _extract_model_parameters(self, model_info: Any) -> Optional[str]:
         """Extract and format parameter information from model info"""
         parameters = 0
@@ -348,14 +443,14 @@ class OllamaManager:
         # Try matching with full priority order - this time checking specifically
         # for matches in the basename to give higher priority
         best_match_length = 0
-        for model_id, emoji in EmojiFormatter.MODEL_EMOJIS.items():
+        for model_id, emoji in MODEL_EMOJIS.items():
             if model_id in model_basename and len(model_id) > best_match_length:
                 model_emoji = emoji
                 best_match_length = len(model_id)
         
         # If no basename match, try other matches
         if best_match_length == 0:
-            for model_id, emoji in EmojiFormatter.MODEL_EMOJIS.items():
+            for model_id, emoji in MODEL_EMOJIS.items():
                 # Check in full name, family and families
                 if (model_id in model_lower or
                     (model_family and model_id in model_family) or
@@ -382,7 +477,7 @@ class OllamaManager:
         parent_emoji = next(
             (
                 emoji
-                for model_id, emoji in EmojiFormatter.MODEL_EMOJIS.items()
+                for model_id, emoji in MODEL_EMOJIS.items()
                 if model_id in parent_basename or model_id in parent_lower
             ),
             default_emoji,
@@ -413,92 +508,3 @@ class OllamaManager:
         
         return " ".join(formatted_parts)
     
-    def format_model_display(self, model_name: str) -> str:
-        """
-        Format a model name with emoji and technical info
-        
-        Args:
-            model_name: Name of the model
-            
-        Returns:
-            Formatted string with emoji and technical info
-        """
-        try:
-            # Get model information using Ollama API
-            client = self.get_client()
-            model_info = client.show(model_name)
-            
-            # Extract emoji, parameters, context, and parent model info
-            model_emoji = self._get_model_emoji(model_name)
-            param_str = self._extract_model_parameters(model_info) or ""
-            ctx_str = self._extract_token_context(model_info) or ""
-            parent_info = self._extract_parent_model_info(model_info)
-            
-            # Build final formatted string
-            return self._build_formatted_string(model_name, model_emoji, param_str, ctx_str, parent_info)
-            
-        except Exception as e:
-            # Fallback to simple formatting if API fails
-            logger.debug(f"Error fetching model details: {str(e)}")
-            model_emoji = self._get_model_emoji(model_name)
-            return f"{model_emoji}{model_name.split(':')[0]}"
-    
-    def format_model_display_batch(self, model_names: List[str]) -> List[str]:
-        """
-        Format multiple model names with progress bar
-        
-        Args:
-            model_names: List of model names to format
-            
-        Returns:
-            List of formatted model strings
-        """
-        from tqdm import tqdm
-
-        logger.info("Getting detailed model information...")
-        
-        return [
-            self.format_model_display(model)
-            for model in tqdm(
-                model_names, desc="Getting model details", unit="model"
-            )
-        ]
-    
-    def select_analysis_models(self, args, available_models: List[str]) -> List[str]:
-        """
-        Select models for security analysis
-        
-        Args:
-            args: Command-line arguments
-            available_models: List of available model names
-            
-        Returns:
-            List of selected model names
-        """
-        if not args.models:
-            # Let user select models interactively
-            return self.select_models(available_models)
-        
-        # Parse comma-separated list of models or indices
-        requested_items = [item.strip() for item in args.models.split(',')]
-        selected_models = []
-        
-        for item in requested_items:
-            # Check if item is a number (index)
-            if item.isdigit():
-                index = int(item) - 1  # Convert to 0-based index
-                if 0 <= index < len(available_models):
-                    selected_models.append(available_models[index])
-                else:
-                    logger.error(f"Invalid model index: {item} (must be between 1 and {len(available_models)})")
-                    return None
-            # Otherwise treat as model name
-            elif item in available_models:
-                selected_models.append(item)
-            else:
-                logger.error(f"Model not available: {item}")
-                logger.error("Use --list-models to see available models")
-                return None
-        
-        logger.info(f"Using specified models: {', '.join(selected_models)}")
-        return selected_models

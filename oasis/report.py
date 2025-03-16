@@ -8,6 +8,9 @@ from typing import List, Dict, Optional
 import logging
 from jinja2 import Environment, FileSystemLoader
 
+# Import from configuration
+from .config import REPORT_EXPLAIN_ANALYSIS, REPORT_OUTPUT_DIR, REPORT_OUTPUT_FORMATS, REPORT_EXPLAIN_EXECUTIVE_SUMMARY
+
 # Import from other modules
 from .tools import logger, sanitize_model_name, get_output_directory
 
@@ -64,7 +67,7 @@ class Report:
         if isinstance(input_path, str):
             input_path = Path(input_path)
 
-        self.output_base_dir = input_path.resolve().parent / "security_reports"
+        self.output_base_dir = input_path.resolve().parent / REPORT_OUTPUT_DIR
         self.output_dir = get_output_directory(input_path, self.output_base_dir)
         self.ensure_directory(self.output_base_dir)
 
@@ -73,21 +76,12 @@ class Report:
             base_dir = base_dir / sub_dir
             self.ensure_directory(base_dir)
         
-        # Create format-specific directories
-        report_dirs = {
-            'md': base_dir / 'markdown',
-            'pdf': base_dir / 'pdf',
-            'html': base_dir / 'html'
-        }
-
-        # Filter out formats that are not in the output_format list
-        report_dirs = {
-            fmt: report_dirs[fmt] for fmt in self.output_format
-        }
-        
-        # Create all directories
-        for dir_path in report_dirs.values():
-            self.ensure_directory(dir_path)
+        # Create format-specific directories with only the requested formats
+        report_dirs = {}
+        for fmt in self.output_format:
+            if fmt in REPORT_OUTPUT_FORMATS:
+                report_dirs[fmt] = base_dir / fmt
+                self.ensure_directory(report_dirs[fmt])
             
         return report_dirs
     
@@ -175,13 +169,23 @@ class Report:
                 analysis
             ])
         
+        self._generate_and_save_report(output_files, report)
+        
+        return output_files
+    
+    def _generate_and_save_report(self, output_files, report_content):
+        """
+        Write report content and convert to all configured formats
+        
+        Args:
+            output_files: Dictionary of output file paths
+            report_content: List of report content lines
+        """
         # Write markdown
-        self.write_markdown(output_files['md'], report)
+        self.write_markdown(output_files['md'], report_content)
         
         # Convert to PDF and HTML
         self.convert_to_all_formats(output_files['md'])
-        
-        return output_files
     
     def generate_audit_report(self, analyzer_results: Dict[str, Dict], 
                             embedding_manager) -> Dict[str, Path]:
@@ -203,28 +207,9 @@ class Report:
             "# Embeddings Distribution Analysis Report",
             f"\nDate: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             f"\nEmbedding Model: {embedding_manager.embedding_model}",
-            f"\nTotal Files Analyzed: {embedding_manager.get_embeddings_info()['total_files']}"
+            f"\nTotal Files Analyzed: {embedding_manager.get_embeddings_info()['total_files']}",
+            REPORT_EXPLAIN_ANALYSIS,
         ]
-        
-        # Add explanation section
-        report.extend([
-            "\n## About This Report",
-            "\nThis security analysis report uses embedding similarity to identify potential vulnerabilities in your codebase.",
-            "\n### Understanding Similarity Scores",
-            "- **Similarity Score**: Measures how closely code resembles known vulnerability patterns (0.0-1.0)",
-            "- **High Risk**: Scores ≥ 0.8 indicate high likelihood of vulnerability",
-            "- **Medium Risk**: Scores between 0.6-0.8 warrant investigation",
-            "- **Low Risk**: Scores < 0.6 are less likely to be problematic",
-            "\n### How to Use This Report",
-            "- Focus first on high-risk findings with high similarity scores",
-            "- Review threshold analysis to understand vulnerability distribution",
-            "- Use statistics to gauge overall codebase health",
-            "- Compare top matches against vulnerability patterns to confirm issues",
-            "\n### Next Steps",
-            "- Review all high-risk findings immediately",
-            "- Schedule code reviews for medium-risk items",
-            "- Consider incorporating these checks into your CI/CD pipeline"
-        ])
 
         if vuln_stats := analyzer_results.get('vulnerability_statistics', []):
             report.extend([
@@ -295,11 +280,8 @@ class Report:
                 f"- **Minimum similarity**: {stats['min_score']:.3f}",
             ])
 
-        # Write markdown
-        self.write_markdown(output_files['md'], report)
-
-        # Convert to PDF and HTML
-        self.convert_to_all_formats(output_files['md'])
+        # Generate and save report
+        self._generate_and_save_report(output_files, report)
 
         logger.info("\nAudit report generated successfully")
         logger.info(f"Report location: {self.output_dir.absolute()}")
@@ -326,26 +308,8 @@ class Report:
         
         report.extend([
             "\n## Overview",
-            f"\nAnalyzed {len(all_results)} vulnerability types across the codebase."
-        ])
-        
-        # Add interpretation guidance section
-        report.extend([
-            "\n## About This Summary",
-            "\nThis executive summary provides a high-level overview of security vulnerabilities detected in your codebase.",
-            "\n### Understanding Risk Levels",
-            "- **High Risk (Score ≥ 0.8)**: Critical issues requiring immediate attention; high confidence of actual vulnerabilities",
-            "- **Medium Risk (Score 0.6-0.8)**: Potential vulnerabilities that should be investigated soon",
-            "- **Low Risk (Score < 0.6)**: Possible concerns with lower confidence; review as resources permit",
-            "\n### Key Metrics to Consider",
-            "- **Number of High Risk Issues**: Primary indicator of security health",
-            "- **Distribution Across Vulnerability Types**: Identifies security training needs",
-            "- **Affected Files**: Helps prioritize which components to review first",
-            "\n### Recommended Actions",
-            "- Address all High Risk findings before the next release cycle",
-            "- Assign Medium Risk issues to upcoming sprints",
-            "- Consider security training focused on most common vulnerability types",
-            "- Implement automated scanning in CI/CD pipelines"
+            f"\nAnalyzed {len(all_results)} vulnerability types across the codebase.",
+            REPORT_EXPLAIN_EXECUTIVE_SUMMARY,
         ])
         
         # Count vulnerabilities
@@ -413,11 +377,8 @@ class Report:
             f"Model: {model_name}"
         ])
         
-        # Write markdown
-        self.write_markdown(output_files['md'], report)
-        
-        # Convert to PDF and HTML
-        self.convert_to_all_formats(output_files['md'])
+        # Generate and save report
+        self._generate_and_save_report(output_files, report)
         
         return output_files
     

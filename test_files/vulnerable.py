@@ -2,10 +2,9 @@ import sqlite3
 import logging
 import base64
 import subprocess
-import os
 import urllib.request
 import xml.etree.ElementTree as ET
-from flask import Flask, request, redirect
+from flask import Flask, request
 
 # SQL Injection vulnerability
 def get_user(username):

@@ -3,7 +3,12 @@ import logging
 import sys
 from pathlib import Path
 from datetime import datetime
+from typing import Union
 
+# Import from configuration
+from .config import REPORT_OUTPUT_DIR, REPORT_OUTPUT_FORMATS
+
+# Import from other modules
 from .tools import setup_logging, logger, display_logo, get_vulnerability_mapping
 from .ollama_manager import OllamaManager
 from .embedding import EmbeddingManager
@@ -29,7 +34,7 @@ class OasisScanner:
                 return super()._split_lines(text, width)
 
         parser = argparse.ArgumentParser(
-            description='OASIS - Ollama Automated Security Intelligence Scanner',
+            description='🏝️ OASIS - Ollama Automated Security Intelligence Scanner',
             formatter_class=CustomFormatter
         )
         
@@ -79,25 +84,6 @@ class OasisScanner:
             + "\n".join(f"  {v}" for v in vuln_list)
             + "\n\nUse 'all' to check all vulnerabilities (default)"
         )
-
-    def handle_list_models_option(self):
-        """Handle --list-models option"""
-        try:
-            logger.info("Querying available models from Ollama...")
-            
-            # Use True for the show_formatted parameter to display numbers 
-            available_models = self.ollama_manager.get_available_models(show_formatted=True)
-            
-            if not available_models:
-                logger.error("No models available. Please check your Ollama installation.")
-                return True
-
-            return True
-        except Exception as e:
-            logger.error(f"Error listing models: {str(e)}")
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug("Full error:", exc_info=True)
-            return False
 
     def run_analysis_mode(self, selected_models, vuln_mapping):
         """Run security analysis on selected models"""
@@ -149,123 +135,201 @@ class OasisScanner:
     def run(self, args=None):
         """Run the OASIS scanner with the provided or parsed args"""
         try:
-            # Parse command line arguments if not provided
-            if args is None:
-                parser = self.setup_argument_parser()
-                self.args = parser.parse_args()
-            else:
-                self.args = args
+            # Parse and validate arguments
+            init_result = self._init_arguments(args)
 
-            # Create output directory for logs if in silent mode
-            if self.args.silent:
-                logs_dir = Path(self.args.input_path).resolve().parent / "security_reports" / "logs" if self.args.input_path else Path("security_reports/logs")
-                logs_dir.mkdir(parents=True, exist_ok=True)
-                log_file = logs_dir / f"oasis_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-            else:
-                log_file = None
+            # Handle special early termination cases
+            if init_result is None:
+                return 0  # Success exit code for commands like --list-models
+            elif init_result is False:
+                return 1  # Error exit code for validation failures
 
-            # Setup logging
-            setup_logging(debug=self.args.debug, silent=self.args.silent, error_log_file=log_file)
-
-            # Check if models are specified when in silent mode
-            if self.args.silent and not self.args.models and not self.args.list_models and not self.args.audit:
-                parser.error("When using --silent mode, you must specify models with --models/-m")
-
-            # Check if output format is specified
-            if self.args.output_format == 'all':
-                self.args.output_format = ['pdf', 'html', 'md']
-            else:
-                self.args.output_format = self.args.output_format.split(',')
-
-            display_logo()
-
-            # Initialize Ollama manager
-            self.ollama_manager = OllamaManager()
-
-            if self.ollama_manager.get_client() is None:
-                logger.error("Ollama is not running. Please start Ollama and try again.")
+            # Initialize Ollama and check connection
+            if not self._init_ollama():
                 return 1
 
-            # Auto-detect chunk size if not specified
-            if self.args.chunk_size is None:
-                self.args.chunk_size = self.ollama_manager.detect_optimal_chunk_size(self.args.embed_model)
-            else:
-                logger.info(f"Using manual chunk size: {self.args.chunk_size}")
-
-            # Check if --list-models is used
-            if self.args.list_models:
-                if self.handle_list_models_option():
-                    return 0
-                return 1
-
-            # Check if input_path is provided when not using --list-models
-            if not self.args.input_path:
-                logger.error("--input/-i is required when not using --list-models")
-                return 1
-
-            # Check Ollama connection before proceeding
-            if not self.ollama_manager.check_connection():
-                return 1
-
-            # Check if the embedding model is available
-            if not self.ollama_manager.ensure_model_available(self.args.embed_model):
-                return 1
-
-            self.report = Report(self.args.input_path, self.args.output_format)
-
-            # Initialize embedding manager
-            self.embedding_manager = EmbeddingManager(self.args)
-
-            # Process input files
-            valid_files = self.embedding_manager.process_input_files(self.args)
-            if not valid_files:
-                return 1
-
-            # Get vulnerability mapping for all modes
-            vuln_mapping = get_vulnerability_mapping()
-
-            # If audit mode is enabled, only analyze embeddings distribution
-            if self.args.audit:
-                result = self.handle_audit_mode(vuln_mapping)
-                return 0 if result else 1
-
-            # Get available models for analysis mode
-            available_models = self.ollama_manager.get_available_models()
-            if not available_models:
-                logger.error("No models available. Please check Ollama installation.")
-                return 1
-
-            # Select models for analysis
-            selected_models = self.ollama_manager.select_analysis_models(self.args, available_models)
-            if not selected_models:
-                return 1
-
-            # Run analysis with selected models
-            result = self.run_analysis_mode(selected_models, vuln_mapping)
-            if not result:
-                return 1
-            
-            # Output cache file location
-            logger.info(f"\nCache file: {self.embedding_manager.cache_file}")
-
-            return 0
-
+            # Process input files and initialize report
+            return self._execute_requested_mode() if self._init_processing() else 1
         except KeyboardInterrupt:
             logger.info("\nProcess interrupted by user. Exiting...")
-            # Ensure cache is saved on interruption
-            try:
-                if hasattr(self, 'embedding_manager') and self.embedding_manager:
-                    self.embedding_manager.save_cache()
-                    logger.info("Cache saved successfully.")
-            except Exception:
-                logger.error("Failed to save cache on interruption.")
+            self._save_cache_on_exit()
             return 1
         except Exception as e:
             logger.error(f"An unexpected error occurred: {str(e)}")
             if logger.isEnabledFor(logging.DEBUG):
                 logger.exception("Full error trace:")
             return 1
+            
+    def _init_arguments(self, args) -> Union[bool, None]:
+        """
+        Initialize and validate arguments
+        
+        Returns:
+            None: For successful early termination cases (like --list-models)
+            True: If arguments are valid and processing should continue
+            False: If arguments are invalid and program should exit with error
+        """
+        # Parse command line arguments if not provided
+        if args is None:
+            parser = self.setup_argument_parser()
+            self.args = parser.parse_args()
+        else:
+            self.args = args
+            
+        # Handle special cases that should terminate early
+        if self.args.list_models:
+            # Setup minimal logging without file creation
+            setup_logging(debug=self.args.debug, silent=False, error_log_file=None)
+            display_logo()
+            return self._handle_list_models_and_exit()
+        
+        # Validate required argument combinations
+        if self.args.silent and not self.args.models and not self.args.audit:
+            return self._handle_argument_errors(
+                "When using --silent mode, you must specify models with --models/-m or use --audit"
+            )
+        # Check for required input path for normal operation
+        if not self.args.input_path:
+            return self._handle_argument_errors("--input/-i is required")
+        # Now setup full logging with appropriate paths
+        self._setup_logging()
 
+        # Process output format
+        if self.args.output_format == 'all':
+            self.args.output_format = REPORT_OUTPUT_FORMATS
+        else:
+            self.args.output_format = self.args.output_format.split(',')
+
+        display_logo()
+        return True
+
+    def _init_ollama(self):
+        """Initialize Ollama and check connections"""
+        # Initialize Ollama manager
+        self.ollama_manager = OllamaManager()
+
+        if self.ollama_manager.get_client() is None:
+            logger.error("Ollama is not running. Please start Ollama and try again.")
+            return False
+
+        # Auto-detect chunk size if not specified
+        if self.args.chunk_size is None:
+            self.args.chunk_size = self.ollama_manager.detect_optimal_chunk_size(self.args.embed_model)
+        else:
+            logger.info(f"Using manual chunk size: {self.args.chunk_size}")
+
+        # Check Ollama connection
+        if not self.ollama_manager.check_connection():
+            return False
+
+        # Check embedding model availability
+        return bool(self.ollama_manager.ensure_model_available(self.args.embed_model))
+
+    def _init_processing(self):
+        """Initialize report and process input files"""
+        self.report = Report(self.args.input_path, self.args.output_format)
+
+        # Initialize embedding manager
+        self.embedding_manager = EmbeddingManager(self.args)
+
+        return self.embedding_manager.process_input_files(self.args)
+
+    def _execute_requested_mode(self):
+        """Execute requested analysis mode"""
+        # Get vulnerability mapping for all modes
+        vuln_mapping = get_vulnerability_mapping()
+
+        # Determine and execute appropriate mode
+        if self.args.audit:
+            result = self.handle_audit_mode(vuln_mapping)
+            return 0 if result else 1
+
+        # Analysis mode
+        return self._run_analysis_mode(vuln_mapping)
+
+    def _run_analysis_mode(self, vuln_mapping):
+        """Run security analysis with selected models"""
+        # Get available models
+        available_models = self.ollama_manager.get_available_models()
+        if not available_models:
+            logger.error("No models available. Please check Ollama installation.")
+            return 1
+            
+        # Select models for analysis
+        selected_models = self.ollama_manager.select_analysis_models(self.args, available_models)
+        if not selected_models:
+            return 1
+            
+        # Run analysis with selected models
+        result = self.run_analysis_mode(selected_models, vuln_mapping)
+        if not result:
+            return 1
+            
+        # Output cache file location
+        logger.info(f"\nCache file: {self.embedding_manager.cache_file}")
+        return 0
+        
+    def _save_cache_on_exit(self):
+        """Save cache when exiting due to interruption"""
+        try:
+            if hasattr(self, 'embedding_manager') and self.embedding_manager:
+                self.embedding_manager.save_cache()
+                logger.info("Cache saved successfully.")
+        except Exception:
+            logger.error("Failed to save cache on interruption.")
+
+    def _setup_logging(self):
+        """Configure logging based on arguments"""
+        if self.args.silent:
+            logs_dir = Path(self.args.input_path).resolve().parent / REPORT_OUTPUT_DIR / "logs" if self.args.input_path else Path(REPORT_OUTPUT_DIR) / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            log_file = logs_dir / f"oasis_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        else:
+            log_file = None
+            
+        setup_logging(debug=self.args.debug, silent=self.args.silent, error_log_file=log_file)
+
+    def _handle_argument_errors(self, arg0):
+        setup_logging(debug=self.args.debug, silent=False, error_log_file=None)
+        logger.error(arg0)
+        return False
+
+
+    def _handle_list_models_and_exit(self):
+        """
+        Handle --list-models option and return appropriate value for early termination
+        
+        Returns:
+            None: Successfully listed models, program should exit with success code
+            False: Error occurred, program should exit with error code
+        """
+        try:
+            # Initialize Ollama manager
+            self.ollama_manager = OllamaManager()
+            
+            if self.ollama_manager.get_client() is None:
+                logger.error("Ollama is not running. Please start Ollama and try again.")
+                return False
+                
+            logger.info("🔎 Querying available models from Ollama...")
+            
+            # Display formatted list of models
+            available_models = self.ollama_manager.get_available_models(show_formatted=True)
+            
+            if not available_models:
+                logger.error("No models available. Please check your Ollama installation.")
+            
+            # Indicate special case handling was successful
+            return None  # Special return value to indicate early termination
+        except Exception as e:
+            return self._handle_model_list_error(e)
+        
+    def _handle_model_list_error(self, e):
+        """Handle errors when listing models"""
+        logger.error(f"Error listing models: {str(e)}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("Full error:", exc_info=True)
+        return False
 
 def main():
     """Main entry point for the OASIS scanner"""

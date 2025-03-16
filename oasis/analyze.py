@@ -1,10 +1,10 @@
-from typing import List, Dict, Tuple, Any
+from typing import List, Dict, Tuple, Any, Union
 from pathlib import Path
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 
 # Import from configuration
-from .config import EXTRACT_FUNCTIONS_ANALYSIS_TYPE, VULNERABILITY_MAPPING, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS, MAX_CHUNK_SIZE
+from .config import EXTRACT_FUNCTIONS_ANALYSIS_TYPE, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS, MAX_CHUNK_SIZE
 
 # Import from other modules
 from .ollama_manager import OllamaManager
@@ -45,74 +45,27 @@ class SecurityAnalyzer:
         """
         try:
             # Get embedding for vulnerability type
-            vulnerability_response = self.client.embeddings(
-                model=self.embedding_model,
-                prompt=vulnerability_type
-            )
-
-            if not vulnerability_response or 'embedding' not in vulnerability_response:
-                logger.error(f"Failed to get embedding for {vulnerability_type}")
+            vuln_vector = self._get_vulnerability_embedding(vulnerability_type)
+            if not vuln_vector:
+                logger.error(f"Failed to get embedding for vulnerability type '{vulnerability_type}'. No embedding returned from _get_vulnerability_embedding.")
                 return []
-
-            # Get the actual embedding vector
-            vuln_vector = vulnerability_response['embedding']
-
-            # Compare with all files or functions
+                
             results = []
-
+            
+            # Process all files
             for file_path, data in self.code_base.items():
                 if analyze_by_function:
-                    if 'functions' not in data:
-                        continue
-
-                    for func_id, func_data in data['functions'].items():
-                        try:
-                            if not func_data.get('embedding'):
-                                continue
-
-                            similarity = calculate_similarity(vuln_vector, func_data['embedding'])
-                            if similarity >= threshold:
-                                results.append((func_id, similarity))
-                        except Exception as e:
-                            logger.error(f"Error processing function {func_id}: {str(e)}")
+                    # Process functions for this file
+                    self._process_functions(file_path, data, vuln_vector, threshold, results)
                 else:
-                    try:
-                        # Handle different embedding structures
-                        if isinstance(data.get('embedding'), dict):
-                            # Extract embedding vector from response if needed
-                            file_vector = data['embedding'].get('embedding')
-                        elif isinstance(data.get('embedding'), list) and isinstance(data['embedding'][0], list):
-                            # Handle chunked files - use the chunk with highest similarity
-                            chunk_vectors = data['embedding']
-                            highest_similarity = 0
-                            for chunk_vec in chunk_vectors:
-                                similarity = calculate_similarity(vuln_vector, chunk_vec)
-                                highest_similarity = max(highest_similarity, similarity)
-
-                            if highest_similarity >= threshold:
-                                results.append((file_path, highest_similarity))
-                            continue
-                        else:
-                            file_vector = data.get('embedding')
-
-                        if not file_vector:
-                            logger.error(f"Invalid embedding for file {file_path}")
-                            continue
-
-                        # Calculate similarity
-                        similarity = calculate_similarity(vuln_vector, file_vector)
-                        if similarity >= threshold:
-                            results.append((file_path, similarity))
-
-                    except Exception as e:
-                        logger.error(f"Error processing file {file_path}: {str(e)}")
-                        continue
-
+                    # Process file as a whole
+                    self._process_file(file_path, data, vuln_vector, threshold, results)
+                    
             # Sort by similarity score in descending order
             return sorted(results, key=lambda x: x[1], reverse=True)
-
+                
         except Exception as e:
-            logger.error(f"Error during search: {str(e)}")
+            logger.error(f"Error during vulnerability search: {str(e)}")
             return []
 
     def analyze_vulnerability(self, file_path: str, vulnerability_type: str) -> str:
@@ -249,6 +202,66 @@ class SecurityAnalyzer:
             return None, invalid_tags
 
         return [vuln_mapping[tag] for tag in selected_tags], None
+    def _get_vulnerability_embedding(self, vulnerability_type: str) -> List[float]:
+        """Get embedding vector for a vulnerability type"""
+        try:
+            response = self.client.embeddings(model=self.embedding_model, prompt=vulnerability_type)
+            return response.get('embedding') if response and 'embedding' in response else None
+        except Exception as e:
+            logger.error(f"Failed to get embedding for {vulnerability_type}: {str(e)}")
+            return None
+            
+    def _process_functions(self, file_path: str, data: Dict, vuln_vector: List[float], 
+                          threshold: float, results: List[Tuple[str, float]]) -> None:
+        """Process functions in a file"""
+        if 'functions' not in data:
+            return
+            
+        for func_id, func_data in data['functions'].items():
+            if not func_data.get('embedding'):
+                continue
+                
+            try:
+                similarity = calculate_similarity(vuln_vector, func_data['embedding'])
+                if similarity >= threshold:
+                    results.append((func_id, similarity))
+            except Exception as e:
+                logger.error(f"Error processing function {func_id}: {str(e)}")
+                
+    def _process_file(self, file_path: str, data: Dict, vuln_vector: List[float], 
+                     threshold: float, results: List[Tuple[str, float]]) -> None:
+        """Process entire file"""
+        try:
+            # Extract embedding based on its structure
+            file_vectors = self._extract_file_vectors(data)
+            if not file_vectors:
+                return
+                
+            # For multiple chunks, find the highest similarity
+            if isinstance(file_vectors, list) and isinstance(file_vectors[0], list):
+                highest_similarity = max(calculate_similarity(vuln_vector, vec) for vec in file_vectors)
+                if highest_similarity >= threshold:
+                    results.append((file_path, highest_similarity))
+            else:
+                # Single vector
+                similarity = calculate_similarity(vuln_vector, file_vectors)
+                if similarity >= threshold:
+                    results.append((file_path, similarity))
+        except Exception as e:
+            logger.error(f"Error processing file {file_path}: {str(e)}")
+            
+    def _extract_file_vectors(self, data: Dict) -> Union[List[float], List[List[float]], None]:
+        """Extract embedding vectors from file data"""
+        embedding = data.get('embedding')
+        if not embedding:
+            return None
+            
+        if isinstance(embedding, dict):
+            return embedding.get('embedding')
+        elif isinstance(embedding, list) and all(isinstance(item, list) for item in embedding):
+            return embedding  # Chunked embeddings
+        else:
+            return embedding  # Single embedding vector
 
 class EmbeddingAnalyzer:
     """Class for analyzing embeddings against vulnerability types"""
@@ -266,68 +279,21 @@ class EmbeddingAnalyzer:
         self.embedding_model = embedding_manager.embedding_model
         self.results_cache = {}  # Cache for results by vulnerability type
         
+
     def analyze_vulnerability(self, vuln_name: str, analyze_by_function: bool = False) -> List[Dict[str, Any]]:
-        """
-        Analyze a single vulnerability type
-        
-        Args:
-            vuln_name: Name of the vulnerability type
-            analyze_by_function: Whether to analyze by function 
-            
-        Returns:
-            List of results (dictionaries with file_path/func_id and similarity_score)
-        """
-        # Return cached results if available
+        """Analyze a single vulnerability type."""
+
         cache_key = f"{vuln_name}_{analyze_by_function}"
         if cache_key in self.results_cache:
             return self.results_cache[cache_key]
-            
-        logger.info(f"Analyzing vulnerability: {vuln_name}")
-        
-        # Prepare arguments for parallel processing based on analysis type
-        process_args = []
-        
-        if analyze_by_function:
-            # Create args for function analysis
-            for file_path, data in self.code_base.items():
-                if 'functions' not in data:
-                    continue
-                    
-                for func_id, func_data in data['functions'].items():
-                    if not func_data.get('embedding'):
-                        continue
-                        
-                    process_args.append(
-                        (func_id, func_data, vuln_name, self.embedding_model, True)
-                    )
-        else:
-            # Create args for file analysis
-            for file_path, data in self.code_base.items():
-                if not data.get('embedding'):
-                    continue
-                    
-                process_args.append(
-                    (file_path, data, vuln_name, self.embedding_model, False)
-                )
-        
-        # Calculate optimal number of processes
-        num_processes = max(1, min(cpu_count(), len(process_args)))
-        
-        # Process in parallel with progress bar
-        results = []
-        with tqdm(total=len(process_args), desc=f"Analyzing {vuln_name}", leave=True) as pbar:
-            with Pool(processes=num_processes) as pool:
-                for result in pool.imap(analyze_item_parallel, process_args):
-                    if result and 'error' not in result:
-                        results.append(result)
-                    pbar.update(1)
-        
-        # Sort by similarity score
+
+        logger.info(f"🚨 Analyzing vulnerability: {vuln_name}")
+
+        process_args = self._prepare_analysis_args(vuln_name, analyze_by_function)
+        results = self._execute_parallel_analysis(process_args)
+
         results.sort(key=lambda x: x['similarity_score'], reverse=True)
-        
-        # Cache results for future use
         self.results_cache[cache_key] = results
-        
         return results
     
     def generate_threshold_analysis(self, results: List[Dict], thresholds: List[float] = None) -> List[Dict]:
@@ -413,7 +379,7 @@ class EmbeddingAnalyzer:
 
         if console_output:
             logger.info("\nEmbeddings Distribution Analysis")
-            logger.info("================================\n")
+            logger.info("===================================\n")
 
         # Analyze each vulnerability type
         for vuln in vulnerability_types:
@@ -440,48 +406,7 @@ class EmbeddingAnalyzer:
                 self._print_vulnerability_analysis(vuln_name, results, threshold_analysis, statistics, thresholds)
 
         return all_results
-    
-    def _print_vulnerability_analysis(self, vuln_name: str, results: List[Dict], 
-                                     threshold_analysis: List[Dict], statistics: Dict,
-                                     thresholds: List[float]):
-        """
-        Print vulnerability analysis to console
-        
-        Args:
-            vuln_name: Name of the vulnerability
-            results: List of result dictionaries
-            threshold_analysis: List of threshold analysis dictionaries
-            statistics: Dictionary with statistics
-            thresholds: List of thresholds
-        """
-        logger.info(f"\nAnalyzing: {vuln_name}")
-        logger.info("-" * (11 + len(vuln_name)))
-        
-        # Print threshold analysis
-        logger.info("\nThreshold Analysis:")
-        logger.info("------------------")
-        for analysis in threshold_analysis:
-            threshold = analysis['threshold']
-            matching_items = analysis['matching_items']
-            percentage = analysis['percentage']
-            logger.info(f"Threshold {threshold:.1f}: {matching_items:3d} items ({percentage:5.1f}%)")
-        
-        # Print top 5 most similar items
-        logger.info("\nTop 5 Most Similar Items:")
-        logger.info("------------------------")
-        for result in results[:5]:
-            score = result['similarity_score']
-            item_id = result['item_id']
-            logger.info(f"{score:.3f} - {item_id}")
-        
-        # Print statistics
-        logger.info("\nStatistics:")
-        logger.info("-----------")
-        logger.info(f"Average similarity: {statistics['avg_score']:.3f}")
-        logger.info(f"Median similarity: {statistics['median_score']:.3f}")
-        logger.info(f"Max similarity: {statistics['max_score']:.3f}")
-        logger.info(f"Min similarity: {statistics['min_score']:.3f}")
-    
+
     def generate_vulnerability_statistics(self, all_results: Dict[str, Dict]) -> List[Dict]:
         """
         Generate vulnerability statistics for all results
@@ -533,6 +458,77 @@ class EmbeddingAnalyzer:
         
         return vuln_stats
 
+    def _prepare_analysis_args(self, vuln_name: str, analyze_by_function: bool) -> list:
+        """Prepare arguments for parallel processing."""
+
+        process_args = []
+        for file_path, data in self.code_base.items():
+            if analyze_by_function:
+                if 'functions' in data:
+                    process_args.extend(
+                        (func_id, func_data, vuln_name, self.embedding_model, True)
+                        for func_id, func_data in data['functions'].items()
+                        if func_data.get('embedding')
+                    )
+            elif data.get('embedding'):
+                process_args.append((file_path, data, vuln_name, self.embedding_model, False))
+        return process_args
+
+    def _execute_parallel_analysis(self, process_args: list) -> list:
+        """Execute analysis in parallel and collect results."""
+
+        num_processes = max(1, min(cpu_count(), len(process_args)))
+        results = []
+        with tqdm(total=len(process_args), desc="Analyzing", leave=True) as pbar:
+            with Pool(processes=num_processes) as pool:
+                for result in pool.imap(analyze_item_parallel, process_args):
+                    if result and 'error' not in result:
+                        results.append(result)
+                    pbar.update(1)
+        return results
+
+    def _print_vulnerability_analysis(self, vuln_name: str, results: List[Dict], 
+                                     threshold_analysis: List[Dict], statistics: Dict,
+                                     thresholds: List[float]):
+        """
+        Print vulnerability analysis to console
+        
+        Args:
+            vuln_name: Name of the vulnerability
+            results: List of result dictionaries
+            threshold_analysis: List of threshold analysis dictionaries
+            statistics: Dictionary with statistics
+            thresholds: List of thresholds
+        """
+        logger.info(f"\nAnalyzing: {vuln_name}")
+        logger.info("-" * (14 + len(vuln_name)))
+        
+        # Print threshold analysis
+        logger.info("\nThreshold Analysis:")
+        logger.info("----------------------")
+        for analysis in threshold_analysis:
+            threshold = analysis['threshold']
+            matching_items = analysis['matching_items']
+            percentage = analysis['percentage']
+            logger.info(f"Threshold {threshold:.1f}: {matching_items:3d} items ({percentage:5.1f}%)")
+        
+        # Print top 5 most similar items
+        logger.info("\nTop 5 Most Similar Items:")
+        logger.info("----------------------------")
+        for result in results[:5]:
+            score = result['similarity_score']
+            item_id = result['item_id']
+            logger.info(f"{score:.3f} - {item_id}")
+        
+        # Print statistics
+        logger.info("\nStatistics:")
+        logger.info("--------------")
+        logger.info(f"Average similarity: {statistics['avg_score']:.3f}")
+        logger.info(f"Median similarity: {statistics['median_score']:.3f}")
+        logger.info(f"Max similarity: {statistics['max_score']:.3f}")
+        logger.info(f"Min similarity: {statistics['min_score']:.3f}")
+        logger.info("")
+    
 def analyze_item_parallel(args: tuple) -> Dict:
     """
     Parallel processing of embeddings

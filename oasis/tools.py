@@ -24,8 +24,6 @@ class EmojiFormatter(logging.Formatter):
     - Context-aware icons
     - Newline preservation
     """
-    KEYWORD_LISTS = KEYWORD_LISTS
-    MODEL_EMOJIS = MODEL_EMOJIS
 
     def format(self, record):
         if not hasattr(record, 'formatted_message'):
@@ -54,45 +52,55 @@ class EmojiFormatter(logging.Formatter):
             icon = ''
             
             # Check if record.msg is a string before using string methods
-            if isinstance(record.msg, str):
-                # Get the appropriate icon based on level and content if no emoji exists
-                if not has_emoji_prefix(record.msg.strip()):
-                    if record.levelno == logging.DEBUG:
-                        icon = '🪲  '  # Debug: beetle
-                    elif record.levelno == logging.INFO:
-                        msg_lower = record.msg.lower()
-                        
-                        # Check for model names first (higher priority)
-                        model_found = False
-                        for model_name, _ in self.MODEL_EMOJIS.items():
-                            if model_name.lower() in msg_lower:
-                                model_found = True
-                                break
-                        
-                        # If no model was found, check for other keywords
-                        if not model_found:
-                            if any(word in msg_lower for word in self.KEYWORD_LISTS['INSTALL_WORDS']):
-                                icon = '📥 '  # Download/Install
-                            elif any(word in msg_lower for word in self.KEYWORD_LISTS['ANALYSIS_WORDS']):
-                                icon = '🔎 '  # Analysis
-                            elif any(word in msg_lower for word in self.KEYWORD_LISTS['GENERATION_WORDS']):
-                                icon = '⚙️  '  # Generation/Processing
-                            elif any(word in msg_lower for word in self.KEYWORD_LISTS['REPORT_WORDS']):
-                                icon = '📄 '  # Report
-                            elif any(word in msg_lower for word in self.KEYWORD_LISTS['MODEL_WORDS']):
-                                icon = '🤖 '  # AI/Model
-                            elif any(word in msg_lower for word in self.KEYWORD_LISTS['CACHE_WORDS']):
-                                icon = '💾 '  # Cache/Save
-                            elif any(word in msg_lower for word in self.KEYWORD_LISTS['SAVE_WORDS']):
-                                icon = '💾 '  # Save
-                            elif any(word in msg_lower for word in self.KEYWORD_LISTS['LOAD_WORDS']):
-                                icon = '📂 '  # Loading
-                            else:
-                                icon = ''  # Default info
+            if isinstance(record.msg, str) and not has_emoji_prefix(record.msg.strip()):
+                if record.levelno == logging.DEBUG:
+                    icon = '🪲  '  # Debug: beetle
+                elif record.levelno == logging.INFO:
+                    msg_lower = record.msg.lower()
+                    
+                    # Check for model names first (higher priority)
+                    model_found = False
+                    for model_name, _ in MODEL_EMOJIS.items():
+                        if model_name.lower() in msg_lower:
+                            model_found = True
+                            break
+                    
+                    # If no model was found, check for other keywords
+                    if not model_found:
+                        if any(word in msg_lower for word in KEYWORD_LISTS['INSTALL_WORDS']):
+                            icon = '📥 '  # Download/Install
+                        elif any(word in msg_lower for word in KEYWORD_LISTS['ANALYSIS_WORDS']):
+                            icon = '🔎 '  # Analysis
+                        elif any(word in msg_lower for word in KEYWORD_LISTS['GENERATION_WORDS']):
+                            icon = '⚙️  '  # Generation/Processing
+                        elif any(word in msg_lower for word in KEYWORD_LISTS['REPORT_WORDS']):
+                            icon = '📄 '  # Report
+                        elif any(word in msg_lower for word in KEYWORD_LISTS['MODEL_WORDS']):
+                            icon = '🤖 '  # AI/Model
+                        elif any(word in msg_lower for word in KEYWORD_LISTS['CACHE_WORDS']):
+                            icon = '💾 '  # Cache/Save
+                        elif any(word in msg_lower for word in KEYWORD_LISTS['SAVE_WORDS']):
+                            icon = '💾 '  # Save
+                        elif any(word in msg_lower for word in KEYWORD_LISTS['LOAD_WORDS']):
+                            icon = '📂 '  # Loading
+                        elif any(word in msg_lower for word in KEYWORD_LISTS['STOPPED_WORDS']):
+                            icon = '🛑 '  # Stopped
+                        elif any(word in msg_lower for word in KEYWORD_LISTS['DELETE_WORDS']):
+                            icon = '🗑️ '  # Delete
+                        elif any(word in msg_lower for word in KEYWORD_LISTS['SUCCESS_WORDS']):
+                            icon = '✅ '  # Success
+                        elif any(word in msg_lower for word in KEYWORD_LISTS['STATISTICS_WORDS']):
+                            icon = '📊 '  # Statistics
+                        elif any(word in msg_lower for word in KEYWORD_LISTS['TOP_WORDS']):
+                            icon = '🏆 '  # Top
+                        elif any(word in msg_lower for word in KEYWORD_LISTS['VULNERABILITY_WORDS']):
+                            icon = '🚨 '  # Vulnerability
+                        else:
+                            icon = ''  # Default info
                     elif record.levelno == logging.WARNING:
                         icon = '⚠️  '  # Warning
                     elif record.levelno == logging.ERROR:
-                        if any(word in record.msg.lower() for word in self.KEYWORD_LISTS['FAIL_WORDS']):
+                        if any(word in record.msg.lower() for word in KEYWORD_LISTS['FAIL_WORDS']):
                             icon = '💥 '  # Crash
                         else:
                             icon = '❌ '  # Standard error
@@ -108,7 +116,7 @@ class EmojiFormatter(logging.Formatter):
                     record.formatted_message = record.msg
             else:
                 # Handle non-string messages (like lists, dicts, etc.)
-                record.formatted_message = f"🪲  {str(record.msg)}"
+                record.formatted_message = f"{str(record.msg)}"
 
         return record.formatted_message
 

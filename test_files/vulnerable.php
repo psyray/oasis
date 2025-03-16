@@ -111,10 +111,4 @@ function processMoneyTransfer($fromAccount, $toAccount, $amount) {
     return "Transferred $amount from $fromAccount to $toAccount";
 }
 
-// Create a session without proper security
-function createUserSession($userId) {
-    session_start();
-    $_SESSION['user_id'] = $userId;
-    // No CSRF token, no session regeneration
-}
 ?> 

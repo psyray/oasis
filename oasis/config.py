@@ -6,7 +6,7 @@ from typing import Set
 # Set of supported file extensions (without dot)
 SUPPORTED_EXTENSIONS: Set[str] = {
     # Web Development
-    'html', 'htm', 'css', 'js', 'jsx', 'ts', 'tsx', 'php', 'asp', 'aspx', 'jsp',
+    'html', 'htm', 'css', 'js', 'jsx', 'ts', 'tsx', 'asp', 'aspx', 'jsp',
     'vue', 'svelte',
     
     # Programming Languages
@@ -45,9 +45,8 @@ SUPPORTED_EXTENSIONS: Set[str] = {
     # Other Languages
     'lua',                                # Lua
     'r', 'R',                           # R
-    'matlab', 'm',                      # MATLAB
+    'matlab',                            # MATLAB
     'groovy',                            # Groovy
-    'pl',                                # Prolog
     'erl',                               # Erlang
     'ex', 'exs',                        # Elixir
     'hs',                                # Haskell
@@ -108,14 +107,20 @@ DEFAULT_MODELS = [
 # Keywords lists for logging emojis
 KEYWORD_LISTS = {
     'INSTALL_WORDS': ['installing', 'download', 'pulling', 'fetching'],
-    'ANALYSIS_WORDS': ['analyzing', 'analysis', 'scanning', 'checking', 'inspecting', 'examining'],
+    'ANALYSIS_WORDS': ['analyzing', 'analysis', 'scanning', 'checking', 'inspecting', 'examining', 'found', 'querying'],
     'GENERATION_WORDS': ['generating', 'creating', 'building', 'processing'],
     'REPORT_WORDS': ['report'],
     'MODEL_WORDS': ['model', 'ai', 'llm'],
     'CACHE_WORDS': ['cache', 'stored', 'saving'],
     'SAVE_WORDS': ['saved', 'written', 'exported'],
     'LOAD_WORDS': ['loading', 'reading', 'importing', 'loaded'],
-    'FAIL_WORDS': ['failed', 'error', 'crash', 'exception']
+    'DELETE_WORDS': ['deleting', 'removing', 'deleted'],
+    'SUCCESS_WORDS': ['success', 'completed', 'finished', 'done'],
+    'FAIL_WORDS': ['failed', 'error', 'crash', 'exception'],
+    'STOPPED_WORDS': ['interrupted', 'stopped'],
+    'STATISTICS_WORDS': ['statistics'],
+    'TOP_WORDS': ['top', 'highest', 'most', 'better'],
+    'VULNERABILITY_WORDS': ['vulnerability', 'vulnerabilities']
 }
 
 # Model emojis mapping
@@ -306,3 +311,38 @@ EXTRACT_FUNCTIONS_PROMPT = """
     I want the Full List of Functions, not just a few.
     Do not have any other text, advice or thinking.
     """
+
+# Report configuration
+REPORT_CONFIG = {
+    'executive_summary': {
+        'title': 'Security Analysis Executive Summary',
+        'description': 'A high-level overview of security vulnerabilities detected in the codebase'
+    }
+}
+REPORT_OUTPUT_FORMATS = ['pdf', 'html', 'md']
+REPORT_OUTPUT_DIR = 'security_reports'
+REPORT_EXPLAIN_ANALYSIS = """
+    "## About This Report",
+    "This security analysis report uses embedding similarity to identify potential vulnerabilities in your codebase.",
+    "### Understanding Similarity Scores",
+    "- **Similarity Score**: Measures how closely code resembles known vulnerability patterns (0.0-1.0)",
+    "- **High Risk**: Scores ≥ 0.8 indicate high likelihood of vulnerability",
+    "- **Medium Risk**: Scores between 0.6-0.8 warrant investigation",
+    "- **Low Risk**: Scores < 0.6 are less likely to be problematic",
+    "### How to Use This Report",
+    "- Focus first on high-risk findings with high similarity scores",
+    "- Review threshold analysis to understand vulnerability distribution",
+    "- Use statistics to gauge overall codebase health",
+    "- Compare top matches against vulnerability patterns to confirm issues",
+    "### Next Steps",
+    "- Review all high-risk findings immediately",
+    "- Schedule code reviews for medium-risk items",
+    "- Consider incorporating these checks into your CI/CD pipeline"
+"""
+REPORT_EXPLAIN_EXECUTIVE_SUMMARY = """
+    "## Executive Summary",
+    "This report provides a high-level overview of security vulnerabilities detected in the codebase.",
+    "### Key Findings",
+    "- Total files analyzed: [number]",
+    "- Total vulnerabilities detected: [number]",
+"""
