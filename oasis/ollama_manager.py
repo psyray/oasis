@@ -78,8 +78,10 @@ class OllamaManager:
                 logger.info("\nAvailable models:")
                 formatted_models = self.format_model_display_batch(model_names)
                 for i, (model_name, formatted_model) in enumerate(zip(model_names, formatted_models), 1):
-                    logger.info(f"{i}. {formatted_model}")
-                    logger.info(f"   Use with --models: '{model_name}' or '{i}'")
+                    # Align model numbers with proper spacing
+                    prefix = " " if i < 10 else ""
+                    logger.info(f"{prefix}{i}. {formatted_model}")
+                    logger.info(f"       Use with --models: '{model_name}' or '{i}'")
                     
             return model_names
         except Exception as e:
@@ -295,7 +297,7 @@ class OllamaManager:
             # Add turtle emoji for models larger than 26B
             if parameters > 26_000_000_000:
                 param_str = f"🐢 {param_str}"
-            # Add fast emoji for models 7B or smaller
+            # Add fast emoji for models with parameters <= 10B
             if parameters <= 10_000_000_000:
                 param_str = f"⚡ {param_str}"
             return param_str

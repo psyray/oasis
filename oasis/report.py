@@ -205,6 +205,26 @@ class Report:
             f"\nEmbedding Model: {embedding_manager.embedding_model}",
             f"\nTotal Files Analyzed: {embedding_manager.get_embeddings_info()['total_files']}"
         ]
+        
+        # Add explanation section
+        report.extend([
+            "\n## About This Report",
+            "\nThis security analysis report uses embedding similarity to identify potential vulnerabilities in your codebase.",
+            "\n### Understanding Similarity Scores",
+            "- **Similarity Score**: Measures how closely code resembles known vulnerability patterns (0.0-1.0)",
+            "- **High Risk**: Scores ≥ 0.8 indicate high likelihood of vulnerability",
+            "- **Medium Risk**: Scores between 0.6-0.8 warrant investigation",
+            "- **Low Risk**: Scores < 0.6 are less likely to be problematic",
+            "\n### How to Use This Report",
+            "- Focus first on high-risk findings with high similarity scores",
+            "- Review threshold analysis to understand vulnerability distribution",
+            "- Use statistics to gauge overall codebase health",
+            "- Compare top matches against vulnerability patterns to confirm issues",
+            "\n### Next Steps",
+            "- Review all high-risk findings immediately",
+            "- Schedule code reviews for medium-risk items",
+            "- Consider incorporating these checks into your CI/CD pipeline"
+        ])
 
         if vuln_stats := analyzer_results.get('vulnerability_statistics', []):
             report.extend([
@@ -299,7 +319,7 @@ class Report:
             Dictionary of report file paths
         """
         # Set output file paths and filter by output format in one step
-        output_files = self.filter_output_files("executive_summary")
+        output_files = self.filter_output_files("_executive_summary")
 
         # Start building the executive summary
         report = self.create_header("Security Analysis Executive Summary", model_name)
@@ -309,6 +329,25 @@ class Report:
             f"\nAnalyzed {len(all_results)} vulnerability types across the codebase."
         ])
         
+        # Add interpretation guidance section
+        report.extend([
+            "\n## About This Summary",
+            "\nThis executive summary provides a high-level overview of security vulnerabilities detected in your codebase.",
+            "\n### Understanding Risk Levels",
+            "- **High Risk (Score ≥ 0.8)**: Critical issues requiring immediate attention; high confidence of actual vulnerabilities",
+            "- **Medium Risk (Score 0.6-0.8)**: Potential vulnerabilities that should be investigated soon",
+            "- **Low Risk (Score < 0.6)**: Possible concerns with lower confidence; review as resources permit",
+            "\n### Key Metrics to Consider",
+            "- **Number of High Risk Issues**: Primary indicator of security health",
+            "- **Distribution Across Vulnerability Types**: Identifies security training needs",
+            "- **Affected Files**: Helps prioritize which components to review first",
+            "\n### Recommended Actions",
+            "- Address all High Risk findings before the next release cycle",
+            "- Assign Medium Risk issues to upcoming sprints",
+            "- Consider security training focused on most common vulnerability types",
+            "- Implement automated scanning in CI/CD pipelines"
+        ])
+        
         # Count vulnerabilities
         vulnerability_count = {
             vuln_type: len(results) for vuln_type, results in all_results.items()
@@ -316,7 +355,7 @@ class Report:
         
         # Add vulnerability summary table
         report.extend([
-            "\n### Vulnerability Summary",
+            "\n## Vulnerability Summary",
             "| Vulnerability Type | Files Analyzed |",
             "|-------------------|----------------|"
         ])
@@ -354,7 +393,7 @@ class Report:
         for severity in ['High', 'Medium', 'Low']:
             if severity_groups[severity]:
                 report.extend([
-                    f"\n### {severity} Risk Findings ({len(severity_groups[severity])} issues)",
+                    f"\n## {severity} Risk Findings ({len(severity_groups[severity])} issues)",
                     "| Vulnerability Type | File | Score | Report Link |",
                     "|-------------------|------|-------|--------------|"
                 ])
