@@ -1,3 +1,4 @@
+import contextlib
 import ollama
 from typing import List, Optional, Any
 from tqdm import tqdm
@@ -264,33 +265,44 @@ class OllamaManager:
             return False
     
     def _extract_model_parameters(self, model_info: Any) -> Optional[str]:
-        """Extract formatted parameter info from model"""
-        # Check if model has parameter info
-        if not hasattr(model_info, 'parameters'):
-            return None
+        """Extract and format parameter information from model info"""
+        parameters = 0
 
-        parameters = model_info.parameters
-        if not parameters:
-            return None
+        # 1. Check in model_info.details
+        if hasattr(model_info, 'details') and model_info.details:
+            details = model_info.details
+            if hasattr(details, 'parameter_size') and details.parameter_size:
+                with contextlib.suppress(ValueError, TypeError):
+                    # Handle strings like "8.0B"
+                    param_size = details.parameter_size
+                    if isinstance(param_size, str) and 'B' in param_size:
+                        parameters = float(param_size.replace('B', '')) * 1_000_000_000
+                    elif isinstance(param_size, str) and 'M' in param_size:
+                        parameters = float(param_size.replace('M', '')) * 1_000_000
+                    else:
+                        parameters = float(param_size)
 
-        # Try to extract relevant parameters
-        param_parts = []
+        # 2. Check in modelinfo['general.parameter_count']
+        if parameters == 0 and hasattr(model_info, 'modelinfo') and model_info.modelinfo:
+            modelinfo = model_info.modelinfo
+            if isinstance(modelinfo, dict) and 'general.parameter_count' in modelinfo:
+                with contextlib.suppress(ValueError, TypeError):
+                    parameters = int(modelinfo['general.parameter_count'])
 
-        # Extract model size (if available)
-        if 'num_gpu' in parameters or 'num_parameter' in parameters:
-            if 'num_parameter' in parameters:
-                # Format number of parameters
-                param_count = int(parameters['num_parameter'])
-                if param_count >= 1_000_000_000:
-                    param_parts.append(f"{param_count / 1_000_000_000:.1f}B params")
-                else:
-                    param_parts.append(f"{param_count / 1_000_000:.1f}M params")
-            else:
-                # Use GPU layers as a fallback indication of size
-                param_parts.append(f"{parameters['num_gpu']} GPU layers")
-
-        # Return formatted string or None if no parameters
-        return ", ".join(param_parts) if param_parts else None
+        # Format parameter count in billions or millions
+        if parameters >= 1_000_000_000:
+            param_str = f"{parameters/1_000_000_000:.1f}B params"
+            # Add turtle emoji for models larger than 26B
+            if parameters > 26_000_000_000:
+                param_str = f"🐢 {param_str}"
+            # Add fast emoji for models 7B or smaller
+            if parameters <= 10_000_000_000:
+                param_str = f"⚡ {param_str}"
+            return param_str
+        elif parameters > 0:
+            # Small models are considered fast
+            return f"⚡ {parameters:,} params"
+        return ""
     
     def _extract_token_context(self, model_info: Any) -> Optional[str]:
         """Extract token context window size from model info"""
