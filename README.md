@@ -184,6 +184,16 @@ security_reports/
 │       └── executive_summary.html
 ```
 
+## 🐋 Run with Docker
+
+```sh
+docker build --build-arg GIT_REPO=<repository_url> --build-arg MODEL_NB=<model_number_option> -t oasis-scanner .
+```
+
+```sh
+docker run --rm -it -v $(pwd)/reports:/app/reports oasis-scanner
+```
+
 ## 💾 Cache Management
 
 The tool maintains a cache of embeddings to improve performance:
