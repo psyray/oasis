@@ -6,7 +6,7 @@
     <img src="https://img.shields.io/github/v/release/psyray/oasis" alt="Release">
   </a>
   <a href="https://python.org">
-    <img src="https://img.shields.io/badge/python-3.7+-blue.svg" alt="Python">
+    <img src="https://img.shields.io/badge/python-3.9+-blue.svg" alt="Python">
   </a>
 </p>
 
@@ -38,10 +38,12 @@
 - 📝 **Executive Summaries**: Clear overview of all detected vulnerabilities
 - 🎯 **Customizable Scans**: Support for specific vulnerability types and file extensions
 - 📈 **Distribution Analysis**: Advanced audit mode for embedding distribution analysis
+- 🔄 **Content Chunking**: Intelligent content splitting for better analysis of large files
+- 🤖 **Interactive Model Installation**: Guided installation for required Ollama models
 
 ## 🚀 Prerequisites
 
-- Python 3.7+
+- Python 3.9+
 - [Ollama](https://ollama.ai) installed and running
 - pipx (for isolated installation)
   ```bash
@@ -85,7 +87,7 @@ pipx install --editable .
 
 Basic usage:
 ```bash
-oasis [path_to_analyze]
+oasis --input-path [path_to_analyze]
 ```
 
 ### 🚀 Quick Test
@@ -98,36 +100,38 @@ cd oasis
 pipx install --editable .
 
 # Run analysis on test files
-oasis test_files/
+oasis --input-path test_files/
 ```
 
-This will analyze the provided test files and generate security reports in the `test_files/security_reports/` directory.
+This will analyze the provided test files and generate security reports in the parent directory of the folder to analyze, `security_reports`.
 
 Advanced options:
 ```bash
-oasis [path_to_analyze] \
-    --cache-days 7 \
-    --threshold 0.5 \
-    --vulns xss,sqli \
-    --embed-model nomic-embed-text \
-    --models llama2,codellama
+oasis --input-path [path_to_analyze] \
+      --cache-days 7 \
+      --threshold 0.5 \
+      --vulns xss,sqli,rce \
+      --embed-model nomic-embed-text \
+      --models llama2,codellama \
+      --chunk-size 2048
 ```
 
 ### 🎮 Command Line Arguments
 
-- `input_path`: Path to file, directory, or .txt file containing paths to analyze
-- `--cache-days`: Maximum age of cache in days (default: 7)
-- `--threshold`: Similarity threshold (default: 0.5)
-- `--vulns`: Vulnerability types to check (comma-separated or 'all')
-- `--no-pdf`: Skip PDF generation
-- `--debug`: Enable debug mode
-- `--verbose`: Enable verbose output
-- `--embed-model`: Model to use for embeddings
-- `--models`: Comma-separated list of models to use
-- `--list-models`: List available models and exit
-- `--extensions`: Custom file extensions to analyze
-- `--clear-cache`: Clear embeddings cache before starting
-- `--audit`: Run embedding distribution analysis
+- `--input_path` `-i`: Path to file, directory, or .txt file containing newline-separated paths to analyze
+- `--cache-days` `-cd`: Maximum cache age in days (default: 7)
+- `--threshold` `-t`: Similarity threshold (default: 0.4)
+- `--vulns` `-v`: Vulnerability types to check (comma-separated or 'all')
+- `--output-format` `-of`: Output format [pdf, html, markdown] (default: all)
+- `--debug` `-d`: Enable debug mode
+- `--silent` `-s`: Disable all output messages
+- `--embed-model` `-em`: Model to use for embeddings
+- `--models` `-m`: Comma-separated list of models to use
+- `--list-models` `-lm`: List available models and exit
+- `--extensions` `-x`: Custom file extensions to analyze
+- `--clear-cache` `-cc`: Clear embeddings cache before starting
+- `--audit` `-a`: Run embedding distribution analysis
+- `--chunk-size` `-ch`: Maximum chunk size for splitting content (default: auto-detect)
 
 ### 🛡️ Supported Vulnerability Types
 
@@ -141,6 +145,13 @@ oasis [path_to_analyze] \
 | `config` | Security Misconfiguration |
 | `logging` | Sensitive Data Logging |
 | `crypto` | Insecure Cryptographic Function Usage |
+| `rce` | Remote Code Execution |
+| `ssrf` | Server-Side Request Forgery |
+| `xxe` | XML External Entity |
+| `path` | Path Traversal |
+| `idor` | Insecure Direct Object Reference |
+| `auth` | Authentication Issues |
+| `csrf` | Cross-Site Request Forgery |
 
 ## 📁 Output Structure
 
@@ -162,15 +173,17 @@ security_reports/
 
 The tool maintains a cache of embeddings to improve performance:
 - Default cache duration: 7 days
-- Cache location: `embeddings_cache.pkl` in the input directory
-- Use `--clear-cache` to force a fresh analysis
+- Cache location (inside the folder to analyze): `.oasis_cache/[folder_to_analyze]_[model_name]_[model_tag].cache`
+- Use `--clear-cache` `-cc` to force a fresh analysis
 
 ## 📊 Audit Mode
 
 Run OASIS in audit mode to analyze embedding distributions:
 ```bash
-oasis [path_to_analyze] --audit
+oasis --input-path [path_to_analyze] --audit
 ```
+
+This mode helps you understand how different vulnerability types are distributed across your codebase.
 
 ## 🤝 Contributing
 
@@ -184,6 +197,7 @@ Contributions are welcome! Please feel free to submit a Pull Request. Check out 
 
 - Built with [Ollama](https://ollama.ai)
 - Uses [WeasyPrint](https://weasyprint.org/) for PDF generation
+- Uses [Jinja2](https://jinja.palletsprojects.com/) for report templating
 - Special thanks to all contributors and the open-source community
 
 ## 📫 Support

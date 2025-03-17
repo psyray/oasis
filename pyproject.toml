@@ -7,23 +7,25 @@ name = "oasis"
 version = "0.2.0"
 description = "Ollama Automated Security Intelligence Scanner"
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.9"
 license = "GPL-3.0-only"
 authors = [
     { name = "psyray" }
 ]
 dependencies = [
-    "ollama>=0.1.5",
+    "ollama>=0.4.7",
     "weasyprint>=60.1",
-    "markdown>=3.5.1",
-    "tqdm>=4.66.1",
-    "numpy>=1.24.0",
-    "fonttools>=4.47.0",
-    "httpx>=0.26.0",
+    "markdown>=3.7",
+    "tqdm>=4.67.1",
+    "numpy>=2.0.2",
+    "fonttools>=4.56.0",
+    "httpx>=0.28.1",
+    "jinja2>=3.1.6",
+    "beautifulsoup4>=4.13.3",
 ]
 
 [project.scripts]
 oasis = "oasis:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["."] 
+packages = ["oasis"] 
