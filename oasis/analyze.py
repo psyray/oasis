@@ -14,7 +14,7 @@ from .report import Report
 from .embedding import EmbeddingManager, build_vulnerability_embedding_prompt
 
 class SecurityAnalyzer:
-    def __init__(self, llm_model: str, embedding_manager: EmbeddingManager):
+    def __init__(self, llm_model: str, embedding_manager: EmbeddingManager, ollama_manager: OllamaManager):
         """
         Initialize the security analyzer
 
@@ -23,7 +23,7 @@ class SecurityAnalyzer:
             embedding_manager: Embedding manager to use for embeddings
         """
         try:
-            self.ollama_manager = OllamaManager()
+            self.ollama_manager = ollama_manager
             self.client = self.ollama_manager.get_client()
         except Exception as e:
             logger.error("Failed to initialize Ollama client")
@@ -366,14 +366,14 @@ class EmbeddingAnalyzer:
         embedding_manager: Initialized EmbeddingManager
     """
     
-    def __init__(self, embedding_manager):
+    def __init__(self, embedding_manager: EmbeddingManager, ollama_manager: OllamaManager):
         """
         Initialize the embedding analyzer
         
         Args:
             embedding_manager: Initialized EmbeddingManager
         """
-        self.ollama_manager = OllamaManager()
+        self.ollama_manager = ollama_manager
         self.embedding_manager = embedding_manager
         self.code_base = embedding_manager.code_base
         self.embedding_model = embedding_manager.embedding_model
@@ -577,6 +577,7 @@ class EmbeddingAnalyzer:
         common_args = {
             "vulnerability": vuln,
             "embedding_model": self.embedding_model,
+            "api_url": self.ollama_manager.api_url
         }
         
         # Process each element based on analysis mode
@@ -678,7 +679,7 @@ def analyze_item_parallel(args: tuple) -> Dict:
     """
     try:
         # Create a new Ollama client for each process
-        client = OllamaManager().get_client()
+        client = OllamaManager(args.api_url).get_client()
         
         # Build vulnerability embedding prompt directly
         vuln_data = args.vulnerability

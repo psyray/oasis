@@ -1,5 +1,4 @@
 import argparse
-import itertools
 import json
 from pathlib import Path
 import pickle
@@ -18,7 +17,7 @@ from .ollama_manager import OllamaManager
 from .tools import logger, chunk_content, parse_input, sanitize_name, open_file
 
 class EmbeddingManager:
-    def __init__(self, args):
+    def __init__(self, args, ollama_manager: OllamaManager):
         """
         Initialize the embedding manager
 
@@ -26,7 +25,7 @@ class EmbeddingManager:
             args: Arguments
         """
         try:
-            self.ollama_manager = OllamaManager()
+            self.ollama_manager = ollama_manager
             self.ollama_client = self.ollama_manager.get_client()
 
         except Exception as e:
@@ -127,6 +126,7 @@ class EmbeddingManager:
                     embed_model=self.embedding_model,
                     chunk_size=self.chunk_size,
                     analyze_by_function=self.analyze_by_function,
+                    api_url=self.ollama_manager.api_url
                 )
                 for file_path in files 
                 if self.analyze_by_function or str(file_path) not in self.code_base
@@ -847,6 +847,9 @@ def process_file_parallel(args: tuple) -> Tuple[str, str, List[float], bool, Opt
         Tuple of (file_path, content, embedding, is_function_analysis, function_embeddings)
     """
     try:
+        # Create a new Ollama client for each process
+        ollama_manager = OllamaManager(args.api_url)
+
         # Read file content
         if not (content := open_file(args.input_path)):
             logger.warning(f"Empty or unreadable file content for file: {args.input_path}")
@@ -855,7 +858,7 @@ def process_file_parallel(args: tuple) -> Tuple[str, str, List[float], bool, Opt
         # Extract embeddings based on analysis type
         if args.analyze_by_function:
             # Extract functions
-            functions = extract_functions_from_file(args.input_path, content)
+            functions = extract_functions_from_file(args.input_path, content, ollama_manager)
             
             # Generate embeddings for functions
             function_embeddings = {}
@@ -863,7 +866,8 @@ def process_file_parallel(args: tuple) -> Tuple[str, str, List[float], bool, Opt
                 func_embedding = generate_content_embedding(
                     func_content, 
                     args.embed_model, 
-                    args.chunk_size
+                    args.chunk_size,
+                    ollama_manager
                 )
                 if func_embedding is not None:
                     function_embeddings[func_id] = (func_content, func_embedding)
@@ -872,7 +876,8 @@ def process_file_parallel(args: tuple) -> Tuple[str, str, List[float], bool, Opt
             file_embedding = generate_content_embedding(
                 content, 
                 args.embed_model, 
-                args.chunk_size
+                args.chunk_size,
+                ollama_manager
             )
             if file_embedding is not None:
                 return args.input_path, content, file_embedding, True, function_embeddings
@@ -881,7 +886,8 @@ def process_file_parallel(args: tuple) -> Tuple[str, str, List[float], bool, Opt
             file_embedding = generate_content_embedding(
                 content, 
                 args.embed_model, 
-                args.chunk_size
+                args.chunk_size,
+                ollama_manager
             )
             if file_embedding is not None:
                 return args.input_path, content, file_embedding, False, None
@@ -923,7 +929,7 @@ def build_vulnerability_embedding_prompt(vulnerability: Union[str, Dict]) -> str
     else:
         # Use the string directly
         return str(vulnerability)
-def generate_content_embedding(content: str, model: str, chunk_size: int = DEFAULT_ARGS['CHUNK_SIZE']) -> List[float]:
+def generate_content_embedding(content: str, model: str, chunk_size: int = DEFAULT_ARGS['CHUNK_SIZE'], ollama_manager: OllamaManager = None) -> List[float]:
     """
     Generate embedding for content
 
@@ -935,8 +941,11 @@ def generate_content_embedding(content: str, model: str, chunk_size: int = DEFAU
     Returns:
         Embedding vector as list of floats, aggregated if content was chunked
     """
+    if ollama_manager is None:
+        raise ValueError("ollama_manager must be provided and cannot be None")
+
     try:
-        client = OllamaManager().get_client()
+        client = ollama_manager.get_client()
 
         # For large content, chunk and get embeddings for each chunk
         if len(content) > chunk_size:
@@ -963,7 +972,7 @@ def generate_content_embedding(content: str, model: str, chunk_size: int = DEFAU
         logger.exception(f"Error generating embedding: {str(e)}")
         return None
 
-def extract_functions_from_file(file_path: str, content: str, extraction_model: str = EXTRACT_FUNCTIONS['MODEL']) -> Dict[str, str]:
+def extract_functions_from_file(file_path: str, content: str, extraction_model: str = EXTRACT_FUNCTIONS['MODEL'], ollama_manager: OllamaManager = None) -> Dict[str, str]:
     """
     Extract functions from file content
     
@@ -975,6 +984,9 @@ def extract_functions_from_file(file_path: str, content: str, extraction_model: 
     Returns:
         Dictionary mapping function IDs to function content
     """
+    if ollama_manager is None:
+        raise ValueError("ollama_manager must be provided")
+
     # Determine file extension
     extension = file_path.split('.')[-1].lower()
     
@@ -983,10 +995,9 @@ def extract_functions_from_file(file_path: str, content: str, extraction_model: 
     
     try:
         # Get client 
-        client = OllamaManager().get_client()
+        client = ollama_manager.get_client()
         
         # Ensure model is available
-        ollama_manager = OllamaManager()
         if not ollama_manager.ensure_model_available(extraction_model):
             return {}
             
