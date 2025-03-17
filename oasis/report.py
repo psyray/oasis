@@ -1,4 +1,5 @@
 import base64
+from bs4 import BeautifulSoup
 import markdown
 from markdown.extensions import Extension
 from markdown.preprocessors import Preprocessor
@@ -24,7 +25,7 @@ class Report:
         output_format: List of output formats to generate
     """
     
-    def __init__(self, input_path: str | Path, output_format: List[str], models: List[str] = None):
+    def __init__(self, input_path: str | Path, output_format: List[str], models: List[str] = None, current_model: str = None):
         """
         Initialize the report generator
         
@@ -32,14 +33,17 @@ class Report:
             input_path: Path to the input file or directory
             output_format: List of output formats to generate
             models: List of models to generate reports for
+            current_model: Current model being used
         """
         if models is None:
             models = []
 
-        # Create output directory for reports
+        # Initialize the report generator
+        self.input_path = input_path
         self.output_format = output_format
         self.report_dirs = {}
         self.models = models
+        self.current_model = current_model
 
         # Configure the Jinja2 environment
         template_dir = Path(__file__).parent / 'templates'
@@ -82,17 +86,14 @@ class Report:
             for model in models:
                 model_dir = sanitize_name(model)
                 models_dir.append(model_dir)
+                self.report_dirs[model_dir] = {}
 
         # Create format-specific directories with only the requested formats
         for fmt in self.output_format:
-            if fmt in REPORT['OUTPUT_FORMATS']:
-                if models_dir:
-                    for model_dir in models_dir:
-                        self.report_dirs[fmt] = base_dir / model_dir / fmt
-                        self.ensure_directory(self.report_dirs[fmt])
-                else:
-                    self.report_dirs[fmt] = base_dir / fmt
-                    self.ensure_directory(self.report_dirs[fmt])
+            if fmt in REPORT['OUTPUT_FORMATS'] and models_dir:
+                for model_dir in models_dir:
+                    self.report_dirs[model_dir][fmt] = base_dir / model_dir / fmt
+                    self.ensure_directory(self.report_dirs[model_dir][fmt])
 
         return self.report_dirs
     
@@ -204,23 +205,21 @@ class Report:
         # Convert to PDF and HTML
         self.convert_to_all_formats(output_files['md'])
 
-        logger.debug(f"{report_type} report generated successfully")
-        logger.debug(f"{report_type} reports have been generated in: {self.output_dir}")
-        logger.debug("--------------------------------")
-
-    def report_generated(self, report_type: str = None):
+    def report_generated(self, report_type: str = None, report_structure: bool = False):
         """
         Log that a report has been generated
 
         Args:
             report_type: Type of report (Vulnerability, Audit, Executive Summary)
+            report_structure: Whether to display the report structure
         """
         logger.info("--------------------------------")
         logger.info(f"{report_type} report generated successfully")
         logger.info(f"{report_type} reports have been generated in: {self.output_dir}")
         
         # Show report structure
-        self.display_report_structure()
+        if report_structure:
+            self.display_report_structure()
 
         logger.info("--------------------------------")
 
@@ -451,18 +450,18 @@ class Report:
         """
         # Set output file paths and filter by output format in one step
         output_files = self.filter_output_files(markdown_file.stem)
-        
+
         try:
             # Read and convert markdown to HTML
             html_content = self.read_and_convert_markdown(markdown_file)
-            
+
             # Render HTML using the template
             rendered_html = self.render_template(html_content)
-            
+
             # Write HTML file
             with open(output_files['html'], 'w', encoding='utf-8') as f:
                 f.write(rendered_html)
-            
+
             # Convert to PDF
             try:
                 HTML(string=rendered_html, media_type='print').write_pdf(output_files['pdf'])
@@ -478,13 +477,13 @@ class Report:
             logger.exception(f"Error converting {markdown_file.name} to other formats: {e.__class__.__name__}: {str(e)}")
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("Full error:", exc_info=True)
-            
+
             return {
                 'md': markdown_file,
                 'pdf': None,
                 'html': None
             }
-    
+
     def read_and_convert_markdown(self, markdown_file: Path) -> str:
         """
         Read markdown file and convert to HTML
@@ -498,10 +497,14 @@ class Report:
         # Read markdown content
         with open(markdown_file, 'r', encoding='utf-8') as f:
             markdown_content = f.read()
-        
-        # Convert markdown to HTML with page break extension
+
+        # Parse HTML with Beautiful Soup and fix any issues
+        soup = BeautifulSoup(markdown.markdown(markdown_content, extensions=['tables', 'fenced_code', 'codehilite']), 'html.parser')
+        fixed_html = str(soup)
+
+        # Convert markdown to HTML with page break extension, using the fixed HTML
         return markdown.markdown(
-            markdown_content,
+            fixed_html,
             extensions=['tables', 'fenced_code', 'codehilite', PageBreakExtension()]
         )
     
@@ -528,7 +531,7 @@ class Report:
             logo_data_url = f"data:image/jpeg;base64,{encoded_string}"
             
             template = self.template_env.get_template('report_template.html')
-            return template.render(content=content, logo_path=logo_data_url)
+            return template.render(content=content, logo_path=logo_data_url, background_color=REPORT['BACKGROUND_COLOR'])
         except Exception as e:
             logger.exception(f"Error rendering template: {str(e)}")
             # Fallback to basic HTML if template fails
@@ -625,9 +628,10 @@ class Report:
         Returns:
             Dictionary of output files
         """
+        model_name = sanitize_name(self.current_model)
         return {
-            fmt: self.report_dirs[fmt] / f"{safe_name}.{fmt}"
-            for fmt in self.output_format if fmt in self.report_dirs
+            fmt: self.report_dirs[model_name][fmt] / f"{safe_name}.{fmt}"
+            for fmt in self.output_format if fmt in self.report_dirs[model_name]
         }
 
     def get_output_directory(self, input_path: str | Path, base_reports_dir: Path) -> Path:

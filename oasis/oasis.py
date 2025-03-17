@@ -3,6 +3,7 @@ import logging
 import sys
 from pathlib import Path
 from datetime import datetime
+import traceback
 from typing import Union
 
 # Import from configuration
@@ -51,7 +52,7 @@ class OasisScanner:
         parser.add_argument('-v', '--vulns', type=str, default=DEFAULT_ARGS['VULNS'], 
                            help=self.get_vulnerability_help())
         parser.add_argument('-of', '--output-format', type=str, default=DEFAULT_ARGS['OUTPUT_FORMAT'],
-                           help=f'Output format (default: {DEFAULT_ARGS["OUTPUT_FORMAT"]})')
+                           help=f'Output format [pdf, html, md] (default: {DEFAULT_ARGS["OUTPUT_FORMAT"]})')
         parser.add_argument('-d', '--debug', action='store_true',
                            help='Enable debug output')
         parser.add_argument('-s', '--silent', action='store_true',
@@ -73,7 +74,7 @@ class OasisScanner:
         parser.add_argument('-ch', '--chunk-size', type=int,
                            help=f'Maximum size of text chunks for embedding (default: {DEFAULT_ARGS["CHUNK_SIZE"]})')
         parser.add_argument('-at', '--analyze_type', choices=['file', 'function'], default=DEFAULT_ARGS['ANALYSIS_TYPE'],
-                           help=f'Analyze code by entire file or by individual functions (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
+                           help=f'Analyze code by entire file or by individual functions [EXPERIMENTAL] (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
         return parser
 
     def get_vulnerability_help(self) -> str:
@@ -116,6 +117,9 @@ class OasisScanner:
         for model in selected_models:
             logger.info(f"\nAnalyzing with model: {model}")
             
+            # Set the current model for report generation
+            self.report.current_model = model
+
             # Create security analyzer for this model
             analyzer = SecurityAnalyzer(model, self.embedding_manager)
             
@@ -123,7 +127,7 @@ class OasisScanner:
             analyzer.process_analysis_with_model(vulnerabilities, self.args, self.report)
 
         # Report generation
-        self.report.report_generated(report_type='Vulnerability')
+        self.report.report_generated(report_type='Vulnerability', report_structure=True)
 
         logger.info("\nAnalysis completed successfully!")
 
@@ -140,22 +144,25 @@ class OasisScanner:
         vulnerabilities, invalid_tags = SecurityAnalyzer.get_vulnerabilities_to_check(self.args, vuln_mapping)
         if invalid_tags:
             return False
-            
+
         # Create analyzer
         embedding_manager = EmbeddingAnalyzer(self.embedding_manager)
-        
+
         # Analyze all vulnerabilities
         analyzer_results = embedding_manager.analyze_all_vulnerabilities(vulnerabilities)
-        
+
+        # Set the current model for report generation
+        self.report.current_model = embedding_manager.embedding_model
+
         # Generate audit report
-        self.report.create_report_directories(self.args.input_path)
+        self.report.create_report_directories(self.args.input_path, models=[self.report.current_model])
         self.report.generate_audit_report(
             analyzer_results,
             self.embedding_manager
         )
-        
+
         # Report generation
-        self.report.report_generated(report_type='Audit')
+        self.report.report_generated(report_type='Audit', report_structure=True)
 
         logger.info('Audit completed successfully')
 
@@ -191,7 +198,7 @@ class OasisScanner:
         except Exception as e:
             logger.exception(f"An unexpected error occurred: {str(e)}")
             if logger.isEnabledFor(logging.DEBUG):
-                logger.exception("Full error trace:", exc_info=True)
+                logger.exception(f"Full error trace: {traceback.format_exc()}", exc_info=True)
             return 1
             
     def _init_arguments(self, args) -> Union[bool, None]:

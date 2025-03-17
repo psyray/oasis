@@ -542,6 +542,7 @@ EXTRACT_FUNCTIONS = {
 REPORT = {
     'OUTPUT_FORMATS': ['pdf', 'html', 'md'],
     'OUTPUT_DIR': 'security_reports',
+    'BACKGROUND_COLOR': '#F5F2E9',
     'EXPLAIN_ANALYSIS': """
 ## About This Report
 This security analysis report uses embedding similarity to identify potential vulnerabilities in your codebase.
@@ -583,8 +584,5 @@ Code embeddings are advanced representations that convert your code into numeric
     'EXPLAIN_EXECUTIVE_SUMMARY': """
 ## Executive Summary
 This report provides a high-level overview of security vulnerabilities detected in the codebase.
-### Key Findings
-- Total files analyzed: [number]
-- Total vulnerabilities detected: [number]
     """
 }

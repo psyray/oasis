@@ -6,7 +6,7 @@
     <img src="https://img.shields.io/github/v/release/psyray/oasis" alt="Release">
   </a>
   <a href="https://python.org">
-    <img src="https://img.shields.io/badge/python-3.7+-blue.svg" alt="Python">
+    <img src="https://img.shields.io/badge/python-3.9+-blue.svg" alt="Python">
   </a>
 </p>
 
@@ -43,7 +43,7 @@
 
 ## 🚀 Prerequisites
 
-- Python 3.7+
+- Python 3.9+
 - [Ollama](https://ollama.ai) installed and running
 - pipx (for isolated installation)
   ```bash
