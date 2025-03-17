@@ -188,7 +188,7 @@ class OasisScanner:
                 return 1  # Error exit code for validation failures
 
             # Initialize Ollama and check connection
-            if not self._init_ollama():
+            if not self._init_ollama(self.args.ollama_url):
                 return 1
 
             # Process input files and initialize report
@@ -246,15 +246,19 @@ class OasisScanner:
         display_logo()
         return True
 
-    def _init_ollama(self, check_embeddings=True):
+    def _init_ollama(self, ollama_url=None, check_embeddings=True):
         """
         Initialize Ollama and check connections
 
+        Args:
+            check_embeddings: Whether to check if embeddings are available
         Returns:
             True if Ollama is running and connected, False otherwise
         """
         # Initialize Ollama manager
-        self.ollama_manager = OllamaManager(self.args.ollama_url)
+        if ollama_url is None:
+            ollama_url = self.args.ollama_url
+        self.ollama_manager = OllamaManager(ollama_url)
 
         if self.ollama_manager.get_client() is None:
             logger.error("Ollama is not running. Please start Ollama and try again.")
@@ -382,7 +386,7 @@ class OasisScanner:
             False: Error occurred, program should exit with error code
         """
         try:
-            self._init_ollama(check_embeddings=False)
+            self._init_ollama(self.args.ollama_url, check_embeddings=False)
                 
             logger.info("🔎 Querying available models from Ollama...")
             

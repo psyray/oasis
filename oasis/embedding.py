@@ -941,6 +941,9 @@ def generate_content_embedding(content: str, model: str, chunk_size: int = DEFAU
     Returns:
         Embedding vector as list of floats, aggregated if content was chunked
     """
+    if ollama_manager is None:
+        raise ValueError("ollama_manager must be provided and cannot be None")
+
     try:
         client = ollama_manager.get_client()
 
@@ -981,6 +984,9 @@ def extract_functions_from_file(file_path: str, content: str, extraction_model: 
     Returns:
         Dictionary mapping function IDs to function content
     """
+    if ollama_manager is None:
+        raise ValueError("ollama_manager must be provided")
+
     # Determine file extension
     extension = file_path.split('.')[-1].lower()
     

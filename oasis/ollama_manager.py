@@ -1,4 +1,5 @@
 import contextlib
+import threading
 import ollama
 from typing import List, Optional, Any
 from tqdm import tqdm
@@ -29,6 +30,7 @@ class OllamaManager:
         self.api_url = api_url
         self.excluded_models = EXCLUDED_MODELS
         self.default_models = DEFAULT_MODELS
+        self._client_lock = threading.Lock()
     
     def get_client(self) -> ollama.Client:
         """
@@ -40,15 +42,15 @@ class OllamaManager:
         Raises:
             ConnectionError: If Ollama server is not accessible
         """
-        if not self.client:
-            try:
-                self.client = ollama.Client(self.api_url)
-                # Try to list models to verify connection
-                self.client.list()
-                return self.client
-            except Exception as e:
-                self._log_connection_error(e)
-                raise ConnectionError(f"Cannot connect to Ollama server: {str(e)}") from e
+        with self._client_lock:
+            if not self.client:
+                try:
+                    self.client = ollama.Client(self.api_url)
+                    # Try to list models to verify connection
+                    self.client.list()
+                except Exception as e:
+                    self._log_connection_error(e)
+                    raise ConnectionError(f"Cannot connect to Ollama server: {str(e)}") from e
         return self.client
     
     def check_connection(self) -> bool:
