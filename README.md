@@ -118,11 +118,11 @@ oasis --input-path [path_to_analyze] \
 
 ### 🎮 Command Line Arguments
 
-- `--input_path` `-i`: Path to file, directory, or .txt file containing paths to analyze
-- `--cache-days` `-cd`: Maximum age of cache in days (default: 7)
-- `--threshold` `-t`: Similarity threshold (default: 0.5)
+- `--input_path` `-i`: Path to file, directory, or .txt file containing newline-separated paths to analyze
+- `--cache-days` `-cd`: Maximum cache age in days (default: 7)
+- `--threshold` `-t`: Similarity threshold (default: 0.4)
 - `--vulns` `-v`: Vulnerability types to check (comma-separated or 'all')
-- `--no-pdf` `-np`: Skip PDF generation
+- `--output-format` `-of`: Output format [pdf, html, markdown] (default: all)
 - `--debug` `-d`: Enable debug mode
 - `--silent` `-s`: Disable all output messages
 - `--embed-model` `-em`: Model to use for embeddings
@@ -173,7 +173,7 @@ security_reports/
 
 The tool maintains a cache of embeddings to improve performance:
 - Default cache duration: 7 days
-- Cache location: `.oasis_cache/[folder_to_analyze]_[model_name]_[model_tag].pkl`
+- Cache location (inside the folder to analyze): `.oasis_cache/[folder_to_analyze]_[model_name]_[model_tag].cache`
 - Use `--clear-cache` `-cc` to force a fresh analysis
 
 ## 📊 Audit Mode

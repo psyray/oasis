@@ -2,7 +2,6 @@ import logging
 from pathlib import Path
 import numpy as np
 from typing import List, Dict
-from datetime import datetime
 from weasyprint.logger import LOGGER as weasyprint_logger
 
 # Import configuration
@@ -26,6 +25,15 @@ class EmojiFormatter(logging.Formatter):
     """
 
     def format(self, record):
+        """
+        Format a log record
+
+        Args:
+            record: Log record
+        """
+        if hasattr(record, 'emoji') and not record.emoji:
+            return record.msg
+
         if not hasattr(record, 'formatted_message'):
             # Helper function to detect if string starts with emoji
             def has_emoji_prefix(text: str) -> bool:
@@ -97,32 +105,31 @@ class EmojiFormatter(logging.Formatter):
                             icon = '🚨 '  # Vulnerability
                         else:
                             icon = ''  # Default info
-                    elif record.levelno == logging.WARNING:
-                        icon = '⚠️  '  # Warning
-                    elif record.levelno == logging.ERROR:
-                        if any(word in record.msg.lower() for word in KEYWORD_LISTS['FAIL_WORDS']):
-                            icon = '💥 '  # Crash
-                        else:
-                            icon = '❌ '  # Standard error
-                    elif record.levelno == logging.CRITICAL:
-                        icon = '🚨 '  # Critical/Fatal
-
-                    # Handle messages starting with newline
-                    if record.msg.startswith('\n'):
-                        record.formatted_message = record.msg.replace('\n', '\n' + icon, 1)
+                elif record.levelno == logging.WARNING:
+                    icon = '⚠️  '  # Warning
+                elif record.levelno == logging.ERROR:
+                    if any(word in record.msg.lower() for word in KEYWORD_LISTS['FAIL_WORDS']):
+                        icon = '💥 '  # Crash
                     else:
-                        record.formatted_message = f"{icon}{record.msg}"
+                        icon = '❌ '  # Standard error
+                elif record.levelno == logging.CRITICAL:
+                    icon = '🚨 '  # Critical/Fatal
+
+                # Handle messages starting with newline
+                if record.msg.startswith('\n'):
+                    record.formatted_message = record.msg.replace('\n', '\n' + icon, 1)
                 else:
-                    record.formatted_message = record.msg
+                    record.formatted_message = f"{icon}{record.msg}"
             else:
-                # Handle non-string messages (like lists, dicts, etc.)
-                record.formatted_message = f"{str(record.msg)}"
+                record.formatted_message = record.msg
 
         return record.formatted_message
+
 
 def setup_logging(debug=False, silent=False, error_log_file=None):
     """
     Setup all loggers with proper configuration
+
     Args:
         debug: Enable debug logging
         silent: Disable all output
@@ -174,6 +181,7 @@ def setup_logging(debug=False, silent=False, error_log_file=None):
 def chunk_content(content: str, max_length: int = 2048) -> List[str]:
     """
     Split content into chunks of maximum length while preserving line integrity
+
     Args:
         content: Text content to split
         max_length: Maximum length of each chunk (reduced to 2048 to be safe)
@@ -240,6 +248,7 @@ def extract_clean_path(input_path: str | Path) -> Path:
 def parse_input(input_path: str | Path) -> List[Path]:
     """
     Parse input path and return list of files to analyze
+
     Args:
         input_path: Path to file, directory, or file containing paths
     Returns:
@@ -286,43 +295,24 @@ def parse_input(input_path: str | Path) -> List[Path]:
 
     return files_to_analyze
 
-def get_output_directory(input_path: str | Path, base_reports_dir: Path) -> Path:
+def sanitize_name(name: str) -> str:
     """
-    Generate a unique output directory name based on input path and timestamp
-    
-    Args:
-        input_path: Input path (string or Path) that may contain arguments
-        base_reports_dir: Base directory for reports
-        
-    Returns:
-        Unique output directory path
-    """
-    # Make sure we have a clean path
-    clean_path = extract_clean_path(input_path)
-        
-    # Get basename for naming the output directory
-    input_name = clean_path.name if clean_path.is_file() else clean_path.stem
-    
-    # Add timestamp for uniqueness
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir_name = f"{input_name}_{timestamp}"
-    
-    return base_reports_dir / output_dir_name
+    Sanitize name for directory creation
 
-def sanitize_model_name(model: str) -> str:
-    """
-    Sanitize model name for directory creation
     Args:
-        model: Original model name (e.g. 'rfc/whiterabbitneo:latest')
+        name: Original name (e.g. 'whiterabbitneo_latest')
     Returns:
         Sanitized name (e.g. 'whiterabbitneo_latest')
     """
     # Get the last part after the last slash (if any)
-    base_name = model.split('/')[-1]
+    base_name = name.split('/')[-1]
     # Replace any remaining special characters
     return base_name.replace(':', '_')
 
 def display_logo():
+    """
+    Display the OASIS logo
+    """
     logo = """
      .d88b.    db    .d8888.  _\\\\|//_ .d8888. 
     .8P  Y8.  d88b   88'  YP    \\\\//  88'  YP 
@@ -340,6 +330,7 @@ def display_logo():
 def calculate_similarity(embedding1: List[float], embedding2: List[float]) -> float:
     """
     Calculate cosine similarity between two embeddings
+
     Args:
         embedding1: First embedding vector
         embedding2: Second embedding vector
@@ -363,6 +354,7 @@ def calculate_similarity(embedding1: List[float], embedding2: List[float]) -> fl
 def open_file(file_path: str) -> str:
     """
     Open a file and return its content
+
     Args:
         file_path: Path to the file
     Returns:
@@ -395,5 +387,10 @@ def open_file(file_path: str) -> str:
     return content
 
 def get_vulnerability_mapping() -> Dict[str, Dict[str, any]]:
-    """Return the vulnerability mapping"""
+    """
+    Return the vulnerability mapping
+
+    Returns:
+        Vulnerability mapping
+    """
     return VULNERABILITY_MAPPING

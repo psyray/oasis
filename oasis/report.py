@@ -1,3 +1,4 @@
+import base64
 import markdown
 from markdown.extensions import Extension
 from markdown.preprocessors import Preprocessor
@@ -9,51 +10,51 @@ import logging
 from jinja2 import Environment, FileSystemLoader
 
 # Import from configuration
-from .config import REPORT_EXPLAIN_ANALYSIS, REPORT_OUTPUT_DIR, REPORT_OUTPUT_FORMATS, REPORT_EXPLAIN_EXECUTIVE_SUMMARY
+from .config import REPORT
 
 # Import from other modules
-from .tools import logger, sanitize_model_name, get_output_directory
-
-class PageBreakExtension(Extension):
-    """Markdown extension to handle page breaks"""
-    def extendMarkdown(self, md):
-        md.preprocessors.register(PageBreakPreprocessor(md), 'page_break', 27)
-
-class PageBreakPreprocessor(Preprocessor):
-    """Preprocessor to convert marker to HTML"""
-    def run(self, lines):
-        new_lines = []
-        for line in lines:
-            if line.strip() == '<div class="page-break"></div>':
-                new_lines.append('<div style="page-break-after: always"></div>')
-            else:
-                new_lines.append(line)
-        return new_lines
+from .tools import extract_clean_path, logger, sanitize_name
 
 class Report:
-    """Class for generating security analysis reports in multiple formats"""
+    """
+    Class for generating security analysis reports in multiple formats
+
+    Args:
+        input_path: Path to the input file or directory
+        output_format: List of output formats to generate
+    """
     
-    def __init__(self, input_path: str | Path, output_format: List[str]):
+    def __init__(self, input_path: str | Path, output_format: List[str], models: List[str] = None):
         """
         Initialize the report generator
         
         Args:
             input_path: Path to the input file or directory
             output_format: List of output formats to generate
+            models: List of models to generate reports for
         """
+        if models is None:
+            models = []
+
         # Create output directory for reports
         self.output_format = output_format
-        self.report_dirs = self.create_report_directories(input_path)
+        self.report_dirs = {}
+        self.models = models
 
         # Configure the Jinja2 environment
         template_dir = Path(__file__).parent / 'templates'
         self.template_env = Environment(loader=FileSystemLoader(searchpath=str(template_dir)))
 
     def ensure_directory(self, directory: Path) -> None:
-        """Ensure directory exists"""
+        """
+        Ensure directory exists
+
+        Args:
+            directory: Path to the directory
+        """
         directory.mkdir(parents=True, exist_ok=True)
     
-    def create_report_directories(self, input_path: str | Path, sub_dir: str = None) -> Dict[str, Path]:
+    def create_report_directories(self, input_path: str | Path, sub_dir: str = None, models: List[str] = None) -> Dict[str, Path]:
         """
         Create format-specific directories for reports
         
@@ -67,23 +68,33 @@ class Report:
         if isinstance(input_path, str):
             input_path = Path(input_path)
 
-        self.output_base_dir = input_path.resolve().parent / REPORT_OUTPUT_DIR
-        self.output_dir = get_output_directory(input_path, self.output_base_dir)
+        self.output_base_dir = input_path.resolve().parent / REPORT['OUTPUT_DIR']
+        self.output_dir = self.get_output_directory(input_path, self.output_base_dir)
         self.ensure_directory(self.output_base_dir)
 
         base_dir = self.output_dir
         if sub_dir:
             base_dir = base_dir / sub_dir
             self.ensure_directory(base_dir)
-        
+
+        models_dir = []
+        if models:
+            for model in models:
+                model_dir = sanitize_name(model)
+                models_dir.append(model_dir)
+
         # Create format-specific directories with only the requested formats
-        report_dirs = {}
         for fmt in self.output_format:
-            if fmt in REPORT_OUTPUT_FORMATS:
-                report_dirs[fmt] = base_dir / fmt
-                self.ensure_directory(report_dirs[fmt])
-            
-        return report_dirs
+            if fmt in REPORT['OUTPUT_FORMATS']:
+                if models_dir:
+                    for model_dir in models_dir:
+                        self.report_dirs[fmt] = base_dir / model_dir / fmt
+                        self.ensure_directory(self.report_dirs[fmt])
+                else:
+                    self.report_dirs[fmt] = base_dir / fmt
+                    self.ensure_directory(self.report_dirs[fmt])
+
+        return self.report_dirs
     
     def create_header(self, title: str, model_name: Optional[str] = None) -> List[str]:
         """
@@ -106,13 +117,13 @@ class Report:
             
         return header
     
-    def generate_vulnerability_report(self, vulnerability_type: str, results: List[Dict], 
+    def generate_vulnerability_report(self, vulnerability: Dict, results: List[Dict], 
                                      model_name: str) -> Dict[str, Path]:
         """
         Generate a report for a specific vulnerability type
         
         Args:
-            vulnerability_type: Name of the vulnerability
+            vulnerability: Vulnerability (Dict - VULNERABILITY_MAPPING element)
             results: Analysis results
             model_name: Model name used for analysis
             
@@ -120,18 +131,19 @@ class Report:
             Dictionary of report file paths
         """
         # Clean vulnerability name for filenames
-        safe_name = vulnerability_type.lower().replace(' ', '_')
+        vuln_name = vulnerability['name']
+        safe_name = vuln_name.lower().replace(' ', '_')
         
         # Set output file paths and filter by output format in one step
         output_files = self.filter_output_files(safe_name)
 
         # Create report content
-        report = self.create_header(f"{vulnerability_type} Security Analysis", model_name)
+        report = self.create_header(f"{vuln_name} Security Analysis", model_name)
         
         # Add summary section
         report.extend([
             "\n## Summary",
-            f"\nAnalyzed {len(results)} files for {vulnerability_type} vulnerabilities.",
+            f"\nAnalyzed {len(results)} files for {vuln_name} vulnerabilities.",
             "\n| File | Similarity Score |",
             "|------|-----------------|"
         ])
@@ -143,6 +155,7 @@ class Report:
             report.append(f"| `{file_path}` | {score:.3f} |")
         
         # Add detailed analysis section
+        report.append('\n<div class="page-break"></div>\n')
         report.append("\n## Detailed Analysis\n")
         
         for i, result in enumerate(results):
@@ -156,7 +169,7 @@ class Report:
             # Check if analysis key exists
             if 'analysis' in result:
                 # Normalize the heading levels in the analysis
-                analysis = self.normalize_heading_levels(result['analysis'], base_level=5)
+                analysis = result['analysis']
             elif 'error' in result:
                 analysis = f"**Error during analysis:** {result['error']}"
             else:
@@ -169,24 +182,49 @@ class Report:
                 analysis
             ])
         
-        self._generate_and_save_report(output_files, report)
+        self._generate_and_save_report(output_files, report, report_type='Vulnerability')
         
         return output_files
     
-    def _generate_and_save_report(self, output_files, report_content):
+    def _generate_and_save_report(self, output_files, report_content, report_type: str = None):
         """
         Write report content and convert to all configured formats
-        
+
         Args:
             output_files: Dictionary of output file paths
             report_content: List of report content lines
+            report_type: Type of report (Vulnerability, Audit, Executive Summary)
         """
+        logger.debug("--------------------------------")
+        logger.debug(f"Generating {report_type} report for {', '.join(self.output_format)}, please wait...")
+
         # Write markdown
         self.write_markdown(output_files['md'], report_content)
         
         # Convert to PDF and HTML
         self.convert_to_all_formats(output_files['md'])
-    
+
+        logger.debug(f"{report_type} report generated successfully")
+        logger.debug(f"{report_type} reports have been generated in: {self.output_dir}")
+        logger.debug("--------------------------------")
+
+    def report_generated(self, report_type: str = None):
+        """
+        Log that a report has been generated
+
+        Args:
+            report_type: Type of report (Vulnerability, Audit, Executive Summary)
+        """
+        logger.info("--------------------------------")
+        logger.info(f"{report_type} report generated successfully")
+        logger.info(f"{report_type} reports have been generated in: {self.output_dir}")
+        
+        # Show report structure
+        self.display_report_structure()
+
+        logger.info("--------------------------------")
+
+
     def generate_audit_report(self, analyzer_results: Dict[str, Dict], 
                             embedding_manager) -> Dict[str, Path]:
         """
@@ -208,7 +246,8 @@ class Report:
             f"\nDate: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             f"\nEmbedding Model: {embedding_manager.embedding_model}",
             f"\nTotal Files Analyzed: {embedding_manager.get_embeddings_info()['total_files']}",
-            REPORT_EXPLAIN_ANALYSIS,
+            REPORT['EXPLAIN_ANALYSIS'],
+            '<div class="page-break"></div>'
         ]
 
         if vuln_stats := analyzer_results.get('vulnerability_statistics', []):
@@ -281,10 +320,7 @@ class Report:
             ])
 
         # Generate and save report
-        self._generate_and_save_report(output_files, report)
-
-        logger.info("\nAudit report generated successfully")
-        logger.info(f"Report location: {self.output_dir.absolute()}")
+        self._generate_and_save_report(output_files, report, report_type='Audit')
 
         return output_files
     
@@ -309,7 +345,7 @@ class Report:
         report.extend([
             "\n## Overview",
             f"\nAnalyzed {len(all_results)} vulnerability types across the codebase.",
-            REPORT_EXPLAIN_EXECUTIVE_SUMMARY,
+            REPORT['EXPLAIN_EXECUTIVE_SUMMARY'],
         ])
         
         # Count vulnerabilities
@@ -378,7 +414,7 @@ class Report:
         ])
         
         # Generate and save report
-        self._generate_and_save_report(output_files, report)
+        self._generate_and_save_report(output_files, report, report_type='Executive Summary')
         
         return output_files
     
@@ -429,7 +465,7 @@ class Report:
             
             # Convert to PDF
             try:
-                HTML(string=rendered_html).write_pdf(output_files['pdf'])
+                HTML(string=rendered_html, media_type='print').write_pdf(output_files['pdf'])
             except Exception as e:
                 logger.error(f"PDF conversion failed for {markdown_file.name}: {e.__class__.__name__}: {str(e)}")
                 if logger.isEnabledFor(logging.DEBUG):
@@ -480,8 +516,19 @@ class Report:
             Rendered HTML
         """
         try:
+            # Get the absolute path of the logo
+            images_dir = Path(__file__).parent / 'images'
+            logo_path = images_dir / 'oasis-logo.jpg'
+            
+            # Encode the logo in base64
+            with open(logo_path, "rb") as image_file:
+                encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+            
+            # Create a data URL for the image
+            logo_data_url = f"data:image/jpeg;base64,{encoded_string}"
+            
             template = self.template_env.get_template('report_template.html')
-            return template.render(content=content)
+            return template.render(content=content, logo_path=logo_data_url)
         except Exception as e:
             logger.error(f"Error rendering template: {str(e)}")
             # Fallback to basic HTML if template fails
@@ -539,32 +586,34 @@ class Report:
         
         return '\n'.join(result)
     
-    def display_report_structure(self, selected_models: List[str]) -> None:
+    def display_report_structure(self) -> None:
         """
-        Display the structure of generated report files
-        
-        Args:
-            selected_models: List of model names with reports
+        Display the structure of generated report files        
         """
-        logger.info("\nAnalysis complete!")
-        abs_report_path = str(self.output_base_dir.absolute())
-        logger.info(f"\nReports have been generated in: {abs_report_path}")
         logger.info("\nGenerated files structure:")
         
-        for model in selected_models:
-            model_name = sanitize_model_name(model)
-            model_dir = self.output_base_dir / model_name
+        models = self.models or ['embed_model']
+        for model in models:
+            model_name = sanitize_name(model)
+            if model_name == 'embed_model':
+                model_dir = self.output_dir
+                model_dir_name = self.output_dir_name
+            else:
+                model_dir = self.output_dir / model_name
+                model_dir_name = model_name
             if not model_dir.is_dir():
                 continue
-                
-            logger.info(f"\n{model_name}/")
+
+            logger.info(f"\n{model_dir_name}/", extra={'emoji': False})
             for fmt_dir in model_dir.glob('*'):
                 if not fmt_dir.is_dir():
                     continue
                     
-                logger.info(f"  └── {fmt_dir.name}/")
+                logger.info(f"  └── {fmt_dir.name}/", extra={'emoji': False})
                 for report in fmt_dir.glob('*.*'):
-                    logger.info(f"       └── {report.name}")
+                    logger.info(f"       └── {report.name}", extra={'emoji': False})
+        
+        logger.info("")
 
     def filter_output_files(self, safe_name: str) -> Dict[str, Path]:
         """
@@ -578,5 +627,55 @@ class Report:
         """
         return {
             fmt: self.report_dirs[fmt] / f"{safe_name}.{fmt}"
-            for fmt in self.output_format
+            for fmt in self.output_format if fmt in self.report_dirs
         }
+
+    def get_output_directory(self, input_path: str | Path, base_reports_dir: Path) -> Path:
+        """
+        Generate a unique output directory name based on input path and timestamp
+        
+        Args:
+            input_path: Input path (string or Path) that may contain arguments
+            base_reports_dir: Base directory for reports
+            
+        Returns:
+            Unique output directory path
+        """
+        # Make sure we have a clean path
+        clean_path = extract_clean_path(input_path)
+            
+        # Get basename for naming the output directory
+        input_name = clean_path.name if clean_path.is_file() else clean_path.stem
+        
+        # Add timestamp for uniqueness
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.output_dir_name = f"{input_name}_{timestamp}"
+        
+        return base_reports_dir / self.output_dir_name
+
+
+class PageBreakExtension(Extension):
+    """
+    Markdown extension to handle page breaks
+
+    Args:
+        md: Markdown instance
+    """
+    def extendMarkdown(self, md):
+        md.preprocessors.register(PageBreakPreprocessor(md), 'page_break', 27)
+
+class PageBreakPreprocessor(Preprocessor):
+    """
+    Preprocessor to convert marker to HTML
+
+    Args:
+        md: Markdown instance
+    """
+    def run(self, lines):
+        new_lines = []
+        for line in lines:
+            if line.strip() == '<div class="page-break"></div>':
+                new_lines.append('<div style="page-break-after: always"></div>')
+            else:
+                new_lines.append(line)
+        return new_lines

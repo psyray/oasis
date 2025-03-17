@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Union
 
 # Import from configuration
-from .config import REPORT_OUTPUT_DIR, REPORT_OUTPUT_FORMATS
+from .config import REPORT, DEFAULT_ARGS
 
 # Import from other modules
 from .tools import setup_logging, logger, display_logo, get_vulnerability_mapping
@@ -26,7 +26,12 @@ class OasisScanner:
         self.output_dir = None
 
     def setup_argument_parser(self):
-        """Configure and return argument parser"""
+        """
+        Configure and return argument parser
+
+        Returns:
+            Argument parser
+        """
         class CustomFormatter(argparse.RawDescriptionHelpFormatter):
             def _split_lines(self, text, width):
                 if text.startswith('Vulnerability types'):
@@ -34,25 +39,25 @@ class OasisScanner:
                 return super()._split_lines(text, width)
 
         parser = argparse.ArgumentParser(
-            description='🏝️ OASIS - Ollama Automated Security Intelligence Scanner',
+            description='🏝️  OASIS - Ollama Automated Security Intelligence Scanner',
             formatter_class=CustomFormatter
         )
         
         # Add arguments (keep all existing arguments)
         parser.add_argument('-i', '--input', dest='input_path', type=str, 
                            help='Path to file, directory, or .txt file containing paths to analyze')
-        parser.add_argument('-t', '--threshold', type=float, default=0.5, 
-                           help='Similarity threshold (default: 0.5)')
-        parser.add_argument('-v', '--vulns', type=str, default='all', 
+        parser.add_argument('-t', '--threshold', type=float, default=DEFAULT_ARGS['THRESHOLD'], 
+                           help=f'Similarity threshold (default: {DEFAULT_ARGS["THRESHOLD"]})')
+        parser.add_argument('-v', '--vulns', type=str, default=DEFAULT_ARGS['VULNS'], 
                            help=self.get_vulnerability_help())
-        parser.add_argument('-of', '--output-format', type=str, default='all',
-                           help='Output format (default: all)')
+        parser.add_argument('-of', '--output-format', type=str, default=DEFAULT_ARGS['OUTPUT_FORMAT'],
+                           help=f'Output format (default: {DEFAULT_ARGS["OUTPUT_FORMAT"]})')
         parser.add_argument('-d', '--debug', action='store_true',
                            help='Enable debug output')
         parser.add_argument('-s', '--silent', action='store_true',
                            help='Disable all output messages')
-        parser.add_argument('-em', '--embed-model', type=str, default='nomic-embed-text:latest',
-                          help='Model to use for embeddings (default: nomic-embed-text:latest)')
+        parser.add_argument('-em', '--embed-model', type=str, default=DEFAULT_ARGS['EMBED_MODEL'],
+                          help=f'Model to use for embeddings (default: {DEFAULT_ARGS["EMBED_MODEL"]})')
         parser.add_argument('-m', '--models', type=str,
                            help='Comma-separated list of models to use (bypasses interactive selection)')
         parser.add_argument('-lm', '--list-models', action='store_true',
@@ -63,16 +68,21 @@ class OasisScanner:
                            help='Clear embeddings cache before starting')
         parser.add_argument('-a', '--audit', action='store_true',
                            help='Run embedding distribution analysis')
-        parser.add_argument('-cd', '--cache-days', type=int, default=7, 
-                           help='Maximum age of cache in days (default: 7)')
+        parser.add_argument('-cd', '--cache-days', type=int, default=DEFAULT_ARGS['CACHE_DAYS'], 
+                           help=f'Maximum age of cache in days (default: {DEFAULT_ARGS["CACHE_DAYS"]})')
         parser.add_argument('-ch', '--chunk-size', type=int,
-                           help='Maximum size of text chunks for embedding (default: auto-detected)')
-        parser.add_argument('-at', '--analyze_type', choices=['file', 'function'], default='function',
-                           help='Analyze code by entire file or by individual functions')
+                           help=f'Maximum size of text chunks for embedding (default: {DEFAULT_ARGS["CHUNK_SIZE"]})')
+        parser.add_argument('-at', '--analyze_type', choices=['file', 'function'], default=DEFAULT_ARGS['ANALYSIS_TYPE'],
+                           help=f'Analyze code by entire file or by individual functions (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
         return parser
 
     def get_vulnerability_help(self) -> str:
-        """Generate help text for vulnerability arguments"""
+        """
+        Generate help text for vulnerability arguments
+
+        Returns:
+            Help text for vulnerability arguments
+        """
         vuln_map = get_vulnerability_mapping()
         vuln_list = []
         vuln_list.extend(
@@ -86,7 +96,13 @@ class OasisScanner:
         )
 
     def run_analysis_mode(self, selected_models, vuln_mapping):
-        """Run security analysis on selected models"""
+        """
+        Run security analysis on selected models
+
+        Args:
+            selected_models: List of selected models
+            vuln_mapping: Vulnerability mapping
+        """
         # Get vulnerabilities to check
         vulnerabilities, invalid_tags = SecurityAnalyzer.get_vulnerabilities_to_check(self.args, vuln_mapping)
         if invalid_tags:
@@ -105,14 +121,21 @@ class OasisScanner:
             
             # Process analysis
             analyzer.process_analysis_with_model(vulnerabilities, self.args, self.report)
-        
-        # Show report structure
-        self.report.display_report_structure(selected_models)
-        
+
+        # Report generation
+        self.report.report_generated(report_type='Vulnerability')
+
+        logger.info("\nAnalysis completed successfully!")
+
         return True
 
     def handle_audit_mode(self, vuln_mapping):
-        """Handle audit mode - analyze embeddings distribution only"""
+        """
+        Handle audit mode - analyze embeddings distribution only
+
+        Args:
+            vuln_mapping: Vulnerability mapping
+        """
         # Get vulnerabilities to check
         vulnerabilities, invalid_tags = SecurityAnalyzer.get_vulnerabilities_to_check(self.args, vuln_mapping)
         if invalid_tags:
@@ -125,15 +148,26 @@ class OasisScanner:
         analyzer_results = embedding_manager.analyze_all_vulnerabilities(vulnerabilities)
         
         # Generate audit report
+        self.report.create_report_directories(self.args.input_path)
         self.report.generate_audit_report(
             analyzer_results,
             self.embedding_manager
         )
         
+        # Report generation
+        self.report.report_generated(report_type='Audit')
+
+        logger.info('Audit completed successfully')
+
         return True
 
     def run(self, args=None):
-        """Run the OASIS scanner with the provided or parsed args"""
+        """
+        Run the OASIS scanner with the provided or parsed args
+
+        Args:
+            args: Arguments
+        """
         try:
             # Parse and validate arguments
             init_result = self._init_arguments(args)
@@ -157,7 +191,7 @@ class OasisScanner:
         except Exception as e:
             logger.error(f"An unexpected error occurred: {str(e)}")
             if logger.isEnabledFor(logging.DEBUG):
-                logger.exception("Full error trace:")
+                logger.exception("Full error trace:", exc_info=True)
             return 1
             
     def _init_arguments(self, args) -> Union[bool, None]:
@@ -196,7 +230,7 @@ class OasisScanner:
 
         # Process output format
         if self.args.output_format == 'all':
-            self.args.output_format = REPORT_OUTPUT_FORMATS
+            self.args.output_format = REPORT['OUTPUT_FORMATS']
         else:
             self.args.output_format = self.args.output_format.split(',')
 
@@ -204,7 +238,12 @@ class OasisScanner:
         return True
 
     def _init_ollama(self):
-        """Initialize Ollama and check connections"""
+        """
+        Initialize Ollama and check connections
+
+        Returns:
+            True if Ollama is running and connected, False otherwise
+        """
         # Initialize Ollama manager
         self.ollama_manager = OllamaManager()
 
@@ -226,7 +265,12 @@ class OasisScanner:
         return bool(self.ollama_manager.ensure_model_available(self.args.embed_model))
 
     def _init_processing(self):
-        """Initialize report and process input files"""
+        """
+        Initialize report and process input files
+
+        Returns:
+            True if processing is successful, False otherwise
+        """
         self.report = Report(self.args.input_path, self.args.output_format)
 
         # Initialize embedding manager
@@ -235,7 +279,12 @@ class OasisScanner:
         return self.embedding_manager.process_input_files(self.args)
 
     def _execute_requested_mode(self):
-        """Execute requested analysis mode"""
+        """
+        Execute requested analysis mode
+
+        Returns:
+            Exit code (0 for success, 1 for failure)
+        """
         # Get vulnerability mapping for all modes
         vuln_mapping = get_vulnerability_mapping()
 
@@ -248,7 +297,12 @@ class OasisScanner:
         return self._run_analysis_mode(vuln_mapping)
 
     def _run_analysis_mode(self, vuln_mapping):
-        """Run security analysis with selected models"""
+        """
+        Run security analysis with selected models
+
+        Args:
+            vuln_mapping: Vulnerability mapping
+        """
         # Get available models
         available_models = self.ollama_manager.get_available_models()
         if not available_models:
@@ -259,6 +313,8 @@ class OasisScanner:
         selected_models = self.ollama_manager.select_analysis_models(self.args, available_models)
         if not selected_models:
             return 1
+        self.report.models = selected_models
+        self.report.create_report_directories(self.args.input_path, models=selected_models)
             
         # Run analysis with selected models
         result = self.run_analysis_mode(selected_models, vuln_mapping)
@@ -270,7 +326,12 @@ class OasisScanner:
         return 0
         
     def _save_cache_on_exit(self):
-        """Save cache when exiting due to interruption"""
+        """
+        Save cache when exiting due to interruption
+
+        Args:
+            None
+        """
         try:
             if hasattr(self, 'embedding_manager') and self.embedding_manager:
                 self.embedding_manager.save_cache()
@@ -279,9 +340,14 @@ class OasisScanner:
             logger.error("Failed to save cache on interruption.")
 
     def _setup_logging(self):
-        """Configure logging based on arguments"""
+        """
+        Configure logging based on arguments
+
+        Args:
+            None
+        """
         if self.args.silent:
-            logs_dir = Path(self.args.input_path).resolve().parent / REPORT_OUTPUT_DIR / "logs" if self.args.input_path else Path(REPORT_OUTPUT_DIR) / "logs"
+            logs_dir = Path(self.args.input_path).resolve().parent / REPORT['OUTPUT_DIR'] / "logs" if self.args.input_path else Path(REPORT['OUTPUT_DIR']) / "logs"
             logs_dir.mkdir(parents=True, exist_ok=True)
             log_file = logs_dir / f"oasis_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         else:
@@ -325,14 +391,24 @@ class OasisScanner:
             return self._handle_model_list_error(e)
         
     def _handle_model_list_error(self, e):
-        """Handle errors when listing models"""
+        """
+        Handle errors when listing models
+
+        Args:
+            e: Exception
+        """
         logger.error(f"Error listing models: {str(e)}")
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("Full error:", exc_info=True)
         return False
 
 def main():
-    """Main entry point for the OASIS scanner"""
+    """
+    Main entry point for the OASIS scanner
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
     scanner = OasisScanner()
     return scanner.run()
 

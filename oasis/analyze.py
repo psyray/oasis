@@ -1,21 +1,23 @@
+import argparse
 from typing import List, Dict, Tuple, Any, Union
 from pathlib import Path
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 
 # Import from configuration
-from .config import EXTRACT_FUNCTIONS_ANALYSIS_TYPE, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS, MAX_CHUNK_SIZE
+from .config import VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS, MAX_CHUNK_SIZE, DEFAULT_ARGS
 
 # Import from other modules
 from .ollama_manager import OllamaManager
-from .tools import chunk_content, logger, calculate_similarity
+from .tools import chunk_content, logger, calculate_similarity, sanitize_name
 from .report import Report
-from .embedding import EmbeddingManager
+from .embedding import EmbeddingManager, build_vulnerability_embedding_prompt
 
 class SecurityAnalyzer:
     def __init__(self, llm_model: str, embedding_manager: EmbeddingManager):
         """
         Initialize the security analyzer
+
         Args:
             llm_model: Model to use for analysis
             embedding_manager: Embedding manager to use for embeddings
@@ -30,31 +32,38 @@ class SecurityAnalyzer:
             raise RuntimeError("Could not connect to Ollama server") from e
 
         self.llm_model = llm_model
+        self.embedding_manager = embedding_manager
         self.embedding_model = embedding_manager.embedding_model
         self.code_base = embedding_manager.code_base
+        self.analyze_type = embedding_manager.analyze_type
+        self.analyze_by_function = embedding_manager.analyze_by_function
+        self.threshold = embedding_manager.threshold
 
-    def search_vulnerabilities(self, vulnerability_type: str, threshold: float = 0.3, analyze_by_function: bool = False) -> List[Tuple[str, float]]:
+    def search_vulnerabilities(self, vulnerability: Union[str, Dict], threshold: float = DEFAULT_ARGS['THRESHOLD']) -> List[Tuple[str, float]]:
         """
         Search for potential vulnerabilities in the code base
+
         Args:
-            vulnerability_type: Type of vulnerability to search for
-            threshold: Similarity threshold (default: 0.3)
-            analyze_by_function: Whether to analyze by function or file
+            vulnerability: Type of vulnerability to search for (string name or complete dict)
+            threshold: Similarity threshold (default: 0.5)
+
         Returns:
             List of (identifier, similarity_score) tuples where identifier is either file_path or function_id
         """
         try:
-            # Get embedding for vulnerability type
-            vuln_vector = self._get_vulnerability_embedding(vulnerability_type)
+            vuln_name = vulnerability['name']
+            
+            # Get embedding for vulnerability type using complete information if available
+            vuln_vector = self.embedding_manager.get_vulnerability_embedding(vulnerability)
             if not vuln_vector:
-                logger.error(f"Failed to get embedding for vulnerability type '{vulnerability_type}'. No embedding returned from _get_vulnerability_embedding.")
+                logger.error(f"Failed to get embedding for vulnerability type '{vuln_name}'. No embedding returned.")
                 return []
                 
             results = []
             
             # Process all files
             for file_path, data in self.code_base.items():
-                if analyze_by_function:
+                if self.analyze_by_function:
                     # Process functions for this file
                     self._process_functions(file_path, data, vuln_vector, threshold, results)
                 else:
@@ -68,43 +77,31 @@ class SecurityAnalyzer:
             logger.error(f"Error during vulnerability search: {str(e)}")
             return []
 
-    def analyze_vulnerability(self, file_path: str, vulnerability_type: str) -> str:
+    def analyze_vulnerability(self, file_path: str, vulnerability: Union[str, Dict]) -> str:
+        """
+        Analyze a file for a specific vulnerability.
+
+        Args:
+            file_path: Path to the file to analyze
+            vulnerability: Vulnerability to analyze
+        """
         try:
             if file_path not in self.code_base:
                 return "File not found in indexed code base"
 
-            code = self.code_base[file_path]['content']            
+            vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation = self._get_vulnerability_details(vulnerability)
+            if not vuln_name:  # Check if vulnerability details extraction failed
+                return "Invalid vulnerability type"
+
+            code = self.code_base[file_path]['content']
             code_chunks = chunk_content(code, MAX_CHUNK_SIZE)
-            
+
             analyses = []
             for i, chunk in enumerate(code_chunks):
-                prompt = f"""You are a cybersecurity expert. Focus ONLY on finding {vulnerability_type} vulnerabilities in the following code segment ({i+1}/{len(code_chunks)}).
-                DO NOT analyze any other type of vulnerability.
-                
-                Provide a detailed analysis with:
-                1. Quote the exact vulnerable code snippets related to {vulnerability_type}
-                2. Explain specifically how this code is vulnerable to {vulnerability_type}
-                3. Severity level (Critical/High/Medium/Low) specific to {vulnerability_type}
-                4. Potential impact of this {vulnerability_type} vulnerability
-                5. Remediation recommendations with secure code example
-                
-                If you don't find any {vulnerability_type} vulnerability in this code segment, do not report it."
+                prompt = self._build_analysis_prompt(vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation, chunk, i, len(code_chunks))
+                analyses.append(self._analyze_code_chunk(prompt))
 
-                Format your response in Markdown, and for each vulnerability found, start with the vulnerable code block in a code fence.
-
-                Code segment to analyze:
-                {chunk}
-
-                {VULNERABILITY_PROMPT_EXTENSION}
-                """
-
-                response = self.client.chat(
-                    model=self.llm_model,
-                    messages=[{'role': 'user', 'content': prompt}]
-                )
-                analyses.append(response['message']['content'])
-            
-            return "\n\n=== Next Code Segment ===\n\n".join(analyses)
+            return "\n\n<div class=\"page-break\"></div>\n\n".join(analyses)
 
         except Exception as e:
             logger.error(f"Error during analysis: {str(e)}")
@@ -122,25 +119,21 @@ class SecurityAnalyzer:
         Returns:
             Dictionary with analysis results
         """
-        min_threshold = 0.3
-        
         # Store all results for executive summary
         all_results = {}
 
         # Determine if we're analyzing by function or by file
-        analyze_by_function = args.analyze_type == EXTRACT_FUNCTIONS_ANALYSIS_TYPE
-        logger.info(f"Analyzing by {args.analyze_type}")
+        logger.info(f"Analyzing by {self.analyze_type}")
 
         # Analysis for each vulnerability type
         with tqdm(total=len(vulnerabilities), 
                  desc="Analyzing vulnerabilities", 
                  disable=args.silent) as vuln_pbar:
             for vuln in vulnerabilities:
-                # First, find potentially vulnerable files
+                # First, find potentially vulnerable files using complete vulnerability data
                 results = self.search_vulnerabilities(
-                    vuln['name'], 
-                    threshold=min_threshold, 
-                    analyze_by_function=analyze_by_function
+                    vuln,
+                    threshold=self.threshold
                 )
                 
                 filtered_results = [(path, score) for path, score in results if score >= args.threshold]
@@ -153,19 +146,28 @@ class SecurityAnalyzer:
                          leave=False) as file_pbar:
                     for file_path, similarity_score in file_pbar:
                         file_pbar.set_postfix_str(f"File: {Path(file_path).name}")
-                        analysis = self.analyze_vulnerability(file_path, vuln['name'])
+                        
+                        # Use the complete vulnerability object for detailed analysis
+                        analysis = self.analyze_vulnerability(file_path, vuln)
+                        
                         detailed_results.append({
                             'file_path': file_path,
                             'similarity_score': similarity_score,
-                            'analysis': analysis
+                            'analysis': analysis,
+                            'vulnerability': {
+                                'name': vuln['name'],
+                                'description': vuln['description'],
+                                'impact': vuln['impact'],
+                                'mitigation': vuln['mitigation']
+                            }
                         })
 
                 # Store results for executive summary
                 all_results[vuln['name']] = detailed_results
 
-                # Generate vulnerability report
+                # Generate vulnerability report with enhanced vulnerability information
                 report.generate_vulnerability_report(
-                    vulnerability_type=vuln['name'],
+                    vulnerability=vuln,
                     results=detailed_results,
                     model_name=self.llm_model,
                 )
@@ -173,9 +175,9 @@ class SecurityAnalyzer:
                 # Update main progress bar
                 vuln_pbar.update(1)
         
-        # Generate executive summary after all vulnerabilities are analyzed
+        # Generate executive summary with enhanced data
         report.generate_executive_summary(all_results, self.llm_model)
-        
+
         return all_results
     
     @staticmethod
@@ -202,18 +204,99 @@ class SecurityAnalyzer:
             return None, invalid_tags
 
         return [vuln_mapping[tag] for tag in selected_tags], None
-    def _get_vulnerability_embedding(self, vulnerability_type: str) -> List[float]:
-        """Get embedding vector for a vulnerability type"""
-        try:
-            response = self.client.embeddings(model=self.embedding_model, prompt=vulnerability_type)
-            return response.get('embedding') if response and 'embedding' in response else None
-        except Exception as e:
-            logger.error(f"Failed to get embedding for {vulnerability_type}: {str(e)}")
-            return None
+
+    def _get_vulnerability_details(self, vulnerability: Union[str, Dict]) -> Tuple[str, str, list, str, str]:
+        """
+        Extract vulnerability details from dict or return empty strings if invalid.
+
+        Args:
+            vulnerability: Vulnerability to extract details from
             
+        Returns:
+            Tuple of (vulnerability name, description, patterns, impact, mitigation)
+        """
+        if isinstance(vulnerability, dict):
+            return (vulnerability.get('name', ''), vulnerability.get('description', ''), vulnerability.get('patterns', []),
+                    vulnerability.get('impact', ''), vulnerability.get('mitigation', ''))
+        logger.error(f"Invalid vulnerability type: {vulnerability}")
+        return "", "", [], "", ""
+
+    def _build_analysis_prompt(self, vuln_name: str, vuln_desc: str, vuln_patterns: list,
+                               vuln_impact: str, vuln_mitigation: str, chunk: str, i: int, total_chunks: int) -> str:
+        """
+        Construct the prompt for the LLM analysis.
+        
+        Args:
+            vuln_name: Name of the vulnerability
+            vuln_desc: Description of the vulnerability
+            vuln_patterns: Common patterns associated with the vulnerability
+            vuln_impact: Security impact of the vulnerability
+            vuln_mitigation: Mitigation strategies for the vulnerability
+            chunk: Code chunk to analyze
+            i: Current chunk index
+            total_chunks: Total number of chunks
+            
+        Returns:
+            Formatted prompt for LLM analysis
+        """
+        # Format vulnerability info section
+        vuln_info = (
+            f"- Name: {vuln_name}\n"
+            f"- Description: {vuln_desc}\n"
+            f"- Common patterns: {', '.join(vuln_patterns[:5]) if vuln_patterns else 'N/A'}\n"
+            f"- Security impact: {vuln_impact}\n"
+            f"- Mitigation: {vuln_mitigation}"
+        )
+        
+        # Build the complete prompt with clear sections
+        return f"""You are a cybersecurity expert specialized in code analysis. Focus ONLY on finding {vuln_name} vulnerabilities in the following code segment ({i + 1}/{total_chunks}).
+DO NOT analyze any other type of vulnerability.
+
+VULNERABILITY DETAILS:
+{vuln_info}
+
+Provide a detailed analysis with:
+1. Quote the exact vulnerable code snippets related to {vuln_name}
+2. Explain specifically how this code is vulnerable to {vuln_name}
+3. Severity level (Critical/High/Medium/Low) specific to this vulnerability
+4. Potential impact of this vulnerability
+5. Remediation recommendations with secure code example
+
+If you don't find any {vuln_name} vulnerability in this code segment, clearly state: "No {vuln_name} vulnerabilities found in this segment".
+
+Format your response in Markdown, and for each vulnerability found, start with the vulnerable code block in a code fence.
+
+Code segment to analyze:
+```
+{chunk}
+```
+
+{VULNERABILITY_PROMPT_EXTENSION}
+"""
+
+    def _analyze_code_chunk(self, prompt: str) -> str:
+        """
+        Analyze a single code chunk with the LLM.
+
+        Args:
+            prompt: Prompt to analyze
+        """
+        try:
+            response = self.client.chat(model=self.llm_model, messages=[{'role': 'user', 'content': prompt}])
+            return response['message']['content']
+        except Exception as e:
+            logger.error(f"Error during chunk analysis: {str(e)}")
+            return f"Error during chunk analysis: {str(e)}"
+
     def _process_functions(self, file_path: str, data: Dict, vuln_vector: List[float], 
                           threshold: float, results: List[Tuple[str, float]]) -> None:
-        """Process functions in a file"""
+        """
+        Process functions in a file
+
+        Args:
+            file_path: Path to the file to process
+            data: Data to process
+        """
         if 'functions' not in data:
             return
             
@@ -230,7 +313,13 @@ class SecurityAnalyzer:
                 
     def _process_file(self, file_path: str, data: Dict, vuln_vector: List[float], 
                      threshold: float, results: List[Tuple[str, float]]) -> None:
-        """Process entire file"""
+        """
+        Process entire file
+
+        Args:
+            file_path: Path to the file to process
+            data: Data to process
+        """
         try:
             # Extract embedding based on its structure
             file_vectors = self._extract_file_vectors(data)
@@ -251,7 +340,12 @@ class SecurityAnalyzer:
             logger.error(f"Error processing file {file_path}: {str(e)}")
             
     def _extract_file_vectors(self, data: Dict) -> Union[List[float], List[List[float]], None]:
-        """Extract embedding vectors from file data"""
+        """
+        Extract embedding vectors from file data
+
+        Args:
+            data: Data to extract vectors from
+        """
         embedding = data.get('embedding')
         if not embedding:
             return None
@@ -264,7 +358,12 @@ class SecurityAnalyzer:
             return embedding  # Single embedding vector
 
 class EmbeddingAnalyzer:
-    """Class for analyzing embeddings against vulnerability types"""
+    """
+    Class for analyzing embeddings against vulnerability types
+
+    Args:
+        embedding_manager: Initialized EmbeddingManager
+    """
     
     def __init__(self, embedding_manager):
         """
@@ -278,18 +377,24 @@ class EmbeddingAnalyzer:
         self.code_base = embedding_manager.code_base
         self.embedding_model = embedding_manager.embedding_model
         self.results_cache = {}  # Cache for results by vulnerability type
-        
+        self.analyze_type = embedding_manager.analyze_type
+        self.analyze_by_function = embedding_manager.analyze_by_function
 
-    def analyze_vulnerability(self, vuln_name: str, analyze_by_function: bool = False) -> List[Dict[str, Any]]:
-        """Analyze a single vulnerability type."""
+    def analyze_vulnerability(self, vuln: Dict) -> List[Dict[str, Any]]:
+        """
+        Analyze a single vulnerability type.
 
-        cache_key = f"{vuln_name}_{analyze_by_function}"
+        Args:
+            vuln: Vulnerability to analyze
+        """
+
+        cache_key = f"{sanitize_name(vuln['name'])}_{self.analyze_type}"
         if cache_key in self.results_cache:
             return self.results_cache[cache_key]
 
-        logger.info(f"🚨 Analyzing vulnerability: {vuln_name}")
+        logger.info(f"🚨 Analyzing vulnerability: {vuln['name']}")
 
-        process_args = self._prepare_analysis_args(vuln_name, analyze_by_function)
+        process_args = self._prepare_analysis_args(vuln)
         results = self._execute_parallel_analysis(process_args)
 
         results.sort(key=lambda x: x['similarity_score'], reverse=True)
@@ -356,37 +461,32 @@ class EmbeddingAnalyzer:
             'count': len(scores)
         }
     
-    def analyze_all_vulnerabilities(self, vulnerability_types: List[Dict], 
+    def analyze_all_vulnerabilities(self, vulnerabilities: List[Dict], 
                                    thresholds: List[float] = None,
-                                   analyze_by_function: bool = False,
                                    console_output: bool = True) -> Dict[str, Dict]:
         """
         Analyze all vulnerability types
         
         Args:
-            vulnerability_types: List of vulnerability types
+            vulnerabilities: List of vulnerabilities
             thresholds: List of thresholds
-            analyze_by_function: Whether to analyze by function
             console_output: Whether to print results to console
             
         Returns:
             Dictionary with results for all vulnerabilities
         """
-        if not thresholds:
-            thresholds = EMBEDDING_THRESHOLDS
-
         all_results = {}
 
         if console_output:
             logger.info("\nEmbeddings Distribution Analysis")
             logger.info("===================================\n")
 
-        # Analyze each vulnerability type
-        for vuln in vulnerability_types:
+        # Analyze each vulnerability
+        for vuln in vulnerabilities:
             vuln_name = vuln['name']
 
             # Get results for this vulnerability
-            results = self.analyze_vulnerability(vuln_name, analyze_by_function)
+            results = self.analyze_vulnerability(vuln)
 
             # Generate threshold analysis
             threshold_analysis = self.generate_threshold_analysis(results, thresholds)
@@ -403,7 +503,7 @@ class EmbeddingAnalyzer:
 
             # Console output if requested
             if console_output:
-                self._print_vulnerability_analysis(vuln_name, results, threshold_analysis, statistics, thresholds)
+                self._print_vulnerability_analysis(vuln_name, results, threshold_analysis, statistics)
 
         return all_results
 
@@ -458,24 +558,62 @@ class EmbeddingAnalyzer:
         
         return vuln_stats
 
-    def _prepare_analysis_args(self, vuln_name: str, analyze_by_function: bool) -> list:
-        """Prepare arguments for parallel processing."""
+    def _prepare_analysis_args(self, vuln: Dict) -> list:
+        """
+        Prepare arguments for parallel processing.
 
+        Args:
+            vuln: Dictionary containing vulnerability information
+            
+        Returns:
+            List of processed arguments
+        """
+        
+        # Initialize the list once
         process_args = []
+
+        # Common parameters for all arguments
+        common_args = {
+            "vulnerability": vuln,
+            "embedding_model": self.embedding_model,
+        }
+        
+        # Process each element based on analysis mode
         for file_path, data in self.code_base.items():
-            if analyze_by_function:
+            if self.analyze_by_function:
                 if 'functions' in data:
-                    process_args.extend(
-                        (func_id, func_data, vuln_name, self.embedding_model, True)
-                        for func_id, func_data in data['functions'].items()
-                        if func_data.get('embedding')
-                    )
+                    # Process each function individually
+                    for func_id, func_data in data['functions'].items():
+                        if func_data.get('embedding'):
+                            args = {
+                                "item_id": func_id,
+                                "data": func_data,
+                                "is_function": True,
+                                **common_args
+                            }
+                            process_args.append(argparse.Namespace(**args))
             elif data.get('embedding'):
-                process_args.append((file_path, data, vuln_name, self.embedding_model, False))
+                # Process the entire file
+                args = {
+                    "item_id": file_path,
+                    "data": data,
+                    "is_function": False,
+                    **common_args
+                }
+                process_args.append(argparse.Namespace(**args))
+        
         return process_args
 
     def _execute_parallel_analysis(self, process_args: list) -> list:
-        """Execute analysis in parallel and collect results."""
+        """
+        Execute analysis in parallel and collect results.
+
+        Args:
+            process_args: List of processed arguments
+            
+        Returns:
+            List of analysis results
+        """
 
         num_processes = max(1, min(cpu_count(), len(process_args)))
         results = []
@@ -488,8 +626,7 @@ class EmbeddingAnalyzer:
         return results
 
     def _print_vulnerability_analysis(self, vuln_name: str, results: List[Dict], 
-                                     threshold_analysis: List[Dict], statistics: Dict,
-                                     thresholds: List[float]):
+                                     threshold_analysis: List[Dict], statistics: Dict):
         """
         Print vulnerability analysis to console
         
@@ -498,7 +635,6 @@ class EmbeddingAnalyzer:
             results: List of result dictionaries
             threshold_analysis: List of threshold analysis dictionaries
             statistics: Dictionary with statistics
-            thresholds: List of thresholds
         """
         logger.info(f"\nAnalyzing: {vuln_name}")
         logger.info("-" * (14 + len(vuln_name)))
@@ -534,34 +670,37 @@ def analyze_item_parallel(args: tuple) -> Dict:
     Parallel processing of embeddings
     
     Args:
-        args: Tuple of (item_id, data, vulnerability_type, embedding_model, is_function)
+        args: Tuple containing analysis arguments
         
     Returns:
         Dict with analysis results
     """
-    item_id, data, vulnerability_type, embedding_model, is_function = args
-
     try:
         # Create a new Ollama client for each process
         client = OllamaManager().get_client()
+        
+        # Build vulnerability embedding prompt directly
+        vuln_data = args.vulnerability
+        
+        rich_prompt = build_vulnerability_embedding_prompt(vuln_data)
 
         # Get vulnerability embedding
         vuln_response = client.embeddings(
-            model=embedding_model,
-            prompt=vulnerability_type
+            model=args.embedding_model,
+            prompt=rich_prompt
         )
 
         if not vuln_response or 'embedding' not in vuln_response:
             return None
 
         # Get embedding from data
-        if is_function:
-            item_embedding = data['embedding']
-        elif isinstance(data.get('embedding'), dict):
-            item_embedding = data['embedding'].get('embedding')
-        elif isinstance(data.get('embedding'), list) and isinstance(data['embedding'][0], list):
+        if args.is_function:
+            item_embedding = args.data['embedding']
+        elif isinstance(args.data.get('embedding'), dict):
+            item_embedding = args.data['embedding'].get('embedding')
+        elif isinstance(args.data.get('embedding'), list) and isinstance(args.data['embedding'][0], list):
             # Handle chunked files - use chunk with highest similarity
-            chunk_vectors = data['embedding']
+            chunk_vectors = args.data['embedding']
             similarities = []
             for chunk_vec in chunk_vectors:
                 sim = calculate_similarity(vuln_response['embedding'], chunk_vec)
@@ -570,15 +709,15 @@ def analyze_item_parallel(args: tuple) -> Dict:
             # Return highest similarity
             return (
                 {
-                    'item_id': item_id,
+                    'item_id': args.item_id,
                     'similarity_score': max(similarities),
-                    'is_function': is_function,
+                    'is_function': args.is_function,
                 }
                 if similarities
                 else None
             )
         else:
-            item_embedding = data.get('embedding')
+            item_embedding = args.data.get('embedding')
 
         if not item_embedding:
             return None
@@ -590,15 +729,15 @@ def analyze_item_parallel(args: tuple) -> Dict:
         )
 
         return {
-            'item_id': item_id,
+            'item_id': args.item_id,
             'similarity_score': similarity,
-            'is_function': is_function
+            'is_function': args.is_function
         }
 
     except Exception as e:
-        logger.error(f"Error analyzing {item_id}: {str(e)}")
+        logger.error(f"Error analyzing {args.item_id}: {str(e)}")
         return {
-            'item_id': item_id,
+            'item_id': args.item_id,
             'error': str(e),
-            'is_function': is_function
+            'is_function': args.is_function
         }

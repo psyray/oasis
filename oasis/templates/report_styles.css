@@ -1,3 +1,15 @@
+/* Color palette based on logo */
+:root {
+    --dark-blue: #0e1f2b;
+    --sand: #e6e0cc;
+    --light-sand: #f5f2e9;
+    --turquoise: #40b4c4;
+    --light-turquoise: #7cd1de;
+    --medium-gray: #7f8c8d;
+    --light-gray: #f5f5f5;
+    --border-color: #ddd;
+}
+
 @page {
     margin: 1cm;
     size: A4;
@@ -20,75 +32,210 @@ div.page-break {
 body { 
     font-family: Arial, sans-serif;
     font-size: 11pt;
-    line-height: 1.4;
+    line-height: 1.5;
     max-width: none;
     margin: 0;
-    padding: 0;
+    padding: 30px;
+    background-color: var(--light-sand);
+    color: var(--dark-blue);
 }
 
+/* Header styles */
+.report-header {
+    display: flex;
+    align-items: center;
+    padding-bottom: 5px;
+    border-bottom: 2px solid var(--turquoise);
+    margin-bottom: 1cm;
+}
+
+.logo-container {
+    margin-right: 20px;
+}
+
+.logo-circle {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background-color: var(--dark-blue);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+    overflow: hidden;
+}
+
+.oasis-logo {
+    width: 40px;
+    height: 40px;
+    background: linear-gradient(to bottom, var(--sand) 60%, var(--turquoise) 60%);
+    clip-path: polygon(0 0, 100% 30%, 100% 100%, 0% 100%);
+    position: relative;
+}
+
+.oasis-logo::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 15px;
+    height: 15px;
+    background-color: var(--dark-blue);
+    clip-path: polygon(0 0, 100% 0, 100% 100%);
+}
+
+.report-title {
+    font-size: 24pt;
+    font-weight: bold;
+    color: var(--dark-blue);
+}
+
+/* Main content */
+.report-content {
+    min-height: 400px;
+    padding-bottom: 2cm;
+}
+
+/* Footer styles */
+.report-footer {
+    position: running(footer);
+    display: flex;
+    justify-content: space-between;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+    font-size: 9pt;
+    color: var(--medium-gray);
+}
+
+.page-number::after {
+    content: counter(page);
+}
+
+@page {
+    @bottom-center {
+        content: element(footer);
+    }
+}
+
+/* Typography */
 code {
-    background-color: #f5f5f5;
+    background-color: var(--light-gray);
     padding: 2px 4px;
     border-radius: 4px;
     font-family: monospace;
     font-size: 9pt;
     word-wrap: break-word;
     white-space: pre-wrap;
+    border: 1px solid var(--border-color);
 }
 
 pre {
-    background-color: #f5f5f5;
+    background-color: var(--light-gray);
     padding: 1em;
     border-radius: 4px;
     margin: 1em 0;
     white-space: pre-wrap;
     word-wrap: break-word;
     font-size: 9pt;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
 h1 { 
-    color: #2c3e50;
+    color: var(--dark-blue);
     font-size: 20pt;
     margin-top: 0;
+    padding-bottom: 0.2em;
+    border-bottom: 1px solid var(--turquoise);
 }
 
 h2 { 
-    color: #34495e;
+    color: var(--dark-blue);
     font-size: 16pt;
-    margin-top: 1em;
+    margin-top: 1.2em;
+    padding-left: 0.3em;
+    border-left: 4px solid var(--turquoise);
 }
 
 h3 { 
-    color: #7f8c8d;
+    color: var(--dark-blue);
     font-size: 14pt;
+    margin-top: 1em;
 }
 
 p {
-    margin: 0.5em 0;
+    margin: 0.7em 0;
 }
 
 ul, ol {
-    margin: 0.5em 0;
+    margin: 0.7em 0;
     padding-left: 2em;
 }
 
+/* Tables */
 table { 
     border-collapse: collapse; 
     width: 100%; 
-    margin: 1em 0;
+    margin: 1.2em 0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    background-color: white;
 }
 
 th, td { 
-    border: 1px solid #ddd; 
-    padding: 8px; 
+    border: 1px solid var(--border-color); 
+    padding: 10px; 
     text-align: left;
 }
 
 th { 
-    background-color: #f5f5f5;
+    background-color: var(--dark-blue);
+    color: white;
     font-weight: bold;
 }
 
-.risk-high { color: #d73a49; }
+tr:nth-child(even) {
+    background-color: var(--light-sand);
+}
+
+/* Risk colors */
+.risk-high { color: #d73a49; font-weight: bold; }
 .risk-medium { color: #e36209; }
-.risk-low { color: #2cbe4e; } 
+.risk-low { color: #2cbe4e; }
+
+/* Summary boxes */
+.summary-box {
+    background-color: var(--light-turquoise);
+    border-left: 4px solid var(--turquoise);
+    padding: 15px;
+    margin: 1em 0;
+    border-radius: 0 4px 4px 0;
+}
+
+/* Detail sections */
+.detail-section {
+    background-color: white;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 15px;
+    margin: 1em 0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.oasis-logo-img {
+    width: 60px;
+    height: 60px;
+    object-fit: contain;
+    margin-top: 4px;
+}
+
+.logo-circle {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    background-color: #e1dcc8;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+    overflow: hidden;
+} 

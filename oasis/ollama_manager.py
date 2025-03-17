@@ -11,7 +11,12 @@ from .config import MODEL_EMOJIS,OLLAMA_API_URL, EXCLUDED_MODELS, DEFAULT_MODELS
 from .tools import logger
 
 class OllamaManager:
-    """Class for managing Ollama interactions and model operations"""
+    """
+    Class for managing Ollama interactions and model operations
+
+    Args:
+        api_url: URL for Ollama API
+    """
     
     def __init__(self, api_url: str = OLLAMA_API_URL):
         """
@@ -48,6 +53,7 @@ class OllamaManager:
     def check_connection(self) -> bool:
         """
         Check if Ollama server is running and accessible
+
         Returns:
             bool: True if connection is successful, False otherwise
         """
@@ -60,6 +66,7 @@ class OllamaManager:
     def get_available_models(self, show_formatted: bool = False) -> List[str]:
         """
         Get list of available models from Ollama API
+
         Args:
             show_formatted: If True, show formatted model list with progress
         Returns:
@@ -110,14 +117,19 @@ class OllamaManager:
                 )
             ]
             model_names.sort(reverse=False)
-            logger.debug(model_names)
+            logger.debug(", ".join(model_names))
             return model_names
         except ConnectionError as e:
             logger.error(f"Connection error while getting models: {str(e)}")
             raise
     
     def _get_model_info(self, model: str):
-        """Get detailed information about a model from Ollama API"""
+        """
+        Get detailed information about a model from Ollama API
+
+        Args:
+            model: Name of the model
+        """
         client = self.get_client()
         logger.debug(f"Querying model information for {model}...")
         return client.show(model)
@@ -125,6 +137,7 @@ class OllamaManager:
     def detect_optimal_chunk_size(self, model: str) -> int:
         """
         Detect optimal chunk size by querying Ollama model parameters
+
         Args:
             model: Name of the embedding model
         Returns:
@@ -158,6 +171,7 @@ class OllamaManager:
     def select_models(self, available_models: List[str], show_formatted: bool = True) -> List[str]:
         """
         Let user select models interactively
+
         Args:
             available_models: List of available model names
             show_formatted: Whether to show formatted model names
@@ -281,11 +295,11 @@ class OllamaManager:
         if not args.models:
             # Let user select models interactively
             return self.select_models(available_models)
-        
+
         # Parse comma-separated list of models or indices
         requested_items = [item.strip() for item in args.models.split(',')]
         selected_models = []
-        
+
         for item in requested_items:
             # Check if item is a number (index)
             if item.isdigit():
@@ -295,20 +309,22 @@ class OllamaManager:
                 else:
                     logger.error(f"Invalid model index: {item} (must be between 1 and {len(available_models)})")
                     return None
-            # Otherwise treat as model name
             elif item in available_models:
+                selected_models.append(item)
+            elif self.ensure_model_available(item):
                 selected_models.append(item)
             else:
                 logger.error(f"Model not available: {item}")
                 logger.error("Use --list-models to see available models")
                 return None
-        
+
         logger.info(f"Using specified models: {', '.join(selected_models)}")
         return selected_models
 
     def ensure_model_available(self, model: str) -> bool:
         """
         Ensure a model is available, pull if needed
+
         Args:
             model: Model name to check/pull
         Returns:
@@ -324,22 +340,30 @@ class OllamaManager:
                 return True
                 
             # Model not available, try to pull it
-            logger.info(f"Model {model} not found locally, pulling from Ollama library...")
-            
+            logger.info(f"🤖 Model {model} not found locally, pulling from Ollama library...")
+
             try:
-                with tqdm(desc=f"Pulling model {model}", unit="MB", dynamic_ncols=True) as pbar:
-                    # Setup callback for progress updates
-                    def progress_callback(status):
-                        if 'completed' in status and 'total' in status:
-                            completed = int(status['completed'])
-                            total = int(status['total'])
-                            pbar.total = total
-                            pbar.n = completed
-                            pbar.refresh()
-                            
-                    # Pull the model with progress
-                    client.pull(model, stream=progress_callback)
-                    
+                with tqdm(desc=f"Downloading {model}", unit='B', unit_scale=True, unit_divisor=1024) as pbar:
+                    for response in client.pull(model, stream=True):
+                        if 'status' in response:
+                            status = response['status']
+                            if 'completed' in status:
+                                if 'completed' in response:
+                                    completed = int(response['completed'])
+                                    delta = completed - pbar.n
+                                    if delta > 0:
+                                        pbar.update(delta)
+                                else:
+                                    pbar.update(pbar.total - pbar.n)  # Fallback update if no detailed progress available
+                            elif 'pulling' in status:
+                                if 'total' in response and 'completed' in response:
+                                    total = int(response['total'])
+                                    completed = int(response['completed'])
+                                    if pbar.total != total:
+                                        pbar.total = total
+                                    pbar.n = completed
+                                    pbar.refresh()
+
                 logger.info(f"Successfully pulled model {model}")
                 return True
                 
@@ -353,7 +377,12 @@ class OllamaManager:
             return False
 
     def _log_connection_error(self, error):
-        """Log detailed Ollama connection error messages"""
+        """
+        Log detailed Ollama connection error messages
+
+        Args:
+            error: Exception
+        """
         logger.error("\nError: Could not connect to Ollama server")
         logger.error("Please ensure that:")
         logger.error("1. Ollama is installed (https://ollama.ai)")
@@ -362,9 +391,15 @@ class OllamaManager:
         logger.debug(f"Connection error: {str(error)}")
 
     def _extract_model_parameters(self, model_info: Any) -> Optional[str]:
-        """Extract and format parameter information from model info"""
-        parameters = 0
+        """
+        Extract and format parameter information from model info
 
+        Args:
+            model_info: Model information
+        Returns:
+            Formatted parameter information
+        """
+        parameters = 0
         # 1. Check in model_info.details
         if hasattr(model_info, 'details') and model_info.details:
             details = model_info.details
@@ -402,7 +437,14 @@ class OllamaManager:
         return ""
     
     def _extract_token_context(self, model_info: Any) -> Optional[str]:
-        """Extract token context window size from model info"""
+        """
+        Extract token context window size from model info
+
+        Args:
+            model_info: Model information
+        Returns:
+            Formatted token context window size
+        """
         # Check if model has parameter info with context window
         if not hasattr(model_info, 'parameters'):
             return None
@@ -461,7 +503,13 @@ class OllamaManager:
         return model_emoji
     
     def _extract_parent_model_info(self, model_info: Any, default_emoji: str = "🤖 ") -> str:
-        """Extract and format parent model information"""
+        """
+        Extract and format parent model information
+
+        Args:
+            model_info: Model information
+            default_emoji: Default emoji to use if no match
+        """
         # Try to get parent model from details
         if not (hasattr(model_info, 'details') and model_info.details and 
                 hasattr(model_info.details, 'parent_model') and model_info.details.parent_model):
@@ -487,7 +535,14 @@ class OllamaManager:
         return f"{parent_emoji}{parent_model.split(':')[0]}"
     
     def _build_formatted_string(self, model_name: str, model_emoji: str, param_str: str, ctx_str: str, parent_info: str = "") -> str:
-        """Build the final formatted string with all available information"""
+        """
+        Build the final formatted string with all available information
+
+        Args:
+            model_name: Name of the model
+            model_emoji: Emoji for the model
+            param_str: Formatted parameter information
+        """
         # Remove version tag (everything after colon) for display only
         display_name = model_name.split(':')[0]
         

@@ -3,27 +3,26 @@ import json
 from pathlib import Path
 import pickle
 from datetime import datetime
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any, Optional, Union
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 import re
 import ast
 
 # Import configuration
-from .config import EXTRACT_FUNCTIONS_ANALYSIS_TYPE, SUPPORTED_EXTENSIONS, EXTRACT_FUNCTIONS_MODEL, EXTRACT_FUNCTIONS_PROMPT
+from .config import EXTRACT_FUNCTIONS, SUPPORTED_EXTENSIONS, DEFAULT_ARGS
 
 # Import from other modules
 from .ollama_manager import OllamaManager
-from .tools import logger, chunk_content, parse_input, sanitize_model_name, open_file
+from .tools import logger, chunk_content, parse_input, sanitize_name, open_file
 
 class EmbeddingManager:
     def __init__(self, args):
         """
         Initialize the embedding manager
+
         Args:
-            embedding_model: Model to use for embeddings
-            extensions: List of file extensions to analyze (without dots)
-            chunk_size: Maximum size of text chunks for embedding
+            args: Arguments
         """
         try:
             self.ollama_manager = OllamaManager()
@@ -36,15 +35,18 @@ class EmbeddingManager:
             raise RuntimeError("Could not connect to Ollama server") from e
 
         self.input_path = args.input_path
-        self.clear_cache = args.clear_cache 
-        self.cache_days = args.cache_days
-        self.embedding_model = args.embed_model
+        self.clear_cache = args.clear_cache
+        self.cache_days = args.cache_days or DEFAULT_ARGS['CACHE_DAYS']
+        self.embedding_model = args.embed_model or DEFAULT_ARGS['EMBED_MODEL']
+        self.analyze_type = args.analyze_type or DEFAULT_ARGS['ANALYSIS_TYPE']
+        self.threshold = args.threshold or DEFAULT_ARGS['THRESHOLD']
+        self.analyze_by_function = self.analyze_type == 'function'
         self.code_base: Dict = {}
         self.cache_file = None  # Will be set when directory is provided
 
         # Normalize extensions to a list regardless of input format
         self.supported_extensions = self._normalize_extensions(args.extensions)
-        self.chunk_size = args.chunk_size
+        self.chunk_size = args.chunk_size or DEFAULT_ARGS['CHUNK_SIZE']
         self.setup()
 
     def _normalize_extensions(self, extensions_arg) -> List[str]:
@@ -73,16 +75,21 @@ class EmbeddingManager:
         return list(extensions_arg)
         
     def setup(self):
-        """Set up the embedding manager and cache file"""
+        """
+        Set up the embedding manager and cache file
+
+        Args:
+            args: Arguments
+        """
         # Setup cache file
         input_path = Path(self.input_path)
         if input_path.is_dir():
-            cache_dir = input_path / '.oasis_cache'
-        else:
             cache_dir = input_path.parent / '.oasis_cache'
+        else:
+            cache_dir = input_path / '.oasis_cache'
             
         cache_dir.mkdir(exist_ok=True)
-        self.cache_file = cache_dir / f"embeddings_{sanitize_model_name(self.embedding_model)}.pkl"
+        self.cache_file = cache_dir / f"{input_path}_{sanitize_name(self.embedding_model)}.cache"
         
         # Clear cache if requested
         if self.clear_cache:
@@ -102,12 +109,11 @@ class EmbeddingManager:
         """
         return file_path.suffix.lower()[1:] in self.supported_extensions
 
-    def index_code_files(self, files: List[Path], analyze_by_function: bool = False) -> None:
+    def index_code_files(self, files: List[Path]) -> None:
         """
         Generate embeddings for code files in parallel
         Args:
             files: List of file paths to analyze
-            analyze_by_function: Boolean indicating whether to analyze by function
         """
         try:
             # Calculate optimal number of processes
@@ -119,13 +125,10 @@ class EmbeddingManager:
                     input_path=str(file_path),
                     embed_model=self.embedding_model,
                     chunk_size=self.chunk_size,
-                    analyze_by_function=analyze_by_function,
-                    extensions=self.supported_extensions,
-                    clear_cache=self.clear_cache,
-                    cache_days=self.cache_days
+                    analyze_by_function=self.analyze_by_function,
                 )
                 for file_path in files 
-                if analyze_by_function or str(file_path) not in self.code_base
+                if self.analyze_by_function or str(file_path) not in self.code_base
             ]
             if not process_args:
                 return
@@ -133,7 +136,7 @@ class EmbeddingManager:
             # Process files in parallel with progress bar
             with Pool(processes=num_processes) as pool:
                 with tqdm(total=len(process_args), desc="Generating embeddings", leave=True) as pbar:
-                    for result in pool.imap_unordered(process_file_static, process_args):
+                    for result in pool.imap_unordered(process_file_parallel, process_args):
                         if result:
                             file_path, content, embedding, is_function_analysis, function_embeddings = result
 
@@ -168,7 +171,12 @@ class EmbeddingManager:
             logger.error(f"Error during parallel embedding generation: {str(e)}")
 
     def process_input_files(self, args):
-        """Process input files and update embeddings"""
+        """
+        Process input files and update embeddings
+
+        Args:
+            args: Arguments
+        """
         # Parse input files and generate embeddings
         files_to_analyze = parse_input(args.input_path)
         if not files_to_analyze:
@@ -189,15 +197,12 @@ class EmbeddingManager:
 
         logger.info(f"Found {len(valid_files)} files with supported extensions out of {len(files_to_analyze)} total files")
 
-        # Determine if we're analyzing by file or by function
-        analyze_by_function = args.analyze_type == EXTRACT_FUNCTIONS_ANALYSIS_TYPE
-
         # Generate embeddings only for new files or functions
         new_files = []
         for file_path in valid_files:
             file_key = str(file_path)
 
-            if analyze_by_function:
+            if self.analyze_by_function:
                 # For function analysis, we need to process the file to extract functions
                 if file_key not in self.code_base or 'functions' not in self.code_base[file_key]:
                     new_files.append(file_path)
@@ -210,53 +215,16 @@ class EmbeddingManager:
 
         if new_files:
             logger.info(f"Generating embeddings for {len(new_files)} new files")
-            self.index_code_files(new_files, analyze_by_function=analyze_by_function)
+            self.index_code_files(new_files)
         else:
             logger.debug("All files found in cache with valid structure")
 
         return valid_files
 
-    def generate_content_embedding(self, text_content, args):
-        """Generate content embedding
-        Args:
-            text_content: Content to embed
-            args: Arguments (input_path, embed_model, chunk_size)
-        Returns:
-            Embedding
-        """
-        # Create a new Ollama client for this process
-        client = self.ollama_client
-
-        chunks = chunk_content(text_content, args.chunk_size)
-
-        if len(chunks) == 1:
-            # For small content, use entire content
-            response = client.embeddings(
-                model=args.embed_model,
-                prompt=chunks[0]
-            )
-            if response and 'embedding' in response:
-                return response['embedding']
-            logger.debug(f"Invalid response for chunk {text_content[:24]}... of {args.input_path}")
-        else:
-            # For large content, keep chunk embeddings separately
-            chunk_embeddings = []
-            for chunk in chunks:
-                response = client.embeddings(
-                    model=args.embed_model,
-                    prompt=chunk
-                )
-                if response and 'embedding' in response:
-                    chunk_embeddings.append(response['embedding'])
-
-            if chunk_embeddings:
-                return chunk_embeddings
-
-        return None
-
     def normalize_cache_entry(self, entry: Any) -> Dict:
         """
         Normalize a cache entry to ensure it has the correct structure
+
         Args:
             entry: Cache entry to normalize
         Returns:
@@ -286,7 +254,12 @@ class EmbeddingManager:
         return default
 
     def save_cache(self):
-        """Save embeddings to cache"""
+        """
+        Save embeddings to cache
+
+        Args:
+            None
+        """
         if not self.cache_file:
             logger.warning("Cache file path not set, cannot save cache")
             return
@@ -303,7 +276,12 @@ class EmbeddingManager:
             logger.error(f"Error saving cache: {str(e)}")
 
     def load_cache(self) -> None:
-        """Load embeddings from cache file"""
+        """
+        Load embeddings from cache file
+
+        Args:
+            None
+        """
         if self.cache_file is None:
             logger.warning("Cache file path not set, cannot load cache")
             self.code_base = {}
@@ -330,7 +308,7 @@ class EmbeddingManager:
                             'timestamp' in v 
                             for v in cached_data.values())):
                         self.code_base = cached_data
-                        logger.debug(f"Loaded {len(self.code_base)} entries from cache")
+                        logger.info(f"Loaded {len(self.code_base)} entries from cache")
                         
                         # Filter code_base by supported extensions
                         self.filter_code_base_by_extensions()
@@ -349,7 +327,12 @@ class EmbeddingManager:
             self.save_cache()
 
     def clear_embeddings_cache(self) -> None:
-        """Clear embeddings cache file and memory"""
+        """
+        Clear embeddings cache file and memory
+
+        Args:
+            None
+        """
         try:
             if self.cache_file is None:
                 logger.warning("Cache file path not set, cannot clear cache file")
@@ -363,7 +346,12 @@ class EmbeddingManager:
             logger.error(f"Error clearing cache: {str(e)}")
 
     def get_embeddings_info(self) -> dict:
-        """Get information about cached embeddings"""
+        """
+        Get information about cached embeddings
+
+        Returns:
+            Dictionary containing information about cached embeddings
+        """
         info = {
             'total_files': len(self.code_base),
             'files': {}
@@ -381,6 +369,7 @@ class EmbeddingManager:
     def is_cache_valid(self, max_age_days: int = 7) -> bool:
         """
         Check if cache file exists and is not too old
+
         Args:
             max_age_days: Maximum age of cache in days
         Returns:
@@ -406,6 +395,9 @@ class EmbeddingManager:
     def filter_code_base_by_extensions(self) -> None:
         """
         Filter code_base to only include files with supported extensions
+
+        Args:
+            None
         """
         if not self.code_base:
             return
@@ -475,63 +467,132 @@ class EmbeddingManager:
         return functions
 
     def extract_functions_with_regex(self, file_path: str, content: str, lang: str) -> Dict[str, str]:
-        """Extract functions using regex patterns based on language"""
+        """
+        Extract functions using regex patterns based on language
+        
+        Args:
+            file_path: Path to the source file
+            content: File content
+            lang: Programming language extension
+            
+        Returns:
+            Dictionary mapping function identifiers to function content
+        """
         functions = {}
         
-        pattern = self.language_patterns(lang)
-        logger.info(f"Extracting functions from {file_path} with language: {lang} and pattern: {pattern}")
-        
-        # Find all matches in the content
-        matches = re.finditer(pattern, content, re.DOTALL)
-        last_end = 0
-        logger.info(f"Matches found: {len(matches)}")
-
-        for match in matches:
-            func_start = match.start()
-            func_name = match.group(1) or "anonymous_function"
+        try:
+            # Get appropriate pattern for the language
+            pattern = self.language_patterns(lang)
             
-            # Skip if this function starts before the end of the last processed function
-            if func_start < last_end:
-                continue
+            # Find all function declarations
+            matches = list(re.finditer(pattern, content, re.DOTALL))
+            
+            # Process each match
+            for i, match in enumerate(matches):
+                func_start = match.start()
+                func_name = next((g for g in match.groups() if g), f"anonymous_function_{i}")
                 
-            # Find the function body
-            if lang in ['py', 'sh']:
-                # For Python and Shell, specific logic here
-                pass
-            else:
-                # For C-like languages, count braces to find matching closing brace
-                brace_level = 0
-                func_end = func_start
-                in_string = False
-                string_char = None
-                
-                for i in range(func_start, len(content)):
-                    c = content[i]
-                    
-                    # Handle strings to avoid counting braces inside strings
-                    if not in_string and (c == '"' or c == "'"):
-                        in_string = True
-                        string_char = c
-                    elif in_string and c == string_char:
-                        in_string = False
-                    
-                    if not in_string:
-                        if c == '{':
-                            brace_level += 1
-                        elif c == '}':
-                            brace_level -= 1
-                            if brace_level == 0:
-                                func_end = i + 1
-                                break
+                # Determine function end boundary
+                func_end = self._find_function_end(content, func_start, lang)
                 
                 if func_end > func_start:
-                    functions[f"{file_path}::{func_name}"] = content[func_start:func_end]
-                    last_end = func_end
+                    func_id = f"{file_path}::{func_name}"
+                    functions[func_id] = content[func_start:func_end].strip()
         
+        except Exception as e:
+            logger.warning(f"Error extracting functions from {file_path}: {e}")
+            # Fallback - use whole file
+            functions[file_path] = content
+            
         return functions
+        
+    def _find_function_end(self, content: str, start_pos: int, lang: str) -> int:
+        """
+        Find the end position of a function based on language syntax
+        
+        Args:
+            content: Source code content
+            start_pos: Starting position of the function
+            lang: Programming language extension
+            
+        Returns:
+            End position of the function
+        """
+        # Default to end of content
+        if start_pos >= len(content):
+            return len(content)
+
+        # Delegate to appropriate handler based on language type
+        if lang in {'js', 'ts', 'java', 'c', 'cpp', 'cs', 'php', 'go'}:
+            return self._find_brace_function_end(content, start_pos)
+        elif lang in {'py', 'rb'}:
+            return self._find_indentation_function_end(content, start_pos)
+
+        # Fallback for unsupported languages
+        return len(content)
+        
+    def _find_brace_function_end(self, content: str, start_pos: int) -> int:
+        """Find end position for languages using braces (C-family, etc.)"""
+        brace_level = 0
+        in_string = False
+        string_char = None
+        
+        for i in range(start_pos, len(content)):
+            char = content[i]
+            
+            # Handle string boundaries
+            if char in ['"', "'"] and (i == 0 or content[i-1] != '\\'):
+                if not in_string:
+                    in_string, string_char = True, char
+                elif char == string_char:
+                    in_string = False
+            
+            # Only count braces outside of strings
+            if not in_string:
+                if char == '{':
+                    brace_level += 1
+                elif char == '}':
+                    brace_level -= 1
+                    if brace_level == 0 and i > start_pos:
+                        return i + 1
+                        
+        return len(content)
+        
+    def _find_indentation_function_end(self, content: str, start_pos: int) -> int:
+        """Find end position for languages using indentation (Python, Ruby)"""
+        lines = content[start_pos:].split('\n')
+        if len(lines) <= 1:
+            return len(content)
+            
+        # Find indentation of first non-empty line in function body
+        body_indent = None
+        
+        for i, line in enumerate(lines[1:], 1):
+            stripped = line.lstrip()
+            # Skip empty lines and comments
+            if not stripped or stripped.startswith('#'):
+                continue
+                
+            # Calculate indentation of this line
+            current_indent = len(line) - len(stripped)
+            
+            if body_indent is None:
+                body_indent = current_indent
+            elif current_indent <= body_indent and i > 1:
+                # Found a line with same or less indentation - end of function
+                line_pos = start_pos + sum(len(li) + 1 for li in lines[:i])
+                return min(line_pos, len(content))
+        
+        return len(content)
 
     def extract_shell_functions(self, file_path: str, content: str) -> Dict[str, str]:
-        """Extract functions from shell scripts"""
+        """
+        Extract functions from shell scripts
+
+        Args:
+            file_path: Path to the source file
+            content: File content
+        """
         functions = {}
         
         # Simple pattern for shell functions
@@ -563,7 +624,12 @@ class EmbeddingManager:
         return functions 
 
     def language_patterns(self, lang: str) -> str:
-        """Return the regex pattern for a given language"""
+        """
+        Return the regex pattern for a given language
+
+        Args:
+            lang: Programming language
+        """
         # Define regex patterns for different languages
         patterns = {
             # Python - fonctions et méthodes
@@ -658,7 +724,7 @@ class EmbeddingManager:
         extension = file_path.split('.')[-1].lower()
 
         # Use a small, fast model for this task
-        extraction_model = EXTRACT_FUNCTIONS_MODEL
+        extraction_model = EXTRACT_FUNCTIONS['MODEL']
         if not self.ollama_manager.ensure_model_available(extraction_model):
             return {}
         
@@ -669,7 +735,7 @@ class EmbeddingManager:
         # Create prompt
         prompt = f"""
             Extract all functions and methods from the following {extension} code.
-            {EXTRACT_FUNCTIONS_PROMPT}
+            {EXTRACT_FUNCTIONS['PROMPT']}
             Here is the code:
             ```{extension}
             {normalized_content}
@@ -705,9 +771,10 @@ class EmbeddingManager:
                     name = func.get("name", "anonymous")
                     start = func.get("start")
                     end = func.get("end")
-                    body = func.get("body")
-                    parameters = func.get("parameters")
-                    return_type = func.get("return_type")
+                    # TODO: add body, parameters and return_type
+                    # body = func.get("body")
+                    # parameters = func.get("parameters")
+                    # return_type = func.get("return_type")
 
                     if start is not None and end is not None and start < end and end <= len(normalized_content):
                         # Extract from the normalized content that was sent to the LLM
@@ -736,46 +803,202 @@ class EmbeddingManager:
 
         return {}
 
-def process_file_static(args: tuple) -> Tuple[str, str, List[float], bool, Optional[Dict[str, Tuple[str, List[float]]]]]:
+    def get_vulnerability_embedding(self, vulnerability: Union[str, Dict]) -> List[float]:
+        """
+        Get embedding vector for a vulnerability type
+
+        Args:
+            vulnerability: Vulnerability type to get embedding for (string or dict)
+            
+        Returns:
+            Embedding vector as list of floats
+        """
+        try:
+            # Build the prompt with our utility method
+            prompt = build_vulnerability_embedding_prompt(vulnerability)
+            
+            response = self.ollama_client.embeddings(model=self.embedding_model, prompt=prompt)
+            return response.get('embedding') if response and 'embedding' in response else None
+        except Exception as e:
+            # Log error with appropriate vulnerability information
+            vuln_name = vulnerability['name'] if isinstance(vulnerability, dict) else vulnerability
+            logger.error(f"Failed to get embedding for {vuln_name}: {str(e)}")
+            return None
+
+def process_file_parallel(args: tuple) -> Tuple[str, str, List[float], bool, Optional[Dict[str, Tuple[str, List[float]]]]]:
     """
-    Static method to process a file in a separate process
+    Process a file in a separate process without creating a full EmbeddingManager
+    
     Args:
-        args: Tuple of (input_path, embedding_model, chunk_size, analyze_by_function, extensions, clear_cache, cache_days)
+        args: Arguments for processing
+        
     Returns:
-        Tuple of (input_path, content, embedding, analyze_by_function, function_embeddings)
+        Tuple of (file_path, content, embedding, is_function_analysis, function_embeddings)
     """
-
     try:
-        # Initialize embedding manager
-        embedding_manager = EmbeddingManager(args)
-
         # Read file content
         if not (content := open_file(args.input_path)):
             return None
-
-        # Helper function to generate embeddings for text content
+            
+        # Extract embeddings based on analysis type
         if args.analyze_by_function:
-            # Extract functions from file
-            functions = embedding_manager.parse_functions_from_file(args.input_path, content)
-
-            # Generate embeddings for each function
+            # Extract functions
+            functions = extract_functions_from_file(args.input_path, content)
+            
+            # Generate embeddings for functions
             function_embeddings = {}
             for func_id, func_content in functions.items():
-                func_embedding = embedding_manager.generate_content_embedding(func_content, args)
+                func_embedding = generate_content_embedding(
+                    func_content, 
+                    args.embed_model, 
+                    args.chunk_size
+                )
                 if func_embedding is not None:
                     function_embeddings[func_id] = (func_content, func_embedding)
-
-            # Also generate embedding for entire file for comparison
-            file_embedding = embedding_manager.generate_content_embedding(content, args)
+                    
+            # Also generate embedding for entire file
+            file_embedding = generate_content_embedding(
+                content, 
+                args.embed_model, 
+                args.chunk_size
+            )
             if file_embedding is not None:
                 return args.input_path, content, file_embedding, True, function_embeddings
         else:
-            # Standard file analysis (no function extraction)
-            file_embedding = embedding_manager.generate_content_embedding(content, args)
+            # Standard file analysis
+            file_embedding = generate_content_embedding(
+                content, 
+                args.embed_model, 
+                args.chunk_size
+            )
             if file_embedding is not None:
                 return args.input_path, content, file_embedding, False, None
-
+                
     except Exception as e:
         logger.error(f"Error processing {args.input_path}: {str(e)}")
-
+        
     return None
+
+def build_vulnerability_embedding_prompt(vulnerability: Union[str, Dict]) -> str:
+    """
+    Build a rich prompt for vulnerability embedding
+    
+    Args:
+        vulnerability: Vulnerability type (string name or complete dict)
+        
+    Returns:
+        Rich prompt string for embedding
+    """
+    # Handle both string and dictionary inputs
+    if isinstance(vulnerability, dict):
+        return f"""
+        Vulnerability: {vulnerability['name']}
+        
+        Description: 
+        {vulnerability['description']}
+        
+        Common patterns:
+        {' | '.join(vulnerability['patterns'])}
+        
+        Security impact:
+        {vulnerability['impact']}
+        
+        Mitigation strategies:
+        {vulnerability['mitigation']}
+        
+        Analyze code to identify this vulnerability.
+        """
+    else:
+        # Use the string directly
+        return str(vulnerability)
+
+def generate_content_embedding(content: str, model: str, chunk_size: int = DEFAULT_ARGS['CHUNK_SIZE']) -> Union[List[float], List[List[float]]]:
+    """
+    Generate embedding for content
+    
+    Args:
+        content: Content to embed
+        model: Embedding model name
+        chunk_size: Maximum size of text chunks for embedding
+        
+    Returns:
+        Embedding vector or list of chunk vectors
+    """
+    try:
+        client = OllamaManager().get_client()
+
+        # For large content, chunk and get embeddings for each chunk
+        if len(content) > chunk_size:
+            chunks = chunk_content(content, chunk_size)
+            chunk_embeddings = []
+            
+            for chunk in chunks:
+                response = client.embeddings(model=model, prompt=chunk)
+                if response and 'embedding' in response:
+                    chunk_embeddings.append(response['embedding'])
+                    
+            return chunk_embeddings if chunk_embeddings else None
+        else:
+            # For small content, get single embedding
+            response = client.embeddings(model=model, prompt=content)
+            return response.get('embedding') if response and 'embedding' in response else None
+            
+    except Exception as e:
+        logger.error(f"Error generating embedding: {str(e)}")
+        return None
+
+def extract_functions_from_file(file_path: str, content: str, extraction_model: str = EXTRACT_FUNCTIONS['MODEL']) -> Dict[str, str]:
+    """
+    Extract functions from file content
+    
+    Args:
+        file_path: Path to source file
+        content: File content
+        extraction_model: Model to use for extraction
+        
+    Returns:
+        Dictionary mapping function IDs to function content
+    """
+    # Determine file extension
+    extension = file_path.split('.')[-1].lower()
+    
+    # Make sure we're using a normalized version of the content
+    normalized_content = content.replace('\r\n', '\n')
+    
+    try:
+        # Get client 
+        client = OllamaManager().get_client()
+        
+        # Ensure model is available
+        ollama_manager = OllamaManager()
+        if not ollama_manager.ensure_model_available(extraction_model):
+            return {}
+            
+        # Create prompt
+        prompt = f"""
+            Extract all functions and methods from the following {extension} code.
+            {EXTRACT_FUNCTIONS['PROMPT']}
+            Here is the code:
+            ```{extension}
+            {normalized_content}
+            ```
+            """
+            
+        # Generate response
+        response = client.generate(
+            model=extraction_model,
+            prompt=prompt,
+        )
+        
+        if not response or not response.response:
+            logger.warning(f"No valid response from LLM for function extraction in {file_path}")
+            return {}
+            
+        # Process response and extract functions
+        # ... (code from extract_functions_with_llm that parses the JSON response)
+        
+    except Exception as e:
+        logger.error(f"Error extracting functions from {file_path}: {str(e)}")
+        # Fallback to regex approach if needed
+        
+    return {}
