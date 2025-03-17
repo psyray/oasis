@@ -132,6 +132,7 @@ oasis --input-path [path_to_analyze] \
 - `--clear-cache` `-cc`: Clear embeddings cache before starting
 - `--audit` `-a`: Run embedding distribution analysis
 - `--chunk-size` `-ch`: Maximum chunk size for splitting content (default: auto-detect)
+- `--ollama-url` `-ol`: Ollama URL (default: http://localhost:11434)
 
 ### 🛡️ Supported Vulnerability Types
 

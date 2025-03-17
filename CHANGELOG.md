@@ -1,8 +1,8 @@
 # Changelog
 
-## [0.3.0] - 2025-03-15
+## [0.3.0] - 2025-03-17
 
-Codebase refactoring and improvements.
+Complete codebase refactoring and improvements.
 
 ### Added
 - Added support for new vulnerability types (RCE, SSRF, XXE, Path Traversal, IDOR, CSRF)
@@ -10,8 +10,11 @@ Codebase refactoring and improvements.
 - Added HTML template and CSS styling for better report readability
 - Added better emoji support in logging for better readability
 - Added more comprehensive test files with vulnerability examples
+- Added support for custom Ollama URL
 
 ### Changed
+- Improved codebase organization and readability
+- Improved embedding and analysis process
 - Improved cache management with dedicated .oasis_cache/ directory
 - Enhanced logging system with custom EmojiFormatter
 - Improved report generation with better styling and formatting
@@ -21,14 +24,26 @@ Codebase refactoring and improvements.
 ### Fixed
 - Fixed embeddings cache storage and validation
 - Fixed report rendering with proper page breaks
+- Fixed issue with model installation progress tracking
+- Fixed issue with cache saving during interruption
+- Fixed issue with model availability check
+- Fixed issue with progress bar updates
+- Fixed issue with log message formatting
 
 ### Technical
 - Added configuration constants for better maintainability
 - Added Jinja2 templating for report generation
 - Implemented normalized heading levels in reports
+- Improved error handling and logging
 
 ### Documentation
 - Enhanced code documentation with proper docstrings
+- Added more comprehensive README with examples and usage instructions
+- Improved command line interface documentation
+- Added more detailed changelog
+- Updated project structure documentation
+- Added more comprehensive code comments
+- Improved code readability and maintainability
 
 ## [0.2.0] - 2025-01-29
 
