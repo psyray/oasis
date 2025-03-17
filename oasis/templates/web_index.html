@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OASIS Reports</title>
+</head>
+<body>
+    <h1>Available Reports</h1>
+    <ul>
+        {% for report in reports %}
+        <li>
+            <a href="{{ url_for('serve_report', filename=report.path) }}">
+                {{ report.model }} - {{ report.format }} - {{ report.path.name }}
+            </a>
+        </li>
+        {% endfor %}
+    </ul>
+</body>
+</html>
+

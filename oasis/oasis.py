@@ -6,15 +6,17 @@ from datetime import datetime
 import traceback
 from typing import Union
 
+
 # Import from configuration
 from .config import REPORT, DEFAULT_ARGS
 
 # Import from other modules
-from .tools import setup_logging, logger, display_logo, get_vulnerability_mapping
+from .tools import generate_timestamp, setup_logging, logger, display_logo, get_vulnerability_mapping
 from .ollama_manager import OllamaManager
 from .embedding import EmbeddingManager
 from .analyze import SecurityAnalyzer, EmbeddingAnalyzer
 from .report import Report
+from .web import WebServer
 
 class OasisScanner:
     """Main class for OASIS - Ollama Automated Security Intelligence Scanner"""
@@ -77,6 +79,8 @@ class OasisScanner:
                            help=f'Analyze code by entire file or by individual functions [EXPERIMENTAL] (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
         parser.add_argument('-ol', '--ollama-url', dest='ollama_url', type=str, 
                            help='Ollama URL (default: http://localhost:11434)')
+        parser.add_argument('-w', '--web', action='store_true',
+                           help='Serve reports via a web interface')
         return parser
 
     def get_vulnerability_help(self) -> str:
@@ -91,14 +95,15 @@ class OasisScanner:
         vuln_list.extend(
             f"{tag:<8} - {vuln['name']}" for tag, vuln in vuln_map.items()
         )
+        vuln_list = [f"{tag:<8} - {vuln['name']}" for tag, vuln in vuln_map.items()]
         return (
-            "Vulnerability types to check (comma-separated).\n"
-            + "Available tags:\n"
+            "Vulnerability types to check (comma-separated).\nAvailable tags:\n"
             + "\n".join(f"  {v}" for v in vuln_list)
             + "\n\nUse 'all' to check all vulnerabilities (default)"
         )
 
     def run_analysis_mode(self, selected_models, vuln_mapping):
+        """Run security analysis on selected models."""
         """
         Run security analysis on selected models
 
@@ -111,9 +116,7 @@ class OasisScanner:
         if invalid_tags:
             return False
 
-        # Create timestamp for this run
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logger.info(f"\nStarting security analysis at {timestamp}")
+        logger.info(f"\nStarting security analysis at {generate_timestamp()}")
 
         # Analyze with each selected model
         for model in selected_models:
@@ -131,11 +134,12 @@ class OasisScanner:
         # Report generation
         self.report.report_generated(report_type='Vulnerability', report_structure=True)
 
-        logger.info("\nAnalysis completed successfully!")
+        logger.info(f"\nAnalysis completed successfully at {generate_timestamp()}")
 
         return True
 
     def handle_audit_mode(self, vuln_mapping):
+        """Handle audit mode - analyze embeddings distribution only."""
         """
         Handle audit mode - analyze embeddings distribution only
 
@@ -166,7 +170,7 @@ class OasisScanner:
         # Report generation
         self.report.report_generated(report_type='Audit', report_structure=True)
 
-        logger.info('Audit completed successfully')
+        logger.info(f'Audit completed successfully at {generate_timestamp()}')
 
         return True
 
@@ -191,10 +195,15 @@ class OasisScanner:
             if not self._init_ollama(self.args.ollama_url):
                 return 1
 
-            # Process input files and initialize report
-            return self._execute_requested_mode() if self._init_processing() else 1
+            if not self._init_processing():
+                return 1
+            if self.args.web:
+                WebServer(self.report).run()
+                return 0  # Exit after serving the web interface
+            else:
+                return self._execute_requested_mode()
         except KeyboardInterrupt:
-            logger.info("\nProcess interrupted by user. Exiting...")
+            logger.info(f"\nProcess interrupted by user at {generate_timestamp()}. Exiting...")
             self._save_cache_on_exit()
             return 1
         except Exception as e:
@@ -365,7 +374,7 @@ class OasisScanner:
         if self.args.silent:
             logs_dir = Path(self.args.input_path).resolve().parent / REPORT['OUTPUT_DIR'] / "logs" if self.args.input_path else Path(REPORT['OUTPUT_DIR']) / "logs"
             logs_dir.mkdir(parents=True, exist_ok=True)
-            log_file = logs_dir / f"oasis_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+            log_file = logs_dir / f"oasis_errors_{generate_timestamp(for_file=True)}.log"
         else:
             log_file = None
             

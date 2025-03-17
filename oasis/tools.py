@@ -1,3 +1,4 @@
+from datetime import datetime
 import logging
 from pathlib import Path
 import numpy as np
@@ -369,3 +370,12 @@ def get_vulnerability_mapping() -> Dict[str, Dict[str, any]]:
         Vulnerability mapping
     """
     return VULNERABILITY_MAPPING
+
+def generate_timestamp(for_file: bool = False) -> str:
+    """
+    Generate a timestamp in the format YYYY-MM-DD HH:MM:SS
+    """
+    if for_file:
+        return datetime.now().strftime("%Y%m%d_%H%M%S")
+    else:
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OASIS - Tableau de bord des rapports de sécurité</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+</head>
+<body>
+    <header class="header">
+        <div class="logo-container">
+            <div class="logo-circle">
+                <img src="{{ url_for('static', filename='img/oasis-logo.jpg') }}" alt="OASIS Logo" class="oasis-logo-img">
+            </div>
+            <h1 class="title">OASIS Security Dashboard</h1>
+        </div>
+    </header>
+    
+    <div class="main-container">
+        <aside class="sidebar">
+            <div class="filter-section">
+                <h2 class="filter-title">Filtrer par modèle</h2>
+                <div class="filter-options" id="model-filters">
+                    <div class="loading"><div class="loading-spinner"></div></div>
+                </div>
+            </div>
+            
+            <div class="filter-section">
+                <h2 class="filter-title">Filtrer par vulnérabilité</h2>
+                <div class="filter-options" id="vulnerability-filters">
+                    <div class="loading"><div class="loading-spinner"></div></div>
+                </div>
+            </div>
+            
+            <div class="filter-section">
+                <h2 class="filter-title">Filtrer par format</h2>
+                <div class="filter-options" id="format-filters">
+                    <div class="loading"><div class="loading-spinner"></div></div>
+                </div>
+            </div>
+            
+            <button id="filter-clear" class="btn btn-secondary" style="width: 100%;">Effacer tous les filtres</button>
+        </aside>
+        
+        <main class="content">
+            <div id="stats-container">
+                <div class="loading"><div class="loading-spinner"></div></div>
+            </div>
+            
+            <div class="view-selector">
+                <div id="view-list" class="view-tab active">Liste</div>
+                <div id="view-tree-model" class="view-tab">Arborescence par modèle</div>
+                <div id="view-tree-vuln" class="view-tab">Arborescence par vulnérabilité</div>
+                <div id="view-tree-format" class="view-tab">Arborescence par format</div>
+            </div>
+            
+            <div id="reports-container">
+                <div class="loading"><div class="loading-spinner"></div></div>
+            </div>
+        </main>
+    </div>
+    
+    <div id="report-modal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="report-modal-title" class="modal-title">Aperçu du rapport</h2>
+                <button class="modal-close" onclick="closeReportModal()">&times;</button>
+            </div>
+            <div id="report-modal-content" class="modal-body">
+                <div class="loading"><div class="loading-spinner"></div></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeReportModal()">Fermer</button>
+                <button class="btn btn-primary" onclick="downloadReport()">Télécharger</button>
+            </div>
+        </div>
+    </div>
+    
+    <footer class="footer">
+        <p>OASIS - Ollama Automated Security Intelligence Scanner | Version 0.3.0</p>
+    </footer>
+    
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html> 

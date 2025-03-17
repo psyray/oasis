@@ -54,15 +54,22 @@ body {
 }
 
 .logo-circle {
-    width: 60px;
-    height: 60px;
+    width: 80px;
+    height: 80px;
     border-radius: 50%;
-    background-color: var(--dark-blue);
+    background-color: #e1dcc8;
     display: flex;
     justify-content: center;
     align-items: center;
     position: relative;
     overflow: hidden;
+} 
+
+.oasis-logo-img {
+    width: 60px;
+    height: 60px;
+    object-fit: contain;
+    margin-top: 4px;
 }
 
 .oasis-logo {
@@ -220,22 +227,3 @@ tr:nth-child(even) {
     margin: 1em 0;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
-
-.oasis-logo-img {
-    width: 60px;
-    height: 60px;
-    object-fit: contain;
-    margin-top: 4px;
-}
-
-.logo-circle {
-    width: 80px;
-    height: 80px;
-    border-radius: 50%;
-    background-color: #e1dcc8;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    position: relative;
-    overflow: hidden;
-} 
