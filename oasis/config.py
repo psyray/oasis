@@ -93,7 +93,7 @@ MAX_CHUNK_SIZE = 2048
 EMBEDDING_THRESHOLDS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
 # Ollama API endpoint
-OLLAMA_API_URL = "http://localhost:11434"
+OLLAMA_URL = "http://localhost:11434"
 
 # Models configuration
 EXCLUDED_MODELS = [

@@ -75,6 +75,8 @@ class OasisScanner:
                            help=f'Maximum size of text chunks for embedding (default: {DEFAULT_ARGS["CHUNK_SIZE"]})')
         parser.add_argument('-at', '--analyze_type', choices=['file', 'function'], default=DEFAULT_ARGS['ANALYSIS_TYPE'],
                            help=f'Analyze code by entire file or by individual functions [EXPERIMENTAL] (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
+        parser.add_argument('-ol', '--ollama-url', dest='ollama_url', type=str, 
+                           help='Ollama URL (default: http://localhost:11434)')
         return parser
 
     def get_vulnerability_help(self) -> str:
@@ -121,7 +123,7 @@ class OasisScanner:
             self.report.current_model = model
 
             # Create security analyzer for this model
-            analyzer = SecurityAnalyzer(model, self.embedding_manager)
+            analyzer = SecurityAnalyzer(model, self.embedding_manager, self.ollama_manager)
             
             # Process analysis
             analyzer.process_analysis_with_model(vulnerabilities, self.args, self.report)
@@ -146,7 +148,7 @@ class OasisScanner:
             return False
 
         # Create analyzer
-        embedding_manager = EmbeddingAnalyzer(self.embedding_manager)
+        embedding_manager = EmbeddingAnalyzer(self.embedding_manager, self.ollama_manager)
 
         # Analyze all vulnerabilities
         analyzer_results = embedding_manager.analyze_all_vulnerabilities(vulnerabilities)
@@ -216,7 +218,7 @@ class OasisScanner:
             self.args = parser.parse_args()
         else:
             self.args = args
-            
+
         # Handle special cases that should terminate early
         if self.args.list_models:
             # Setup minimal logging without file creation
@@ -244,7 +246,7 @@ class OasisScanner:
         display_logo()
         return True
 
-    def _init_ollama(self):
+    def _init_ollama(self, check_embeddings=True):
         """
         Initialize Ollama and check connections
 
@@ -252,11 +254,14 @@ class OasisScanner:
             True if Ollama is running and connected, False otherwise
         """
         # Initialize Ollama manager
-        self.ollama_manager = OllamaManager()
+        self.ollama_manager = OllamaManager(self.args.ollama_url)
 
         if self.ollama_manager.get_client() is None:
             logger.error("Ollama is not running. Please start Ollama and try again.")
             return False
+
+        if not check_embeddings:
+            return True
 
         # Auto-detect chunk size if not specified
         if self.args.chunk_size is None:
@@ -281,7 +286,7 @@ class OasisScanner:
         self.report = Report(self.args.input_path, self.args.output_format)
 
         # Initialize embedding manager
-        self.embedding_manager = EmbeddingManager(self.args)
+        self.embedding_manager = EmbeddingManager(self.args, self.ollama_manager)
 
         return self.embedding_manager.process_input_files(self.args)
 
@@ -377,12 +382,7 @@ class OasisScanner:
             False: Error occurred, program should exit with error code
         """
         try:
-            # Initialize Ollama manager
-            self.ollama_manager = OllamaManager()
-            
-            if self.ollama_manager.get_client() is None:
-                logger.error("Ollama is not running. Please start Ollama and try again.")
-                return False
+            self._init_ollama(check_embeddings=False)
                 
             logger.info("🔎 Querying available models from Ollama...")
             

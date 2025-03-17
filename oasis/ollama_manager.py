@@ -5,7 +5,7 @@ from tqdm import tqdm
 import logging
 
 # Import from configuration
-from .config import MODEL_EMOJIS,OLLAMA_API_URL, EXCLUDED_MODELS, DEFAULT_MODELS, MAX_CHUNK_SIZE
+from .config import MODEL_EMOJIS,OLLAMA_URL, EXCLUDED_MODELS, DEFAULT_MODELS, MAX_CHUNK_SIZE
 
 # Import from other modules
 from .tools import logger
@@ -18,13 +18,14 @@ class OllamaManager:
         api_url: URL for Ollama API
     """
     
-    def __init__(self, api_url: str = OLLAMA_API_URL):
+    def __init__(self, api_url: str = OLLAMA_URL):
         """
         Initialize the Ollama manager
         
         Args:
             api_url: URL for Ollama API
         """
+        self.client = None
         self.api_url = api_url
         self.excluded_models = EXCLUDED_MODELS
         self.default_models = DEFAULT_MODELS
@@ -39,16 +40,16 @@ class OllamaManager:
         Raises:
             ConnectionError: If Ollama server is not accessible
         """
-        try:
-            client = ollama.Client()
-            # Use the configured API URL
-            client.BASE_URL = self.api_url
-            # Try to list models to verify connection
-            client.list()
-            return client
-        except Exception as e:
-            self._log_connection_error(e)
-            raise ConnectionError(f"Cannot connect to Ollama server: {str(e)}") from e
+        if not self.client:
+            try:
+                self.client = ollama.Client(self.api_url)
+                # Try to list models to verify connection
+                self.client.list()
+                return self.client
+            except Exception as e:
+                self._log_connection_error(e)
+                raise ConnectionError(f"Cannot connect to Ollama server: {str(e)}") from e
+        return self.client
     
     def check_connection(self) -> bool:
         """
@@ -384,10 +385,10 @@ class OllamaManager:
             error: Exception
         """
         logger.error("\nError: Could not connect to Ollama server")
-        logger.error("Please ensure that:")
-        logger.error("1. Ollama is installed (https://ollama.ai)")
-        logger.error("2. Ollama server is running (usually with 'ollama serve')")
-        logger.error("3. Ollama is accessible (default: http://localhost:11434)")
+        logger.info("Please ensure that:")
+        logger.info("1. Ollama is installed (https://ollama.ai)")
+        logger.info("2. Ollama server is running (usually with 'ollama serve')")
+        logger.info(f"3. Ollama is accessible ({self.api_url})")
         logger.debug(f"Connection error: {str(error)}")
 
     def _extract_model_parameters(self, model_info: Any) -> Optional[str]:
