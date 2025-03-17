@@ -1,20 +1,26 @@
 <p align="center">
   <a href="https://github.com/psyray/oasis/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/psyray/oasis" alt="License">
+    <img src="https://img.shields.io/github/license/psyray/oasis?style=for-the-badge&color=red&logo=gnu" alt="License">
   </a>
   <a href="https://github.com/psyray/oasis/releases">
-    <img src="https://img.shields.io/github/v/release/psyray/oasis" alt="Release">
+    <img src="https://img.shields.io/github/v/release/psyray/oasis?style=for-the-badge&logo=github&color=C5A776" alt="Release">
   </a>
   <a href="https://python.org">
-    <img src="https://img.shields.io/badge/python-3.9+-blue.svg" alt="Python">
+    <img src="https://img.shields.io/badge/python-3.9+-blue.svg?style=for-the-badge&color=2C7CBB&logo=python&logoColor=white" alt="Python">
   </a>
 </p>
+
+<div align="center">
+  <a href="https://discord.gg/dW3sFwTtN3">
+    <img src="https://img.shields.io/discord/1351288717536661647?style=for-the-badge&label=Discord&logo=discord&logoColor=white">
+  </a>
+</div>
 
 <div align="center">
   <h1>OASIS</h1>
 </div>
 <p align="center">
-  <small><strong>O</strong>llama <strong>A</strong>utomated <strong>S</strong>ecurity <strong>I</strong>ntelligence <strong>S</strong>canner</small>
+  <small>🏝️ <strong>O</strong>llama <strong>A</strong>utomated <strong>S</strong>ecurity <strong>I</strong>ntelligence <strong>S</strong>canner</small>
 </p>
 
 <p align="center">
@@ -72,15 +78,23 @@ cd oasis
 ```bash
 # First time installation
 pipx install --editable .
-
-# Update existing installation
-pipx upgrade oasis
 ```
 
-Note: If you need to reinstall or update during development:
+## 🔄 Update
+
+If new releases are available, you can update the installation with:
+```bash
+pipx upgrade oasis
+```
+Between releases, you can update the installation with:
+```bash
+git pull origin master
+```
+note: because of the editable installation, you just need to pull the latest changes from the repository.
+
+## 🗑️ Uninstallation
 ```bash
 pipx uninstall oasis
-pipx install --editable .
 ```
 
 ## 🔧 Usage
@@ -185,9 +199,17 @@ oasis --input-path [path_to_analyze] --audit
 
 This mode helps you understand how different vulnerability types are distributed across your codebase.
 
+## 📝 Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the latest updates and changes.
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request. Check out our [Contributing Guidelines](CONTRIBUTING.md) for more details.
+
+Alternatively, you can also contribute by reporting issues or suggesting features.
+
+Come and join our [Discord server](https://discord.gg/dW3sFwTtN3) to discuss the project.
 
 ## 📄 License
 
@@ -202,5 +224,5 @@ Contributions are welcome! Please feel free to submit a Pull Request. Check out 
 
 ## 📫 Support
 
-If you encounter any issues or have questions, please file an issue
+If you encounter any issues or have questions, come asking help on our [Discord server](https://discord.gg/dW3sFwTtN3) or please file an issue.
 
