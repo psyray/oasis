@@ -87,7 +87,7 @@ class OllamaManager:
                     
             return model_names
         except Exception as e:
-            logger.error(f"Error fetching models: {str(e)}")
+            logger.exception(f"Error fetching models: {str(e)}")
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("Full error:", exc_info=True)
 
@@ -120,7 +120,7 @@ class OllamaManager:
             logger.debug(", ".join(model_names))
             return model_names
         except ConnectionError as e:
-            logger.error(f"Connection error while getting models: {str(e)}")
+            logger.exception(f"Connection error while getting models: {str(e)}")
             raise
     
     def _get_model_info(self, model: str):
@@ -146,7 +146,7 @@ class OllamaManager:
         try:
             return self._detect_optimal_chunk_size(model)
         except Exception as e:
-            logger.warning(f"Error detecting chunk size: {str(e)}")
+            logger.exception(f"Error detecting chunk size: {str(e)}")
             logger.debug("Using default chunk size", exc_info=True)
             return MAX_CHUNK_SIZE
 
@@ -256,7 +256,7 @@ class OllamaManager:
             
         except Exception as e:
             # Fallback to simple formatting if API fails
-            logger.debug(f"Error fetching model details: {str(e)}")
+            logger.exception(f"Error fetching model details: {str(e)}")
             model_emoji = self._get_model_emoji(model_name)
             return f"{model_emoji}{model_name.split(':')[0]}"
     
@@ -368,12 +368,12 @@ class OllamaManager:
                 return True
                 
             except Exception as pull_error:
-                logger.error(f"Failed to pull model {model}: {str(pull_error)}")
+                logger.exception(f"Failed to pull model {model}: {str(pull_error)}")
                 logger.error("Please check that the model name is correct and available from Ollama")
                 return False
                 
         except Exception as e:
-            logger.error(f"Error checking model availability: {str(e)}")
+            logger.exception(f"Error checking model availability: {str(e)}")
             return False
 
     def _log_connection_error(self, error):

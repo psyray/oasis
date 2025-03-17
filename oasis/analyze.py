@@ -28,7 +28,7 @@ class SecurityAnalyzer:
         except Exception as e:
             logger.error("Failed to initialize Ollama client")
             logger.error("Please make sure Ollama is running and accessible")
-            logger.debug(f"Initialization error: {str(e)}")
+            logger.exception(f"Initialization error: {str(e)}")
             raise RuntimeError("Could not connect to Ollama server") from e
 
         self.llm_model = llm_model
@@ -74,7 +74,7 @@ class SecurityAnalyzer:
             return sorted(results, key=lambda x: x[1], reverse=True)
                 
         except Exception as e:
-            logger.error(f"Error during vulnerability search: {str(e)}")
+            logger.exception(f"Error during vulnerability search: {str(e)}")
             return []
 
     def analyze_vulnerability(self, file_path: str, vulnerability: Union[str, Dict]) -> str:
@@ -104,7 +104,7 @@ class SecurityAnalyzer:
             return "\n\n<div class=\"page-break\"></div>\n\n".join(analyses)
 
         except Exception as e:
-            logger.error(f"Error during analysis: {str(e)}")
+            logger.exception(f"Error during analysis: {str(e)}")
             return f"Error during analysis: {str(e)}"
 
     def process_analysis_with_model(self, vulnerabilities, args, report: Report):
@@ -285,7 +285,7 @@ Code segment to analyze:
             response = self.client.chat(model=self.llm_model, messages=[{'role': 'user', 'content': prompt}])
             return response['message']['content']
         except Exception as e:
-            logger.error(f"Error during chunk analysis: {str(e)}")
+            logger.exception(f"Error during chunk analysis: {str(e)}")
             return f"Error during chunk analysis: {str(e)}"
 
     def _process_functions(self, file_path: str, data: Dict, vuln_vector: List[float], 
@@ -309,7 +309,7 @@ Code segment to analyze:
                 if similarity >= threshold:
                     results.append((func_id, similarity))
             except Exception as e:
-                logger.error(f"Error processing function {func_id}: {str(e)}")
+                logger.exception(f"Error processing function {func_id}: {str(e)}")
                 
     def _process_file(self, file_path: str, data: Dict, vuln_vector: List[float], 
                      threshold: float, results: List[Tuple[str, float]]) -> None:
@@ -337,7 +337,7 @@ Code segment to analyze:
                 if similarity >= threshold:
                     results.append((file_path, similarity))
         except Exception as e:
-            logger.error(f"Error processing file {file_path}: {str(e)}")
+            logger.exception(f"Error processing file {file_path}: {str(e)}")
             
     def _extract_file_vectors(self, data: Dict) -> Union[List[float], List[List[float]], None]:
         """
@@ -616,13 +616,16 @@ class EmbeddingAnalyzer:
         """
 
         num_processes = max(1, min(cpu_count(), len(process_args)))
-        results = []
-        with tqdm(total=len(process_args), desc="Analyzing", leave=True) as pbar:
-            with Pool(processes=num_processes) as pool:
-                for result in pool.imap(analyze_item_parallel, process_args):
-                    if result and 'error' not in result:
-                        results.append(result)
-                    pbar.update(1)
+
+        with Pool(processes=num_processes) as pool:
+            results = list(
+                tqdm(
+                    pool.map(analyze_item_parallel, process_args),
+                    total=len(process_args),
+                    desc="Analyzing",
+                    leave=True,
+                )
+            )
         return results
 
     def _print_vulnerability_analysis(self, vuln_name: str, results: List[Dict], 
@@ -735,7 +738,7 @@ def analyze_item_parallel(args: tuple) -> Dict:
         }
 
     except Exception as e:
-        logger.error(f"Error analyzing {args.item_id}: {str(e)}")
+        logger.exception(f"Error analyzing {args.item_id}: {str(e)}")
         return {
             'item_id': args.item_id,
             'error': str(e),

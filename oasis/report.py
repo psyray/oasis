@@ -435,7 +435,7 @@ class Report:
                 f.write('\n'.join(content))
                 
         except Exception as e:
-            logger.error(f"Error writing markdown file: {str(e)}")
+            logger.exception(f"Error writing markdown file: {str(e)}")
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("Full error:", exc_info=True)
     
@@ -467,7 +467,7 @@ class Report:
             try:
                 HTML(string=rendered_html, media_type='print').write_pdf(output_files['pdf'])
             except Exception as e:
-                logger.error(f"PDF conversion failed for {markdown_file.name}: {e.__class__.__name__}: {str(e)}")
+                logger.exception(f"PDF conversion failed for {markdown_file.name}: {e.__class__.__name__}: {str(e)}")
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(f"HTML content causing PDF conversion failure (first 500 chars): {rendered_html[:500]}")
                 output_files['pdf'] = None
@@ -475,7 +475,7 @@ class Report:
             return output_files
             
         except Exception as e:
-            logger.error(f"Error converting {markdown_file.name} to other formats: {e.__class__.__name__}: {str(e)}")
+            logger.exception(f"Error converting {markdown_file.name} to other formats: {e.__class__.__name__}: {str(e)}")
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("Full error:", exc_info=True)
             
@@ -530,7 +530,7 @@ class Report:
             template = self.template_env.get_template('report_template.html')
             return template.render(content=content, logo_path=logo_data_url)
         except Exception as e:
-            logger.error(f"Error rendering template: {str(e)}")
+            logger.exception(f"Error rendering template: {str(e)}")
             # Fallback to basic HTML if template fails
             return f"<html><body>{content}</body></html>"
     

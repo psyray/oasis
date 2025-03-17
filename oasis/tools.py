@@ -24,107 +24,77 @@ class EmojiFormatter(logging.Formatter):
     - Newline preservation
     """
 
-    def format(self, record):
-        """
-        Format a log record
+    @staticmethod  
+    def has_emoji_prefix(text: str) -> bool:  
+        emoji_ranges = [  
+            (0x1F300, 0x1F9FF),  # Misc Symbols & Pictographs  
+            (0x2600, 0x26FF),    # Misc Symbols  
+            (0x2700, 0x27BF),    # Dingbats  
+            (0x1F600, 0x1F64F),  # Emoticons  
+            (0x1F680, 0x1F6FF),  # Transport & Map Symbols  
+        ]  
+        if not text:  
+            return False  
+        first_char = text.strip()[0]  
+        code = ord(first_char)  
+        return any(start <= code <= end for start, end in emoji_ranges)  
 
-        Args:
-            record: Log record
-        """
-        if hasattr(record, 'emoji') and not record.emoji:
-            return record.msg
+    def determine_icon(self, record) -> str:  
+        if not (isinstance(record.msg, str) and not self.has_emoji_prefix(record.msg.strip())):  
+            return ''
+        msg_lower = record.msg.lower()
+        if record.levelno == logging.DEBUG:  
+            return '🪲  '
+        if record.levelno == logging.INFO:  
+            # Prioritize model emojis  
+            for model_name, emoji in MODEL_EMOJIS.items():  
+                if model_name.lower() in msg_lower:  
+                    return ''  
+            if any(word in msg_lower for word in KEYWORD_LISTS['INSTALL_WORDS']):  
+                return '📥 '  
+            elif any(word in msg_lower for word in KEYWORD_LISTS['ANALYSIS_WORDS']):  
+                return '🔎 '  
+            elif any(word in msg_lower for word in KEYWORD_LISTS['GENERATION_WORDS']):  
+                return '⚙️  '  
+            elif any(word in msg_lower for word in KEYWORD_LISTS['REPORT_WORDS']):  
+                return '📄 '  
+            elif any(word in msg_lower for word in KEYWORD_LISTS['MODEL_WORDS']):  
+                return '🤖 '  
+            elif any(word in msg_lower for word in KEYWORD_LISTS['CACHE_WORDS']):  
+                return '💾 '  
+            elif any(word in msg_lower for word in KEYWORD_LISTS['SAVE_WORDS']):  
+                return '💾 '  
+            elif any(word in msg_lower for word in KEYWORD_LISTS['LOAD_WORDS']):  
+                return '📂 '  
+            elif any(word in msg_lower for word in KEYWORD_LISTS['STOPPED_WORDS']):  
+                return '🛑 '  
+            elif any(word in msg_lower for word in KEYWORD_LISTS['DELETE_WORDS']):  
+                return '🗑️ '  
+            elif any(word in msg_lower for word in KEYWORD_LISTS['SUCCESS_WORDS']):  
+                return '✅ '  
+            elif any(word in msg_lower for word in KEYWORD_LISTS['STATISTICS_WORDS']):  
+                return '📊 '  
+            elif any(word in msg_lower for word in KEYWORD_LISTS['TOP_WORDS']):  
+                return '🏆 '  
+            elif any(word in msg_lower for word in KEYWORD_LISTS['VULNERABILITY_WORDS']):  
+                return '🚨 '  
+            return ''  # Default for INFO level  
+        if record.levelno == logging.WARNING:  
+            return '⚠️  '
+        if record.levelno == logging.ERROR:  
+            return '💥 ' if any(word in record.msg.lower() for word in KEYWORD_LISTS['FAIL_WORDS']) else '❌ '
+        return '🚨 ' if record.levelno == logging.CRITICAL else ''  
 
-        if not hasattr(record, 'formatted_message'):
-            # Helper function to detect if string starts with emoji
-            def has_emoji_prefix(text: str) -> bool:
-                # Common emoji ranges in Unicode
-                emoji_ranges = [
-                    (0x1F300, 0x1F9FF),  # Miscellaneous Symbols and Pictographs
-                    (0x2600, 0x26FF),    # Miscellaneous Symbols
-                    (0x2700, 0x27BF),    # Dingbats
-                    (0x1F600, 0x1F64F),  # Emoticons
-                    (0x1F680, 0x1F6FF),  # Transport and Map Symbols
-                ]
-                
-                if not text:
-                    return False
-                    
-                # Get the first character code
-                first_char = text.strip()[0]
-                code = ord(first_char)
-                
-                # Check if it falls in emoji ranges
-                return any(start <= code <= end for start, end in emoji_ranges)
-
-            # Start with default icon (nothing)
-            icon = ''
-            
-            # Check if record.msg is a string before using string methods
-            if isinstance(record.msg, str) and not has_emoji_prefix(record.msg.strip()):
-                if record.levelno == logging.DEBUG:
-                    icon = '🪲  '  # Debug: beetle
-                elif record.levelno == logging.INFO:
-                    msg_lower = record.msg.lower()
-                    
-                    # Check for model names first (higher priority)
-                    model_found = False
-                    for model_name, _ in MODEL_EMOJIS.items():
-                        if model_name.lower() in msg_lower:
-                            model_found = True
-                            break
-                    
-                    # If no model was found, check for other keywords
-                    if not model_found:
-                        if any(word in msg_lower for word in KEYWORD_LISTS['INSTALL_WORDS']):
-                            icon = '📥 '  # Download/Install
-                        elif any(word in msg_lower for word in KEYWORD_LISTS['ANALYSIS_WORDS']):
-                            icon = '🔎 '  # Analysis
-                        elif any(word in msg_lower for word in KEYWORD_LISTS['GENERATION_WORDS']):
-                            icon = '⚙️  '  # Generation/Processing
-                        elif any(word in msg_lower for word in KEYWORD_LISTS['REPORT_WORDS']):
-                            icon = '📄 '  # Report
-                        elif any(word in msg_lower for word in KEYWORD_LISTS['MODEL_WORDS']):
-                            icon = '🤖 '  # AI/Model
-                        elif any(word in msg_lower for word in KEYWORD_LISTS['CACHE_WORDS']):
-                            icon = '💾 '  # Cache/Save
-                        elif any(word in msg_lower for word in KEYWORD_LISTS['SAVE_WORDS']):
-                            icon = '💾 '  # Save
-                        elif any(word in msg_lower for word in KEYWORD_LISTS['LOAD_WORDS']):
-                            icon = '📂 '  # Loading
-                        elif any(word in msg_lower for word in KEYWORD_LISTS['STOPPED_WORDS']):
-                            icon = '🛑 '  # Stopped
-                        elif any(word in msg_lower for word in KEYWORD_LISTS['DELETE_WORDS']):
-                            icon = '🗑️ '  # Delete
-                        elif any(word in msg_lower for word in KEYWORD_LISTS['SUCCESS_WORDS']):
-                            icon = '✅ '  # Success
-                        elif any(word in msg_lower for word in KEYWORD_LISTS['STATISTICS_WORDS']):
-                            icon = '📊 '  # Statistics
-                        elif any(word in msg_lower for word in KEYWORD_LISTS['TOP_WORDS']):
-                            icon = '🏆 '  # Top
-                        elif any(word in msg_lower for word in KEYWORD_LISTS['VULNERABILITY_WORDS']):
-                            icon = '🚨 '  # Vulnerability
-                        else:
-                            icon = ''  # Default info
-                elif record.levelno == logging.WARNING:
-                    icon = '⚠️  '  # Warning
-                elif record.levelno == logging.ERROR:
-                    if any(word in record.msg.lower() for word in KEYWORD_LISTS['FAIL_WORDS']):
-                        icon = '💥 '  # Crash
-                    else:
-                        icon = '❌ '  # Standard error
-                elif record.levelno == logging.CRITICAL:
-                    icon = '🚨 '  # Critical/Fatal
-
-                # Handle messages starting with newline
-                if record.msg.startswith('\n'):
-                    record.formatted_message = record.msg.replace('\n', '\n' + icon, 1)
-                else:
-                    record.formatted_message = f"{icon}{record.msg}"
-            else:
-                record.formatted_message = record.msg
-
+    def format(self, record):  
+        if hasattr(record, 'emoji') and not record.emoji:  
+            return record.msg  
+        if not hasattr(record, 'formatted_message'):  
+            icon = self.determine_icon(record)  
+            if record.msg.startswith('\n'):  
+                record.formatted_message = record.msg.replace('\n', f'\n{icon}', 1)  
+            else:  
+                record.formatted_message = f"{icon}{record.msg}"  
         return record.formatted_message
-
 
 def setup_logging(debug=False, silent=False, error_log_file=None):
     """
@@ -137,6 +107,11 @@ def setup_logging(debug=False, silent=False, error_log_file=None):
     """
     # Set root logger level
     root_logger = logging.getLogger()
+
+    # Avoid adding duplicate handlers if they already exist.
+    if root_logger.handlers:
+        return
+
     if debug:
         root_logger.setLevel(logging.DEBUG)
     else:
@@ -275,7 +250,7 @@ def parse_input(input_path: str | Path) -> List[Path]:
                             if f.is_file()
                         )
         except Exception as e:
-            logger.error(f"Error reading paths file: {str(e)}")
+            logger.exception(f"Error reading paths file: {str(e)}")
             return []
 
     # Case 2: Input is a single file
@@ -375,7 +350,7 @@ def open_file(file_path: str) -> str:
             continue
         except Exception as e:
             error_msg = f"Error reading {file_path} with {encoding}: {e.__class__.__name__}: {str(e)}"
-            logger.error(error_msg)
+            logger.exception(error_msg)
             errors.append(error_msg)
             continue
     

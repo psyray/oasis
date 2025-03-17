@@ -1,4 +1,5 @@
 import argparse
+import itertools
 import json
 from pathlib import Path
 import pickle
@@ -31,7 +32,7 @@ class EmbeddingManager:
         except Exception as e:
             logger.error("Failed to initialize Ollama client")
             logger.error("Please make sure Ollama is running and accessible")
-            logger.debug(f"Initialization error: {str(e)}")
+            logger.exception(f"Initialization error: {str(e)}")
             raise RuntimeError("Could not connect to Ollama server") from e
 
         self.input_path = args.input_path
@@ -168,7 +169,7 @@ class EmbeddingManager:
             self.save_cache()
 
         except Exception as e:
-            logger.error(f"Error during parallel embedding generation: {str(e)}")
+            logger.exception(f"Error during parallel embedding generation: {str(e)}")
 
     def process_input_files(self, args):
         """
@@ -242,14 +243,22 @@ class EmbeddingManager:
         if isinstance(entry, dict):
             # Make a copy to avoid modifying the original
             normalized = entry.copy()
-            
+
             # Ensure all required fields are present
             for key, default_value in default.items():
                 if key not in normalized:
                     normalized[key] = default_value
-                    
+
+            # Validate embedding dimension consistency if embedding is present
+            if 'embedding' in normalized and isinstance(normalized['embedding'], list):
+                if not hasattr(self, 'embedding_dim') or self.embedding_dim is None:
+                    self.embedding_dim = len(normalized['embedding'])
+                    logger.info(f"Initialized self.embedding_dim to {self.embedding_dim} based on the first embedding encountered")
+                elif len(normalized['embedding']) != self.embedding_dim:
+                    logger.error(f"Inconsistent embedding dimension: expected {self.embedding_dim}, got {len(normalized['embedding'])} for entry")
+
             return normalized
-            
+
         # If entry is not a dict, return the default
         return default
 
@@ -273,7 +282,7 @@ class EmbeddingManager:
                 pickle.dump(self.code_base, f)
             logger.debug(f"Saved {len(self.code_base)} entries to cache")
         except Exception as e:
-            logger.error(f"Error saving cache: {str(e)}")
+            logger.exception(f"Error saving cache: {str(e)}")
 
     def load_cache(self) -> None:
         """
@@ -322,7 +331,7 @@ class EmbeddingManager:
                     self.code_base = {}
                     self.save_cache()
         except Exception as e:
-            logger.error(f"Error loading cache: {str(e)}")
+            logger.exception(f"Error loading cache: {str(e)}")
             self.code_base = {}
             self.save_cache()
 
@@ -343,7 +352,7 @@ class EmbeddingManager:
             self.code_base = {}  # Clear memory cache anyway
             logger.debug("Memory cache cleared")
         except Exception as e:
-            logger.error(f"Error clearing cache: {str(e)}")
+            logger.exception(f"Error clearing cache: {str(e)}")
 
     def get_embeddings_info(self) -> dict:
         """
@@ -389,7 +398,7 @@ class EmbeddingManager:
                 cached_data = pickle.load(f)
             return bool(cached_data)  # Return True if cache is not empty
         except Exception as e:
-            logger.debug(f"Cache validation failed: {str(e)}")
+            logger.exception(f"Cache validation failed: {str(e)}")
             return False 
 
     def filter_code_base_by_extensions(self) -> None:
@@ -417,6 +426,8 @@ class EmbeddingManager:
         if filtered_count > 0:
             logger.info(f"Filtered out {filtered_count} files that don't match the specified extensions") 
 
+    # TODO: This is a temporary function to extract functions from a file based on its extension
+    # TODO: We should use the LLM approach to extract functions from a file
     def parse_functions_from_file(self, file_path: str, content: str) -> Dict[str, str]:
         """
         Extract individual functions from a file based on its extension
@@ -500,7 +511,7 @@ class EmbeddingManager:
                     functions[func_id] = content[func_start:func_end].strip()
         
         except Exception as e:
-            logger.warning(f"Error extracting functions from {file_path}: {e}")
+            logger.exception(f"Error extracting functions from {file_path}: {e}")
             # Fallback - use whole file
             functions[file_path] = content
             
@@ -791,12 +802,12 @@ class EmbeddingManager:
                 return functions
 
             except json.JSONDecodeError as e:
-                logger.warning(f"Invalid JSON in LLM response for {file_path}: {str(e)}")
+                logger.exception(f"Invalid JSON in LLM response for {file_path}: {str(e)}")
                 logger.debug(f"Raw JSON response: {json_match[1][:200]}...")
                 return {}
 
         except Exception as e:
-            logger.error(f"Error using LLM for function extraction in {file_path}: {str(e)}")
+            logger.exception(f"Error using LLM for function extraction in {file_path}: {str(e)}")
             # Fallback to regex approach
             logger.info(f"Falling back to regex-based extraction for {file_path}")
             return self.extract_functions_with_regex(file_path, content, extension)
@@ -822,7 +833,7 @@ class EmbeddingManager:
         except Exception as e:
             # Log error with appropriate vulnerability information
             vuln_name = vulnerability['name'] if isinstance(vulnerability, dict) else vulnerability
-            logger.error(f"Failed to get embedding for {vuln_name}: {str(e)}")
+            logger.exception(f"Failed to get embedding for {vuln_name}: {str(e)}")
             return None
 
 def process_file_parallel(args: tuple) -> Tuple[str, str, List[float], bool, Optional[Dict[str, Tuple[str, List[float]]]]]:
@@ -838,6 +849,7 @@ def process_file_parallel(args: tuple) -> Tuple[str, str, List[float], bool, Opt
     try:
         # Read file content
         if not (content := open_file(args.input_path)):
+            logger.warning(f"Empty or unreadable file content for file: {args.input_path}")
             return None
             
         # Extract embeddings based on analysis type
@@ -875,7 +887,7 @@ def process_file_parallel(args: tuple) -> Tuple[str, str, List[float], bool, Opt
                 return args.input_path, content, file_embedding, False, None
                 
     except Exception as e:
-        logger.error(f"Error processing {args.input_path}: {str(e)}")
+        logger.exception(f"Error processing {args.input_path}: {str(e)}")
         
     return None
 
@@ -911,18 +923,17 @@ def build_vulnerability_embedding_prompt(vulnerability: Union[str, Dict]) -> str
     else:
         # Use the string directly
         return str(vulnerability)
-
-def generate_content_embedding(content: str, model: str, chunk_size: int = DEFAULT_ARGS['CHUNK_SIZE']) -> Union[List[float], List[List[float]]]:
+def generate_content_embedding(content: str, model: str, chunk_size: int = DEFAULT_ARGS['CHUNK_SIZE']) -> List[float]:
     """
     Generate embedding for content
-    
+
     Args:
         content: Content to embed
         model: Embedding model name
         chunk_size: Maximum size of text chunks for embedding
-        
+
     Returns:
-        Embedding vector or list of chunk vectors
+        Embedding vector as list of floats, aggregated if content was chunked
     """
     try:
         client = OllamaManager().get_client()
@@ -931,20 +942,25 @@ def generate_content_embedding(content: str, model: str, chunk_size: int = DEFAU
         if len(content) > chunk_size:
             chunks = chunk_content(content, chunk_size)
             chunk_embeddings = []
-            
+
             for chunk in chunks:
                 response = client.embeddings(model=model, prompt=chunk)
                 if response and 'embedding' in response:
                     chunk_embeddings.append(response['embedding'])
-                    
-            return chunk_embeddings if chunk_embeddings else None
+
+            # Aggregate chunk embeddings if we have any
+            if chunk_embeddings:
+                # Average all embeddings together (element-wise) using zip
+                aggregated_embedding = [sum(col) / len(col) for col in zip(*chunk_embeddings)]
+                return [val / len(chunk_embeddings) for val in aggregated_embedding]
+            return None
         else:
             # For small content, get single embedding
             response = client.embeddings(model=model, prompt=content)
             return response.get('embedding') if response and 'embedding' in response else None
-            
+
     except Exception as e:
-        logger.error(f"Error generating embedding: {str(e)}")
+        logger.exception(f"Error generating embedding: {str(e)}")
         return None
 
 def extract_functions_from_file(file_path: str, content: str, extraction_model: str = EXTRACT_FUNCTIONS['MODEL']) -> Dict[str, str]:
@@ -998,7 +1014,7 @@ def extract_functions_from_file(file_path: str, content: str, extraction_model: 
         # ... (code from extract_functions_with_llm that parses the JSON response)
         
     except Exception as e:
-        logger.error(f"Error extracting functions from {file_path}: {str(e)}")
+        logger.exception(f"Error extracting functions from {file_path}: {str(e)}")
         # Fallback to regex approach if needed
         
     return {}

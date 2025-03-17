@@ -189,7 +189,7 @@ class OasisScanner:
             self._save_cache_on_exit()
             return 1
         except Exception as e:
-            logger.error(f"An unexpected error occurred: {str(e)}")
+            logger.exception(f"An unexpected error occurred: {str(e)}")
             if logger.isEnabledFor(logging.DEBUG):
                 logger.exception("Full error trace:", exc_info=True)
             return 1
