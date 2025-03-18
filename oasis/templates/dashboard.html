@@ -1,25 +1,17 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OASIS - Security reports dashboard</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
-    <script>
-        // Pre-loading model emojis from Python
-        const modelEmojis = {{ model_emojis|tojson|safe }};
-    </script>
-</head>
-<body>
-    <header class="header">
-        <div class="logo-container">
-            <div class="logo-circle">
-                <img src="{{ url_for('static', filename='img/oasis-logo.jpg') }}" alt="OASIS Logo" class="oasis-logo-img">
-            </div>
-            <h1 class="title">OASIS Security Dashboard</h1>
-        </div>
-    </header>
-    
+{% extends "base.html" %}
+
+{% block title %}OASIS - Security reports dashboard{% endblock %}
+
+{% block header_title %}OASIS Dashboard{% endblock %}
+
+{% block head_extra %}
+<script>
+    // Pre-loading model emojis from Python
+    const modelEmojis = {{ model_emojis|tojson|safe }};
+</script>
+{% endblock %}
+
+{% block content %}
     <div class="main-container">
         <button id="toggle-filters" class="toggle-filters-btn">
             <span class="filter-icon">🔍</span>
@@ -103,11 +95,8 @@
             </div>
         </div>
     </div>
-    
-    <footer class="footer">
-        <p>OASIS - Ollama Automated Security Intelligence Scanner | Version 0.3.0</p>
-    </footer>
-    
-    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
-</body>
-</html> 
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %} 

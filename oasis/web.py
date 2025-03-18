@@ -1,10 +1,11 @@
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 import secrets
 import string
 
-from flask import render_template, request, jsonify, send_from_directory
+from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect, url_for
+from functools import wraps
 
 from .config import VULNERABILITY_MAPPING, MODEL_EMOJIS
 from .report import Report
@@ -31,9 +32,8 @@ class WebServer:
 
     def run(self):
         """Serve reports via a web interface."""
-        from flask import Flask, session, redirect, request, url_for
-        from functools import wraps
-        
+        from .__init__ import __version__
+
         app = Flask(
             __name__, template_folder=str(Path(__file__).parent / "templates"),
             static_folder=str(Path(__file__).parent / "static")
@@ -41,6 +41,11 @@ class WebServer:
         
         # Generate a random secret key for session management
         app.secret_key = secrets.token_hex(16)
+        
+        # Add context processor to inject version into all templates
+        @app.context_processor
+        def inject_version():
+            return {'version': __version__}
         
         # Setup password protection if enabled
         if self.web_password is None:
@@ -94,6 +99,11 @@ class WebServer:
         return render_template('login.html', error=error)
 
     def register_routes(self, app, server, login_required):
+        # Logout route
+        @app.route('/logout', methods=['GET'])
+        def logout():
+            session.pop('logged_in', None)
+            return redirect(url_for('login'))
 
         @app.route('/')
         @login_required
@@ -286,9 +296,6 @@ class WebServer:
         """Extract date from directory name format [input_path]_[%Y%m%d_%H%M%S]"""
         try:
             # Search for a pattern that resembles YYYYmmdd_HHMMSS at the end of the name
-            import re
-            from datetime import datetime
-
             if match := re.search(r'_(\d{8}_\d{6})$', dirname):
                 date_str = match[1]
                 # Convert to datetime object
@@ -402,12 +409,10 @@ class WebServer:
         
         # Filter by date
         if start_date:
-            from datetime import datetime
             start_date = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
             filtered = [r for r in filtered if r.get('date') and datetime.strptime(r['date'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc) >= start_date]
             
         if end_date:
-            from datetime import datetime
             end_date = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
             filtered = [r for r in filtered if r.get('date') and datetime.strptime(r['date'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc) <= end_date]
         

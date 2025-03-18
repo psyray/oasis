@@ -26,7 +26,28 @@ body {
     padding: 15px 20px;
     display: flex;
     align-items: center;
+    justify-content: space-between;
     box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+.header-link {
+    color: var(--white);
+    text-decoration: none;
+    font-weight: bold;
+    font-size: 0.9rem;
+    padding: 6px 12px;
+    border-radius: 4px;
+    transition: background-color 0.2s ease;
+}
+
+.header-link:hover {
+    background-color: rgba(255, 255, 255, 0.1);
 }
 
 .logo-container {
@@ -270,6 +291,30 @@ body {
     text-align: center;
     padding: 15px;
     font-size: 14px;
+    margin-top: auto;
+}
+
+.footer-links {
+    margin-top: 10px;
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    align-items: center;
+}
+
+.footer-link {
+    color: var(--light-turquoise);
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+.footer-link:hover {
+    color: var(--white);
+    text-decoration: underline;
+}
+
+.footer-separator {
+    color: var(--medium-gray);
 }
 
 /* Modal for report preview */
@@ -1306,8 +1351,8 @@ body {
 .toggle-filters-btn {
     display: none;
     position: fixed;
-    top: 50px;
-    right: 10px;
+    top: 70px;
+    right: 20px;
     z-index: 100;
     background-color: var(--turquoise);
     color: white;
@@ -1388,7 +1433,7 @@ body {
     margin-top: 50px;
 }
 
-#login-body {
+.login-body {
     font-family: Arial, sans-serif;
     background-color: var(--light-sand);
     margin: 0;
@@ -1396,7 +1441,7 @@ body {
     display: flex;
     justify-content: center;
     align-items: center;
-    height: 100vh;
+    height: 80vh;
 }
 .login-container {
     background-color: white;
@@ -1405,6 +1450,7 @@ body {
     padding: 30px;
     width: 350px;
     text-align: center;
+    margin: 0px auto;
 }
 .logo-login {
     width: 80px;
@@ -1443,14 +1489,14 @@ h1 {
 .form-control {
     margin-bottom: 20px;
 }
-#login-body label {
+.login-body label {
     display: block;
     text-align: left;
     margin-bottom: 5px;
     color: var(--dark-blue);
     font-weight: bold;
 }
-#login-body input[type="password"] {
+.login-body input[type="password"] {
     width: 100%;
     padding: 10px;
     border: 1px solid #ddd;
@@ -1458,7 +1504,7 @@ h1 {
     font-size: 16px;
     box-sizing: border-box;
 }
-#login-body button {
+.login-body button {
     background-color: var(--turquoise);
     color: white;
     border: none;
@@ -1469,10 +1515,10 @@ h1 {
     width: 100%;
     font-weight: bold;
 }
-#login-body button:hover {
+.login-body button:hover {
     background-color: var(--dark-blue);
 }
 
-#login-body h1 {
+.login-body h1 {
     margin-bottom: 0;
 }

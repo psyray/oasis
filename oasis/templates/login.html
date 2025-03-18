@@ -1,28 +1,26 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OASIS - Login</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
-</head>
-<body id="login-body">
-    <div class="login-container">
-        <div class="logo-circle logo-login">
-            <img src="{{ url_for('static', filename='img/oasis-logo.jpg') }}" alt="OASIS Logo" class="oasis-logo-img">
-        </div>
-        <h1>🏝️ OASIS</h1>
-        <p><small><strong>O</strong>llama <strong>A</strong>utomated <strong>S</strong>ecurity <strong>I</strong>ntelligence <strong>S</strong>canner</small></p>
-        {% if error %}
-            <div class="error">{{ error }}</div>
-        {% endif %}
-        <form method="post">
-            <div class="form-control">
-                <label for="password">Password</label>
-                <input type="password" id="password" name="password" required>
+{% extends "base.html" %}
+
+{% block title %}OASIS - Login{% endblock %}
+
+{% block header_title %}Login{% endblock %}
+
+{% block content %}
+    <div class="login-body">
+        <div class="login-container">
+            <div class="logo-circle logo-login">
+                <img src="{{ url_for('static', filename='img/oasis-logo.jpg') }}" alt="OASIS Logo" class="oasis-logo-img">
             </div>
-            <button type="submit">Login</button>
-        </form>
+            <h1>🏝️ OASIS</h1>
+            <p><small><strong>O</strong>llama <strong>A</strong>utomated <strong>S</strong>ecurity <strong>I</strong>ntelligence <strong>S</strong>canner</small></p>
+            {% if error %}
+                <div class="error">{{ error }}</div>
+            {% endif %}
+            <form method="post">
+                <div class="form-control">
+                    <input type="password" id="password" name="password" placeholder="Password" required>
+                </div>
+                <button type="submit">Login</button>
+            </form>
+        </div>
     </div>
-</body>
-</html>
+{% endblock %}
