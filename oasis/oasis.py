@@ -81,6 +81,12 @@ class OasisScanner:
                            help='Ollama URL (default: http://localhost:11434)')
         parser.add_argument('-w', '--web', action='store_true',
                            help='Serve reports via a web interface')
+        parser.add_argument('-we', '--web-expose', dest='web_expose', type=str, default='local',
+                           help='Web interface exposure (local: 127.0.0.1, all: 0.0.0.0) (default: local)')
+        parser.add_argument('-wpw', '--web-password', dest='web_password', type=str,
+                           help='Web interface password (if not specified, a random password will be generated)')
+        parser.add_argument('-wp', '--web-port', dest='web_port', type=int, default=5000,
+                           help='Web interface port (default: 5000)')
         return parser
 
     def get_vulnerability_help(self) -> str:
@@ -214,7 +220,13 @@ class OasisScanner:
             return self._execute_requested_mode() if self._init_processing() else 1
 
         # Serve reports via web interface
-        WebServer(self.report, debug=self.args.debug).run()
+        WebServer(
+            self.report, 
+            debug=self.args.debug,
+            web_expose=self.args.web_expose,
+            web_password=self.args.web_password,
+            web_port=self.args.web_port
+        ).run()
         return 0  # Exit after serving the web interface
             
     def _init_arguments(self, args) -> Union[bool, None]:

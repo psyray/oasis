@@ -1,15 +1,21 @@
 from datetime import timezone
 from pathlib import Path
 import re
+import secrets
+import string
 
+from flask import render_template, request, jsonify, send_from_directory
 
 from .config import VULNERABILITY_MAPPING, MODEL_EMOJIS
 from .report import Report
 
 class WebServer:
-    def __init__(self, report, debug=False):
+    def __init__(self, report, debug=False, web_expose='local', web_password=None, web_port=5000):
         self.report = report
         self.debug = debug
+        self.web_expose = web_expose
+        self.web_password = web_password
+        self.web_port = web_port
         self.report_data = None
         if not isinstance(report, Report):
             raise ValueError("Report must be an instance of Report")
@@ -25,28 +31,72 @@ class WebServer:
 
     def run(self):
         """Serve reports via a web interface."""
-        from flask import Flask
+        from flask import Flask, session, redirect, request, url_for
+        from functools import wraps
+        
         app = Flask(
             __name__, template_folder=str(Path(__file__).parent / "templates"),
             static_folder=str(Path(__file__).parent / "static")
         )
         
+        # Generate a random secret key for session management
+        app.secret_key = secrets.token_hex(16)
+        
+        # Setup password protection if enabled
+        if self.web_password is None:
+            # Generate a random password if none provided
+            self.web_password = self._generate_random_password()
+            print(f"\n[OASIS] Web interface protected by password: {self.web_password}\n")
+
+        # Auth decorator
+        def login_required(f):
+            @wraps(f)
+            def decorated_function(*args, **kwargs):
+                if self.web_password and not session.get('logged_in'):
+                    return redirect(url_for('login', next=request.url))
+                return f(*args, **kwargs)
+            return decorated_function
+            
+        # Login route
+        @app.route('/login', methods=['GET', 'POST'])
+        def login():
+            error = None
+            if request.method == 'POST':
+                if request.form['password'] == self.web_password:
+                    session['logged_in'] = True
+                    return redirect(request.args.get('next') or url_for('dashboard'))
+                else:
+                    error = 'Incorrect password.'
+            return self._render_login_template(error)
+        
         # Process and collect all report data
         self.collect_report_data()
 
-        # Register routes
-        app = self.register_routes(app, self)
+        # Register routes with authentication
+        app = self.register_routes(app, self, login_required)
 
+        # Determine the host based on the expose setting
+        host = '127.0.0.1' if self.web_expose == 'local' else '0.0.0.0'
+        
         # Run the server
         if self.debug:
-            app.run(debug=True, host='0.0.0.0', port=5000)
+            app.run(debug=True, host=host, port=self.web_port)
         else:
-            app.run(host='0.0.0.0', port=5000)
+            app.run(host=host, port=self.web_port)
 
-    def register_routes(self, app, server):
-        from flask import render_template, request, jsonify, send_from_directory
+    def _generate_random_password(self, length=10):
+        """Generate a random password with letters, digits and special characters"""
+        alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+        return ''.join(secrets.choice(alphabet) for _ in range(length))
+        
+    def _render_login_template(self, error=None):
+        """Render the login template"""
+        return render_template('login.html', error=error)
+
+    def register_routes(self, app, server, login_required):
 
         @app.route('/')
+        @login_required
         def dashboard():
             """Main dashboard page"""
             
@@ -54,6 +104,7 @@ class WebServer:
                                    model_emojis=MODEL_EMOJIS)
             
         @app.route('/api/reports')
+        @login_required
         def get_reports():
             # Get filter parameters
             model_filter = request.args.get('model', '')
@@ -67,17 +118,20 @@ class WebServer:
             return jsonify(filtered_data)
             
         @app.route('/api/stats')
+        @login_required
         def get_stats():
             # Return aggregated statistics about all reports
             return jsonify(self.get_report_statistics())
 
         @app.route('/reports/<path:filename>')
+        @login_required
         def serve_report(filename):
             security_dir = self.security_dir
             # The complete path now includes the timestamp directory
             return send_from_directory(security_dir, filename)
             
         @app.route('/api/report-content/<path:filename>')
+        @login_required
         def get_report_content(filename):
             # Return content of markdown file for previewing
             try:
@@ -90,6 +144,7 @@ class WebServer:
                 return jsonify({'error': str(e)}), 500
 
         @app.route('/api/download')
+        @login_required
         def download_report():
             # Get the report path
             report_path = request.args.get('path', '')
@@ -129,6 +184,7 @@ class WebServer:
                 return jsonify({'error': str(e)}), 500
 
         @app.route('/api/dates')
+        @login_required
         def get_dates_by_model():
             """Get dates available for a specific model and vulnerability type"""
             model = request.args.get('model', '')
