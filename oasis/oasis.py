@@ -182,26 +182,7 @@ class OasisScanner:
             args: Arguments
         """
         try:
-            # Parse and validate arguments
-            init_result = self._init_arguments(args)
-
-            # Handle special early termination cases
-            if init_result is None:
-                return 0  # Success exit code for commands like --list-models
-            elif init_result is False:
-                return 1  # Error exit code for validation failures
-
-            # Initialize Ollama and check connection
-            if not self._init_ollama(self.args.ollama_url):
-                return 1
-
-            if not self._init_processing():
-                return 1
-            if self.args.web:
-                WebServer(self.report, debug=self.args.debug).run()
-                return 0  # Exit after serving the web interface
-            else:
-                return self._execute_requested_mode()
+            return self._init_oasis(args)
         except KeyboardInterrupt:
             logger.info(f"\nProcess interrupted by user at {generate_timestamp()}. Exiting...")
             self._save_cache_on_exit()
@@ -211,6 +192,30 @@ class OasisScanner:
             if logger.isEnabledFor(logging.DEBUG):
                 logger.exception(f"Full error trace: {traceback.format_exc()}", exc_info=True)
             return 1
+
+    def _init_oasis(self, args):
+        # Parse and validate arguments
+        init_result = self._init_arguments(args)
+
+        # Handle special early termination cases
+        if init_result is None:
+            return 0  # Success exit code for commands like --list-models
+        elif init_result is False:
+            return 1  # Error exit code for validation failures
+
+        # Initialize report
+        self.report = Report(self.args.input_path, self.args.output_format)
+
+        # Initialize Ollama and check connection
+        if not self.args.web:
+            if not self._init_ollama(self.args.ollama_url):
+                return 1
+            # Initialize embedding manager and process input files
+            return self._execute_requested_mode() if self._init_processing() else 1
+
+        # Serve reports via web interface
+        WebServer(self.report, debug=self.args.debug).run()
+        return 0  # Exit after serving the web interface
             
     def _init_arguments(self, args) -> Union[bool, None]:
         """
@@ -291,12 +296,11 @@ class OasisScanner:
 
     def _init_processing(self):
         """
-        Initialize report and process input files
+        Initialize embedding manager and process input files
 
         Returns:
             True if processing is successful, False otherwise
         """
-        self.report = Report(self.args.input_path, self.args.output_format)
 
         # Initialize embedding manager
         self.embedding_manager = EmbeddingManager(self.args, self.ollama_manager)

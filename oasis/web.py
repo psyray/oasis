@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 
 
-from .config import VULNERABILITY_MAPPING
+from .config import VULNERABILITY_MAPPING, MODEL_EMOJIS
 from .report import Report
 
 class WebServer:
@@ -25,17 +25,30 @@ class WebServer:
 
     def run(self):
         """Serve reports via a web interface."""
-        from flask import Flask, render_template, send_from_directory, request, jsonify
-        app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"),
-                   static_folder=str(Path(__file__).parent / "static"))
+        from flask import Flask
+        app = Flask(
+            __name__, template_folder=str(Path(__file__).parent / "templates"),
+            static_folder=str(Path(__file__).parent / "static")
+        )
         
         # Process and collect all report data
         self.collect_report_data()
 
+        # Register routes
+        app = self.register_routes(app, self)
+
+        # Run the server
+        if self.debug:
+            app.run(debug=True, host='0.0.0.0', port=5000)
+        else:
+            app.run(host='0.0.0.0', port=5000)
+
+    def register_routes(self, app, server):
+        from flask import render_template, request, jsonify, send_from_directory
+
         @app.route('/')
         def dashboard():
             """Main dashboard page"""
-            from .config import MODEL_EMOJIS
             
             return render_template('dashboard.html', 
                                    model_emojis=MODEL_EMOJIS)
@@ -151,11 +164,8 @@ class WebServer:
             
             return jsonify({'dates': dates})
 
-        if self.debug:
-            app.run(debug=True, host='0.0.0.0', port=5000)
-        else:
-            app.run(host='0.0.0.0', port=5000)
-        
+        return app
+
     def collect_report_data(self):
         """Collect and process all report data for efficient filtering and display"""
         reports = []

@@ -10,15 +10,6 @@ document.addEventListener('DOMContentLoaded', function() {
         dateRange: null
     };
     
-    // Loading initial data
-    fetchReports();
-    fetchStats();
-    
-    // Event listeners
-    // document.getElementById('view-list').addEventListener('click', () => switchView('list'));
-    // document.getElementById('view-tree-model').addEventListener('click', () => switchView('tree-model'));
-    // document.getElementById('view-tree-vuln').addEventListener('click', () => switchView('tree-vuln'));
-    
     // Add the date filter event listener here
     document.getElementById('date-filter-apply').addEventListener('click', function() {
         const startDate = document.getElementById('date-start').value;
@@ -33,13 +24,12 @@ document.addEventListener('DOMContentLoaded', function() {
         
         fetchReports();
     });
-    
-    // Initialize filters
-    initializeFilters();
-    
+        
     // Function to get the emoji of a model
-    function getModelEmoji(modelName) {
-        if (!modelName) return '🤖 ';
+    const getModelEmoji = (modelName) => {
+        if (!modelName) {
+          return '🤖 ';
+        }
         
         const modelLower = modelName.toLowerCase();
         
@@ -51,20 +41,30 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         return '🤖 '; // Default emoji
-    }
+    };
 
     // Functions
-    function fetchReports() {
+    const fetchReports = () => {
         showLoading('reports-container');
         
         // Building filter parameters
         const filterParams = new URLSearchParams();
-        if (activeFilters.models.length > 0) filterParams.append('model', activeFilters.models.join(','));
-        if (activeFilters.formats.length > 0) filterParams.append('format', activeFilters.formats.join(','));
-        if (activeFilters.vulnerabilities.length > 0) filterParams.append('vulnerability', activeFilters.vulnerabilities.join(','));
+        if (activeFilters.models.length > 0) {
+          filterParams.append('model', activeFilters.models.join(','));
+        }
+        if (activeFilters.formats.length > 0) {
+          filterParams.append('format', activeFilters.formats.join(','));
+        }
+        if (activeFilters.vulnerabilities.length > 0) {
+          filterParams.append('vulnerability', activeFilters.vulnerabilities.join(','));
+        }
         if (activeFilters.dateRange) {
-            if (activeFilters.dateRange.start) filterParams.append('start_date', activeFilters.dateRange.start);
-            if (activeFilters.dateRange.end) filterParams.append('end_date', activeFilters.dateRange.end);
+            if (activeFilters.dateRange.start) {
+              filterParams.append('start_date', activeFilters.dateRange.start);
+            }
+            if (activeFilters.dateRange.end) {
+              filterParams.append('end_date', activeFilters.dateRange.end);
+            }
         }
         
         fetch(`/api/reports?${filterParams.toString()}`)
@@ -82,9 +82,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 document.getElementById('reports-container').innerHTML = 
                     '<div class="error-message">Unable to load reports. Please try again later.</div>';
             });
-    }
+    };
     
-    function fetchStats() {
+    const fetchStats = () => {
         showLoading('stats-container');
         
         fetch('/api/stats')
@@ -101,9 +101,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 document.getElementById('stats-container').innerHTML = 
                     '<div class="error-message">Unable to load statistics. Please try again later.</div>';
             });
-    }
+    };
     
-    function renderStats() {
+    const renderStats = () => {
         const statsContainer = document.getElementById('stats-container');
         
         // Preparing risk data for display
@@ -146,9 +146,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
             </div>
         `;
-    }
+    };
     
-    function renderCurrentView() {
+    const renderCurrentView = () => {
         switch(currentViewMode) {
             case 'list':
                 renderListView();
@@ -162,29 +162,10 @@ document.addEventListener('DOMContentLoaded', function() {
             default:
                 renderListView();
         }
-    }
-    
-    function renderListView() {
-        const container = document.getElementById('reports-container');
-        
-        if (reportData.length === 0) {
-            container.innerHTML = '<div class="no-data">No reports match your filters. Please adjust your criteria.</div>';
-            return;
-        }
-        
-        // Sort reports: Executive Summary and Audit Report first, then alphabetically
-        reportData.sort((a, b) => {
-            if (a.vulnerability_type === "Executive Summary") return -1;
-            if (b.vulnerability_type === "Executive Summary") return 1;
-            if (a.vulnerability_type === "Audit Report") return -1;
-            if (b.vulnerability_type === "Audit Report") return 1;
-            return a.vulnerability_type.localeCompare(b.vulnerability_type);
-        });
-        
-        // Add a visual separator after special reports
-        let hasSpecialReports = reportData.some(r => 
-            r.vulnerability_type === "Executive Summary" || r.vulnerability_type === "Audit Report");
-        
+    };
+
+    const renderFilters = () => {
+        const container = document.getElementById('reports-filters');
         // Add quick date filter buttons
         let dateFilterButtons = `
             <div class="date-filter-buttons">
@@ -194,12 +175,43 @@ document.addEventListener('DOMContentLoaded', function() {
                 <button class="btn btn-sm" onclick="filterByDateRange('all')">All</button>
             </div>
         `;
-        
         let html = `
             ${dateFilterButtons}
-            <div class="report-grid">
         `;
+
+        container.innerHTML = html;
+    };
+    
+    const renderListView = () => {
+        const container = document.getElementById('reports-container');
         
+        if (reportData.length === 0) {
+            container.innerHTML = '<div class="no-data">No reports match your filters. Please adjust your criteria.</div>';
+            return;
+        }
+        
+        // Sort reports: Executive Summary and Audit Report first, then alphabetically
+        reportData.sort((a, b) => {
+            if (a.vulnerability_type === "Audit Report") {
+              return -1;
+            }
+            if (b.vulnerability_type === "Audit Report") {
+              return 1;
+            }
+            if (a.vulnerability_type === "Executive Summary") {
+              return -1;
+            }
+            if (b.vulnerability_type === "Executive Summary") {
+              return 1;
+            }
+            return a.vulnerability_type.localeCompare(b.vulnerability_type);
+        });
+        
+        // Add a visual separator after special reports
+        let hasSpecialReports = reportData.some(r => 
+            r.vulnerability_type === "Executive Summary" || r.vulnerability_type === "Audit Report");
+        
+        let html = '<div class="report-grid">';
         reportData.forEach((report, index) => {
             // Add a separator after special reports
             if (hasSpecialReports && index > 0 && 
@@ -317,9 +329,9 @@ document.addEventListener('DOMContentLoaded', function() {
         
         html += '</div>';
         container.innerHTML = html;
-    }
+    };
     
-    function renderTreeView(groupBy) {
+    const renderTreeView = (groupBy) => {
         const container = document.getElementById('reports-container');
         
         if (reportData.length === 0) {
@@ -331,7 +343,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const grouped = {};
         reportData.forEach(report => {
             const key = report[groupBy];
-            if (!grouped[key]) grouped[key] = [];
+            if (!grouped[key]) {
+              grouped[key] = [];
+            }
             grouped[key].push(report);
         });
         
@@ -339,10 +353,18 @@ document.addEventListener('DOMContentLoaded', function() {
         const sortedKeys = Object.keys(grouped).sort((a, b) => {
             // Put Executive Summary and Audit Report first for vulnerabilities
             if (groupBy === 'vulnerability_type') {
-                if (a === 'Executive Summary') return -1;
-                if (b === 'Executive Summary') return 1;
-                if (a === 'Audit Report') return -1;
-                if (b === 'Audit Report') return 1;
+                if (a === 'Executive Summary') {
+                  return -1;
+                }
+                if (b === 'Executive Summary') {
+                  return 1;
+                }
+                if (a === 'Audit Report') {
+                  return -1;
+                }
+                if (b === 'Audit Report') {
+                  return 1;
+                }
             }
             return a.localeCompare(b);
         });
@@ -403,7 +425,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     let datesHtml = '<div class="tree-dates-list">';
                     vulnDates.forEach(dateInfo => {
                         const formatPath = dateInfo.path;
-                        const format = dateInfo.format;
+                        const {format} = dateInfo;
                         
                         if (formatPath) {
                             datesHtml += `<span class="date-tag clickable" 
@@ -479,7 +501,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 let datesHtml = '<div class="tree-dates-list">';
                 allDates.forEach(dateInfo => {
                     const formatPath = dateInfo.path;
-                    const format = dateInfo.format;
+                    const {format} = dateInfo;
                     
                     if (formatPath) {
                         datesHtml += `<span class="date-tag clickable" 
@@ -520,9 +542,9 @@ document.addEventListener('DOMContentLoaded', function() {
         
         html += '</div>';
         container.innerHTML = html;
-    }
+    };
     
-    function switchView(viewMode) {
+    const switchView = (viewMode) => {
         // Update active tab
         document.querySelectorAll('.view-tab').forEach(tab => {
             tab.classList.remove('active');
@@ -532,9 +554,9 @@ document.addEventListener('DOMContentLoaded', function() {
         // Update view mode and render
         currentViewMode = viewMode;
         renderCurrentView();
-    }
+    };
     
-    function populateFilters() {
+    const populateFilters = () => {
         // Populate model filters
         const modelFiltersContainer = document.getElementById('model-filters');
         let modelFiltersHtml = '';
@@ -551,9 +573,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
             `;
         });
-        
+
         modelFiltersContainer.innerHTML = modelFiltersHtml || '<div class="no-data">No model available</div>';
-        
+
         // Populate vulnerability filters
         const vulnFiltersContainer = document.getElementById('vulnerability-filters');
         let vulnFiltersHtml = '';
@@ -612,9 +634,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 <button id="date-filter-apply" class="btn btn-primary btn-sm">Apply</button>
             </div>
         `;
-    }
+    };
     
-    function initializeFilters() {
+    const initializeFilters = () => {
+        renderFilters();
+
         // Initialize event listeners for the filter reset button
         document.getElementById('filter-clear').addEventListener('click', () => {
             activeFilters.models = [];
@@ -637,26 +661,26 @@ document.addEventListener('DOMContentLoaded', function() {
         // Initialize all filters based on checkboxes
         document.addEventListener('change', function(e) {
             if (e.target.classList.contains('filter-checkbox')) {
-                const type = e.target.dataset.type;
-                const value = e.target.dataset.value;
+                const {type, value} = e.target.dataset;
                 
                 handleFilterChange(type, value, e.target.checked);
             }
         });
-    }
+    };
     
-    function handleFilterChange(type, value, isChecked) {
-        let filterType;
+    const handleFilterChange = (type, value, isChecked) => {
+        // Map filter type to the corresponding property in activeFilters using object lookup
+        const typeMapping = {
+            'model': 'models',
+            'vulnerability': 'vulnerabilities',
+            'format': 'formats'
+        };
         
-        // Map filter type to the corresponding property in activeFilters
-        if (type === 'model') {
-            filterType = 'models';
-        } else if (type === 'vulnerability') {
-            filterType = 'vulnerabilities';
-        } else if (type === 'format') {
-            filterType = 'formats';
-        } else {
-            return; // Unknown type
+        const filterType = typeMapping[type];
+        
+        // Return early if unknown type
+        if (!filterType) {
+          return;
         }
         
         // Update active filters array
@@ -672,9 +696,9 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Refresh reports with new filters
         fetchReports();
-    }
+    };
     
-    function clearFilters() {
+    const clearFilters = () => {
         // Uncheck all checkboxes
         document.querySelectorAll('.filter-checkbox').forEach(checkbox => {
             checkbox.checked = false;
@@ -690,16 +714,16 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Refresh reports
         fetchReports();
-    }
+    };
     
-    function showLoading(containerId) {
+    const showLoading = (containerId) => {
         const container = document.getElementById(containerId);
         container.innerHTML = '<div class="loading"><div class="loading-spinner"></div></div>';
-    }
+    };
     
-    function hideLoading(containerId) {
+    const hideLoading = (containerId) => {
         // The content will be replaced by the rendering functions
-    }
+    };
     
     // Expose functions to the window for onclick handlers
     window.toggleTreeNode = function(header) {
@@ -712,6 +736,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     let currentReportPath = '';
     let currentReportFormat = '';
+    let currentResizeObserver = null; // Variable pour stocker l'observateur
 
     window.openReport = function(path, format) {
         const modal = document.getElementById('report-modal');
@@ -809,7 +834,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     hideLoading('report-modal-content');
                 });
         } else if (format === 'pdf') {
-            // Créer un conteneur responsive pour le PDF
+            // Create a responsive container for the PDF
             const pdfContainer = document.createElement('div');
             pdfContainer.className = 'pdf-container';
             pdfContainer.style.cssText = 'width: 100%; height: calc(100vh - 200px); position: relative;';
@@ -823,11 +848,16 @@ document.addEventListener('DOMContentLoaded', function() {
             modalContent.innerHTML = '';
             modalContent.appendChild(pdfContainer);
             
-            // Ajuster la taille lorsque le modal change de taille
-            const resizeObserver = new ResizeObserver(() => {
+            // Cleanup previous observer if exists
+            if (currentResizeObserver) {
+                currentResizeObserver.disconnect();
+            }
+            
+            // Adjust the size when the modal changes size
+            currentResizeObserver = new ResizeObserver(() => {
                 pdfContainer.style.height = 'calc(100vh - 200px)';
             });
-            resizeObserver.observe(document.getElementById('report-modal'));
+            currentResizeObserver.observe(document.getElementById('report-modal'));
             
             hideLoading('report-modal-content');
         } else {
@@ -868,13 +898,21 @@ document.addEventListener('DOMContentLoaded', function() {
     // Function to close the modal
     window.closeReportModal = function() {
         document.getElementById('report-modal').classList.remove('visible');
+        
+        // Disconnect the ResizeObserver when modal is closed
+        if (currentResizeObserver) {
+            currentResizeObserver.disconnect();
+            currentResizeObserver = null;
+        }
     };
     
     // Function to update visible dates based on selected model
     window.updateDatesForModel = function(modelElement, modelName) {
         // Find parent element (report-card or tree-item)
         const parentElement = modelElement.closest('.report-card') || modelElement.closest('.tree-item');
-        if (!parentElement) return;
+        if (!parentElement) {
+          return;
+        }
         
         // Update visual selection
         parentElement.querySelectorAll('.model-tag').forEach(tag => {
@@ -905,7 +943,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // Add a function for selecting the vulnerability type in the model tree
     window.updateDatesForVulnerability = function(vulnElement, vulnType) {
         const parentElement = vulnElement.closest('.tree-item');
-        if (!parentElement) return;
+        if (!parentElement) {
+          return;
+        }
         
         // Update visual selection
         parentElement.querySelectorAll('.vuln-tag').forEach(tag => {
@@ -934,8 +974,10 @@ document.addEventListener('DOMContentLoaded', function() {
     };
     
     // Function to format Markdown content
-    function convertMarkdownToHtml(markdown) {
-        if (!markdown) return '<p>Empty content</p>';
+    const convertMarkdownToHtml = (markdown) => {
+        if (!markdown) {
+          return '<p>Empty content</p>';
+        }
         
         // Conversion of titles
         let html = markdown;
@@ -967,10 +1009,10 @@ document.addEventListener('DOMContentLoaded', function() {
         html = html.replace(/\n\n/g, '<br>');
         
         return html;
-    }
+    };
     
     // New function to group reports
-    function groupReportsByModelAndVuln(reports) {
+    const groupReportsByModelAndVuln = (reports) => {
         const grouped = {};
         const result = [];
         
@@ -1027,8 +1069,12 @@ document.addEventListener('DOMContentLoaded', function() {
             const aLatestDate = a.dates.length > 0 ? a.dates.sort((d1, d2) => d1.date < d2.date ? 1 : -1)[0].date : '';
             const bLatestDate = b.dates.length > 0 ? b.dates.sort((d1, d2) => d1.date < d2.date ? 1 : -1)[0].date : '';
             
-            if (!aLatestDate) return 1;
-            if (!bLatestDate) return -1;
+            if (!aLatestDate) {
+              return 1;
+            }
+            if (!bLatestDate) {
+              return -1;
+            }
             return aLatestDate < bLatestDate ? 1 : -1;
         });
         
@@ -1077,8 +1123,10 @@ document.addEventListener('DOMContentLoaded', function() {
     };
     
     // Add this utility function to format names
-    function formatDisplayName(name, type) {
-        if (!name) return '';
+    const formatDisplayName = (name, type) => {
+        if (!name) {
+          return '';
+        }
         
         if (type === 'model') {
             return getModelEmoji(name) + name;
@@ -1095,7 +1143,7 @@ document.addEventListener('DOMContentLoaded', function() {
             .split(' ')
             .map(word => word.charAt(0).toUpperCase() + word.slice(1))
             .join(' ');
-    }
+    };
     
     // Function to collapse/expand tree sections
     window.toggleTreeSection = function(header) {
@@ -1140,7 +1188,9 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Find the parent card
         const card = modelElement.closest('.report-card');
-        if (!card) return;
+        if (!card) {
+          return;
+        }
         
         // Update the visual selection
         card.querySelectorAll('.model-tag').forEach(tag => {
@@ -1206,7 +1256,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         // Function to toggle the menu state
-        function toggleMenu() {
+        const toggleMenu = () => {
             const isExpanded = sidebar.classList.contains('expanded');
             
             if (isExpanded) {
@@ -1218,7 +1268,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 overlay.classList.add('active');
                 localStorage.setItem('filtersExpanded', 'true');
             }
-        }
+        };
         
         // Click event on the button
         toggleFiltersBtn.addEventListener('click', function(e) {
@@ -1233,4 +1283,14 @@ document.addEventListener('DOMContentLoaded', function() {
             localStorage.setItem('filtersExpanded', 'false');
         });
     }
+
+    // Event listeners for view switching
+    // document.getElementById('view-list').addEventListener('click', () => switchView('list'));
+    // document.getElementById('view-tree-model').addEventListener('click', () => switchView('tree-model'));
+    // document.getElementById('view-tree-vuln').addEventListener('click', () => switchView('tree-vuln'));
+
+    // Initial data loading *after* function definitions
+    fetchReports();
+    fetchStats();
+    initializeFilters();
 }); 
