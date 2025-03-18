@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0] - 2025-05-20
+
+### Added
+- Added web interface authentication with password protection
+- Added option to expose web interface on different network interfaces
+- Added command line arguments for web interface configuration:
+  - `--web-expose`: Control web interface exposure (local/all, default: local)
+  - `--web-password`: Set a password for web interface access
+  - `--web-port`: Configure the web server port (default: 5000)
+- Added login page with consistent design to match the application's style
+
+### Changed
+- Improved web server configuration with better security settings
+- Enhanced web interface initialization with random password generation
+
 ## [0.3.0] - 2025-03-17
 
 Complete codebase refactoring and improvements.

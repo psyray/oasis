@@ -6,15 +6,17 @@ from datetime import datetime
 import traceback
 from typing import Union
 
+
 # Import from configuration
 from .config import REPORT, DEFAULT_ARGS
 
 # Import from other modules
-from .tools import setup_logging, logger, display_logo, get_vulnerability_mapping
+from .tools import generate_timestamp, setup_logging, logger, display_logo, get_vulnerability_mapping
 from .ollama_manager import OllamaManager
 from .embedding import EmbeddingManager
 from .analyze import SecurityAnalyzer, EmbeddingAnalyzer
 from .report import Report
+from .web import WebServer
 
 class OasisScanner:
     """Main class for OASIS - Ollama Automated Security Intelligence Scanner"""
@@ -77,6 +79,14 @@ class OasisScanner:
                            help=f'Analyze code by entire file or by individual functions [EXPERIMENTAL] (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
         parser.add_argument('-ol', '--ollama-url', dest='ollama_url', type=str, 
                            help='Ollama URL (default: http://localhost:11434)')
+        parser.add_argument('-w', '--web', action='store_true',
+                           help='Serve reports via a web interface')
+        parser.add_argument('-we', '--web-expose', dest='web_expose', type=str, default='local',
+                           help='Web interface exposure (local: 127.0.0.1, all: 0.0.0.0) (default: local)')
+        parser.add_argument('-wpw', '--web-password', dest='web_password', type=str,
+                           help='Web interface password (if not specified, a random password will be generated)')
+        parser.add_argument('-wp', '--web-port', dest='web_port', type=int, default=5000,
+                           help='Web interface port (default: 5000)')
         return parser
 
     def get_vulnerability_help(self) -> str:
@@ -91,14 +101,15 @@ class OasisScanner:
         vuln_list.extend(
             f"{tag:<8} - {vuln['name']}" for tag, vuln in vuln_map.items()
         )
+        vuln_list = [f"{tag:<8} - {vuln['name']}" for tag, vuln in vuln_map.items()]
         return (
-            "Vulnerability types to check (comma-separated).\n"
-            + "Available tags:\n"
+            "Vulnerability types to check (comma-separated).\nAvailable tags:\n"
             + "\n".join(f"  {v}" for v in vuln_list)
             + "\n\nUse 'all' to check all vulnerabilities (default)"
         )
 
     def run_analysis_mode(self, selected_models, vuln_mapping):
+        """Run security analysis on selected models."""
         """
         Run security analysis on selected models
 
@@ -111,9 +122,7 @@ class OasisScanner:
         if invalid_tags:
             return False
 
-        # Create timestamp for this run
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logger.info(f"\nStarting security analysis at {timestamp}")
+        logger.info(f"\nStarting security analysis at {generate_timestamp()}")
 
         # Analyze with each selected model
         for model in selected_models:
@@ -131,11 +140,12 @@ class OasisScanner:
         # Report generation
         self.report.report_generated(report_type='Vulnerability', report_structure=True)
 
-        logger.info("\nAnalysis completed successfully!")
+        logger.info(f"\nAnalysis completed successfully at {generate_timestamp()}")
 
         return True
 
     def handle_audit_mode(self, vuln_mapping):
+        """Handle audit mode - analyze embeddings distribution only."""
         """
         Handle audit mode - analyze embeddings distribution only
 
@@ -166,7 +176,7 @@ class OasisScanner:
         # Report generation
         self.report.report_generated(report_type='Audit', report_structure=True)
 
-        logger.info('Audit completed successfully')
+        logger.info(f'Audit completed successfully at {generate_timestamp()}')
 
         return True
 
@@ -178,23 +188,9 @@ class OasisScanner:
             args: Arguments
         """
         try:
-            # Parse and validate arguments
-            init_result = self._init_arguments(args)
-
-            # Handle special early termination cases
-            if init_result is None:
-                return 0  # Success exit code for commands like --list-models
-            elif init_result is False:
-                return 1  # Error exit code for validation failures
-
-            # Initialize Ollama and check connection
-            if not self._init_ollama(self.args.ollama_url):
-                return 1
-
-            # Process input files and initialize report
-            return self._execute_requested_mode() if self._init_processing() else 1
+            return self._init_oasis(args)
         except KeyboardInterrupt:
-            logger.info("\nProcess interrupted by user. Exiting...")
+            logger.info(f"\nProcess interrupted by user at {generate_timestamp()}. Exiting...")
             self._save_cache_on_exit()
             return 1
         except Exception as e:
@@ -202,6 +198,36 @@ class OasisScanner:
             if logger.isEnabledFor(logging.DEBUG):
                 logger.exception(f"Full error trace: {traceback.format_exc()}", exc_info=True)
             return 1
+
+    def _init_oasis(self, args):
+        # Parse and validate arguments
+        init_result = self._init_arguments(args)
+
+        # Handle special early termination cases
+        if init_result is None:
+            return 0  # Success exit code for commands like --list-models
+        elif init_result is False:
+            return 1  # Error exit code for validation failures
+
+        # Initialize report
+        self.report = Report(self.args.input_path, self.args.output_format)
+
+        # Initialize Ollama and check connection
+        if not self.args.web:
+            if not self._init_ollama(self.args.ollama_url):
+                return 1
+            # Initialize embedding manager and process input files
+            return self._execute_requested_mode() if self._init_processing() else 1
+
+        # Serve reports via web interface
+        WebServer(
+            self.report, 
+            debug=self.args.debug,
+            web_expose=self.args.web_expose,
+            web_password=self.args.web_password,
+            web_port=self.args.web_port
+        ).run()
+        return 0  # Exit after serving the web interface
             
     def _init_arguments(self, args) -> Union[bool, None]:
         """
@@ -282,12 +308,11 @@ class OasisScanner:
 
     def _init_processing(self):
         """
-        Initialize report and process input files
+        Initialize embedding manager and process input files
 
         Returns:
             True if processing is successful, False otherwise
         """
-        self.report = Report(self.args.input_path, self.args.output_format)
 
         # Initialize embedding manager
         self.embedding_manager = EmbeddingManager(self.args, self.ollama_manager)
@@ -365,7 +390,7 @@ class OasisScanner:
         if self.args.silent:
             logs_dir = Path(self.args.input_path).resolve().parent / REPORT['OUTPUT_DIR'] / "logs" if self.args.input_path else Path(REPORT['OUTPUT_DIR']) / "logs"
             logs_dir.mkdir(parents=True, exist_ok=True)
-            log_file = logs_dir / f"oasis_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+            log_file = logs_dir / f"oasis_errors_{generate_timestamp(for_file=True)}.log"
         else:
             log_file = None
             

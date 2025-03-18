@@ -46,6 +46,7 @@
 - 📈 **Distribution Analysis**: Advanced audit mode for embedding distribution analysis
 - 🔄 **Content Chunking**: Intelligent content splitting for better analysis of large files
 - 🤖 **Interactive Model Installation**: Guided installation for required Ollama models
+- 🌐 **Web Interface**: Secure, password-protected web dashboard for exploring reports
 
 ## 🚀 Prerequisites
 
@@ -147,6 +148,10 @@ oasis --input-path [path_to_analyze] \
 - `--audit` `-a`: Run embedding distribution analysis
 - `--chunk-size` `-ch`: Maximum chunk size for splitting content (default: auto-detect)
 - `--ollama-url` `-ol`: Ollama URL (default: http://localhost:11434)
+- `--web` `-w`: Serve reports via a web interface
+- `--web-expose` `-we`: Web interface exposure (local: 127.0.0.1, all: 0.0.0.0) (default: local)
+- `--web-password` `-wpw`: Web interface password (if not specified, a random password will be generated)
+- `--web-port` `-wp`: Web interface port (default: 5000)
 
 ### 🛡️ Supported Vulnerability Types
 
@@ -199,6 +204,33 @@ oasis --input-path [path_to_analyze] --audit
 ```
 
 This mode helps you understand how different vulnerability types are distributed across your codebase.
+
+## 🌐 Web Interface
+
+OASIS includes a web interface to view and explore security reports:
+
+<img src=".github/images/webserver.png" alt="OASIS Logo" width="100%"/>
+
+<br>
+
+```bash
+# Start the web interface with default settings (localhost:5000)
+oasis --input-path [path_to_analyze] --web
+
+# Start with custom port and expose to all network interfaces
+oasis --input-path [path_to_analyze] --web --web-port 8080 --web-expose all
+
+# Start with a specific password
+oasis --input-path [path_to_analyze] --web --web-password mysecretpassword
+```
+
+### Security Features
+
+- **Password Protection**: By default, a random password is generated and displayed in the console
+- **Network Isolation**: By default, the server only listens on 127.0.0.1
+- **Custom Port**: Configurable port to avoid conflicts with other services
+
+When no password is specified, a secure random password will be generated and displayed in the console output. The web interface provides a dashboard to explore security reports, filter results, and view detailed vulnerability information.
 
 ## 📝 Changelog
 

@@ -463,7 +463,8 @@ class OllamaManager:
         else:
             return f"{ctx_size} context"
     
-    def _get_model_emoji(self, model_name: str, default_emoji: str = "🤖 ") -> str:
+    @staticmethod
+    def _get_model_emoji(model_name: str, default_emoji: str = "🤖 ") -> str:
         """
         Select an appropriate emoji for a model based on its name
         

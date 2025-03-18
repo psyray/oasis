@@ -4,7 +4,6 @@ import markdown
 from markdown.extensions import Extension
 from markdown.preprocessors import Preprocessor
 from weasyprint import HTML
-from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
 import logging
@@ -14,7 +13,7 @@ from jinja2 import Environment, FileSystemLoader
 from .config import REPORT
 
 # Import from other modules
-from .tools import extract_clean_path, logger, sanitize_name
+from .tools import extract_clean_path, logger, sanitize_name, generate_timestamp
 
 class Report:
     """
@@ -110,7 +109,7 @@ class Report:
         """
         header = [
             f"# {title}",
-            f"\nDate: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"\nDate: {generate_timestamp()}"
         ]
         
         if model_name:
@@ -242,7 +241,7 @@ class Report:
         # Create report content
         report = [
             "# Embeddings Distribution Analysis Report",
-            f"\nDate: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"\nDate: {generate_timestamp()}",
             f"\nEmbedding Model: {embedding_manager.embedding_model}",
             f"\nTotal Files Analyzed: {embedding_manager.get_embeddings_info()['total_files']}",
             REPORT['EXPLAIN_ANALYSIS'],
@@ -408,7 +407,7 @@ class Report:
         # Add timestamp at the bottom
         report.extend([
             "\n---",
-            f"Report generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Report generated on: {generate_timestamp()}",
             f"Model: {model_name}"
         ])
         
@@ -652,7 +651,7 @@ class Report:
         input_name = clean_path.name if clean_path.is_file() else clean_path.stem
         
         # Add timestamp for uniqueness
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = generate_timestamp(for_file=True)
         self.output_dir_name = f"{input_name}_{timestamp}"
         
         return base_reports_dir / self.output_dir_name
