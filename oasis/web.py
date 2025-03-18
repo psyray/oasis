@@ -1,13 +1,27 @@
+from datetime import timezone
 from pathlib import Path
 import re
 
-from oasis.tools import sanitize_name
 
+from .config import VULNERABILITY_MAPPING
+from .report import Report
 
 class WebServer:
-    def __init__(self, report):
+    def __init__(self, report, debug=False):
         self.report = report
+        self.debug = debug
         self.report_data = None
+        if not isinstance(report, Report):
+            raise ValueError("Report must be an instance of Report")
+        
+        self.input_path = Path(report.input_path)
+        if not self.input_path.exists():
+            raise FileNotFoundError(f"Input path not found at {self.input_path}")
+        self.input_path_absolute = self.input_path.resolve()
+
+        self.security_dir = self.input_path_absolute.parent / "security_reports"
+        if not self.security_dir.exists():
+            raise FileNotFoundError(f"Security reports directory not found at {self.security_dir}")
 
     def run(self):
         """Serve reports via a web interface."""
@@ -19,8 +33,12 @@ class WebServer:
         self.collect_report_data()
 
         @app.route('/')
-        def index():
-            return render_template('dashboard.html')
+        def dashboard():
+            """Main dashboard page"""
+            from .config import MODEL_EMOJIS
+            
+            return render_template('dashboard.html', 
+                                   model_emojis=MODEL_EMOJIS)
             
         @app.route('/api/reports')
         def get_reports():
@@ -28,9 +46,11 @@ class WebServer:
             model_filter = request.args.get('model', '')
             format_filter = request.args.get('format', '')
             vuln_filter = request.args.get('vulnerability', '')
+            start_date = request.args.get('start_date', None)
+            end_date = request.args.get('end_date', None)
             
             # Filter reports based on parameters
-            filtered_data = self.filter_reports(model_filter, format_filter, vuln_filter)
+            filtered_data = self.filter_reports(model_filter, format_filter, vuln_filter, start_date, end_date)
             return jsonify(filtered_data)
             
         @app.route('/api/stats')
@@ -40,52 +60,197 @@ class WebServer:
 
         @app.route('/reports/<path:filename>')
         def serve_report(filename):
-            return send_from_directory(self.report.output_dir, filename)
+            security_dir = self.security_dir
+            # The complete path now includes the timestamp directory
+            return send_from_directory(security_dir, filename)
             
         @app.route('/api/report-content/<path:filename>')
         def get_report_content(filename):
             # Return content of markdown file for previewing
             try:
-                file_path = self.report.output_dir / filename
+                file_path = self.security_dir / filename
                 if file_path.exists() and file_path.suffix == '.md':
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    return jsonify({'content': content})
+                    html_content = self.report.read_and_convert_markdown(file_path)
+                    return jsonify({'content': html_content})
                 return jsonify({'error': 'File not found or not a markdown file'}), 404
             except Exception as e:
                 return jsonify({'error': str(e)}), 500
 
-        app.run(debug=True, host='0.0.0.0', port=5000)
+        @app.route('/api/download')
+        def download_report():
+            # Get the report path
+            report_path = request.args.get('path', '')
+            if not report_path:
+                return jsonify({'error': 'No path provided'}), 400
+            
+            try:
+                # Convert the relative path to absolute
+                abs_path = self.security_dir / report_path
+                
+                # Security check - make sure path is within the security reports directory
+                if not str(abs_path.resolve()).startswith(str(self.security_dir.resolve())):
+                    return jsonify({'error': 'Invalid path'}), 403
+                
+                if not abs_path.exists():
+                    return jsonify({'error': 'File not found'}), 404
+                
+                # Get the directory and filename
+                directory = abs_path.parent
+                filename = abs_path.name
+                
+                # Set the appropriate content type based on file extension
+                content_types = {
+                    '.md': 'text/markdown',
+                    '.html': 'text/html',
+                    '.pdf': 'application/pdf'
+                }
+                content_type = content_types.get(abs_path.suffix, 'application/octet-stream')
+                
+                return send_from_directory(
+                    directory=str(directory),
+                    path=filename,
+                    mimetype=content_type,
+                    as_attachment=True
+                )
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+        @app.route('/api/dates')
+        def get_dates_by_model():
+            """Get dates available for a specific model and vulnerability type"""
+            model = request.args.get('model', '')
+            vulnerability = request.args.get('vulnerability', '')
+            
+            if not model or not vulnerability:
+                return jsonify({'error': 'Model and vulnerability parameters are required'}), 400
+            
+            # Normalize vulnerability type for comparison
+            vulnerability = vulnerability.lower()
+            
+            # Filter reports by model and vulnerability
+            filtered_reports = []
+            for report in self.report_data:
+                report_vuln = report.get('vulnerability_type', '').lower()
+                report_model = report.get('model', '')
+                
+                if model == report_model and vulnerability in report_vuln:
+                    filtered_reports.append(report)
+            
+            # Extract dates from filtered reports
+            dates = []
+            for report in filtered_reports:
+                if 'dates' in report:
+                    for date_info in report['dates']:
+                        # Add the path to the MD file if available
+                        if report.get('formats', {}).get('md', {}).get('path'):
+                            date_info['path'] = report['formats']['md']['path']
+                        dates.append(date_info)
+            
+            # Sort dates from newest to oldest
+            dates.sort(key=lambda x: x.get('date', ''), reverse=True)
+            
+            return jsonify({'dates': dates})
+
+        if self.debug:
+            app.run(debug=True, host='0.0.0.0', port=5000)
+        else:
+            app.run(host='0.0.0.0', port=5000)
         
     def collect_report_data(self):
         """Collect and process all report data for efficient filtering and display"""
         reports = []
         
-        for model in self.report.models:
-            model_name = sanitize_name(model)
-            for fmt in self.report.output_format:
-                report_dir = self.report.report_dirs.get(model_name, {}).get(fmt)
-                if not report_dir:
-                    continue
+        security_reports_dir = self.security_dir
+            
+        # Explore reports in each subdirectory (based on date/timestamp directories)
+        for report_dir in [d for d in security_reports_dir.iterdir() if d.is_dir()]:
+            # Extract date from directory name
+            report_date = self._extract_date_from_dirname(report_dir.name)
+            
+            # Explore model directories
+            for model_dir in [d for d in report_dir.iterdir() if d.is_dir()]:
+                # Desanitize model name
+                model_name = self._desanitize_name(model_dir.name)
+                
+                # Explore format directories
+                for fmt_dir in [d for d in model_dir.iterdir() if d.is_dir()]:
+                    fmt = fmt_dir.name
                     
-                for report_file in report_dir.glob('*.*'):
-                    # Extract vulnerability type from filename
-                    vulnerability_type = self._extract_vulnerability_type(report_file.stem)
+                    # Check if it's a valid format
+                    if fmt not in ['md', 'html', 'pdf']:
+                        continue
                     
-                    # Extract stats from report content if it's a markdown file
-                    stats = self._extract_report_stats(report_file) if fmt == 'md' else {}
-                    
-                    reports.append({
-                        "model": model,
-                        "format": fmt,
-                        "path": str(report_file.relative_to(self.report.output_dir)),
-                        "filename": report_file.name,
-                        "vulnerability_type": vulnerability_type,
-                        "stats": stats
-                    })
+                    # Explore report files
+                    for report_file in fmt_dir.glob('*.*'):
+                        # Extract vulnerability type from filename
+                        vulnerability_type = self._extract_vulnerability_type(report_file.stem)
+                        
+                        # Extract report stats if it's a markdown
+                        stats = self._extract_report_stats(report_file) if fmt == 'md' else {}
+                        
+                        # Build relative path for web access
+                        relative_path = report_file.relative_to(security_reports_dir)
+                        
+                        # Find alternative formats available (including timestamp)
+                        alternative_formats = self._find_alternative_formats(model_dir, report_file.stem, report_dir.name)
+                        
+                        reports.append({
+                            "model": model_name,
+                            "format": fmt,
+                            "path": str(relative_path),
+                            "filename": report_file.name,
+                            "vulnerability_type": vulnerability_type,
+                            "stats": stats,
+                            "alternative_formats": alternative_formats,
+                            "date": report_date,
+                            "timestamp_dir": report_dir.name
+                        })
+        
+        # Sort reports by date (from newest to oldest)
+        reports.sort(key=lambda x: x['date'] or "", reverse=True)
         
         self.report_data = reports
-        return reports
+
+    def _desanitize_name(self, sanitized_name):
+        """Convert sanitized name back to display name"""
+        name = sanitized_name.replace('_', ' ')
+        return name.title()
+
+    def _extract_date_from_dirname(self, dirname):
+        """Extract date from directory name format [input_path]_[%Y%m%d_%H%M%S]"""
+        try:
+            # Search for a pattern that resembles YYYYmmdd_HHMMSS at the end of the name
+            import re
+            from datetime import datetime
+
+            if match := re.search(r'_(\d{8}_\d{6})$', dirname):
+                date_str = match[1]
+                # Convert to datetime object
+                date_obj = datetime.strptime(date_str, '%Y%m%d_%H%M%S')
+                return date_obj.strftime('%Y-%m-%d %H:%M:%S')  # Readable format
+
+            return ""  # If no match, return empty string
+        except Exception as e:
+            print(f"Error extracting date from {dirname}: {e}")
+            return ""
+
+    def _find_alternative_formats(self, model_dir, report_stem, timestamp_dir=None):
+        """Find all available formats for a specific report"""
+        formats = {}
+        
+        for fmt in ['md', 'html', 'pdf']:
+            fmt_dir = model_dir / fmt
+            if fmt_dir.exists() and fmt_dir.is_dir():
+                file_path = fmt_dir / f"{report_stem}.{fmt}"
+                if file_path.exists():
+                    # Include timestamp directory in the path
+                    if timestamp_dir:
+                        relative_path = file_path.relative_to(model_dir.parent.parent)
+                        formats[fmt] = str(relative_path)
+                    else:
+                        formats[fmt] = str(file_path.relative_to(model_dir.parent))
+        
+        return formats
     
     def _extract_vulnerability_type(self, filename):
         """Extract vulnerability type from filename"""
@@ -97,24 +262,9 @@ class WebServer:
         if 'audit_report' in filename:
             return 'Audit Report'
 
-        # Try to match with known vulnerability patterns
-        # This is a simple heuristic - you might need to adjust based on your naming conventions
         vulnerability_patterns = {
-            'sqli': 'SQL Injection',
-            'xss': 'Cross-Site Scripting',
-            'csrf': 'Cross-Site Request Forgery',
-            'rce': 'Remote Code Execution',
-            'ssrf': 'Server-Side Request Forgery',
-            'xxe': 'XML External Entity',
-            'path': 'Path Traversal',
-            'idor': 'Insecure Direct Object Reference',
-            'auth': 'Authentication Issues',
-            'input': 'Insufficient Input Validation',
-            'data': 'Sensitive Data Exposure',
-            'session': 'Session Management Issues',
-            'config': 'Security Misconfiguration',
-            'logging': 'Sensitive Data Logging',
-            'crypto': 'Insecure Cryptographic Function Usage'
+            vulnerability: VULNERABILITY_MAPPING[vulnerability]['name']
+            for vulnerability in VULNERABILITY_MAPPING
         }
 
         return next(
@@ -165,7 +315,7 @@ class WebServer:
 
         return stats
     
-    def filter_reports(self, model_filter='', format_filter='', vuln_filter=''):
+    def filter_reports(self, model_filter='', format_filter='', vuln_filter='', start_date=None, end_date=None):
         """Filter reports based on criteria"""
         if not self.report_data:
             self.collect_report_data()
@@ -173,14 +323,28 @@ class WebServer:
         filtered = self.report_data
         
         if model_filter:
-            filtered = [r for r in filtered if model_filter.lower() in r['model'].lower()]
+            model_filters = [m.lower() for m in model_filter.split(',')]
+            filtered = [r for r in filtered if any(m in r['model'].lower() for m in model_filters)]
             
         if format_filter:
-            filtered = [r for r in filtered if format_filter.lower() == r['format'].lower()]
+            format_filters = [f.lower() for f in format_filter.split(',')]
+            filtered = [r for r in filtered if r['format'].lower() in format_filters]
             
         if vuln_filter:
-            filtered = [r for r in filtered if vuln_filter.lower() in r['vulnerability_type'].lower()]
+            vuln_filters = [v.lower() for v in vuln_filter.split(',')]
+            filtered = [r for r in filtered if any(v in r['vulnerability_type'].lower() for v in vuln_filters)]
+        
+        # Filter by date
+        if start_date:
+            from datetime import datetime
+            start_date = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+            filtered = [r for r in filtered if r.get('date') and datetime.strptime(r['date'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc) >= start_date]
             
+        if end_date:
+            from datetime import datetime
+            end_date = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+            filtered = [r for r in filtered if r.get('date') and datetime.strptime(r['date'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc) <= end_date]
+        
         return filtered
     
     def get_report_statistics(self):
@@ -217,25 +381,4 @@ class WebServer:
             stats['risk_summary']['low'] += report_stats.get('low_risk', 0)
             
         return stats
-
-    def display_report_structure(self):
-        """Display the report structure."""
-        print(self.report.report_structure)
-
-    def display_report(self):
-        """Display the report."""
-        print(self.report.report)
-
-    def display_vulnerabilities(self):
-        """Display the vulnerabilities."""
-        print(self.report.vulnerabilities)
-
-    def display_audit(self):
-        """Display the audit."""
-        print(self.report.audit)
-
-    def display_executive_summary(self):
-        """Display the executive summary."""
-        print(self.report.executive_summary)
-        
         

@@ -198,7 +198,7 @@ class OasisScanner:
             if not self._init_processing():
                 return 1
             if self.args.web:
-                WebServer(self.report).run()
+                WebServer(self.report, debug=self.args.debug).run()
                 return 0  # Exit after serving the web interface
             else:
                 return self._execute_requested_mode()

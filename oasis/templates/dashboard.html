@@ -3,8 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OASIS - Tableau de bord des rapports de sécurité</title>
+    <title>OASIS - Security reports dashboard</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+    <script>
+        // Pre-loading model emojis from Python
+        const modelEmojis = {{ model_emojis|tojson|safe }};
+    </script>
 </head>
 <body>
     <header class="header">
@@ -17,29 +21,51 @@
     </header>
     
     <div class="main-container">
+        <button id="toggle-filters" class="toggle-filters-btn">
+            <span class="filter-icon">🔍</span>
+            <span class="filter-text">Filtres</span>
+        </button>
+        
         <aside class="sidebar">
             <div class="filter-section">
-                <h2 class="filter-title">Filtrer par modèle</h2>
+                <h2 class="filter-title">Filter by model</h2>
                 <div class="filter-options" id="model-filters">
                     <div class="loading"><div class="loading-spinner"></div></div>
                 </div>
             </div>
             
             <div class="filter-section">
-                <h2 class="filter-title">Filtrer par vulnérabilité</h2>
+                <h2 class="filter-title">Filter by vulnerability</h2>
                 <div class="filter-options" id="vulnerability-filters">
                     <div class="loading"><div class="loading-spinner"></div></div>
                 </div>
             </div>
             
             <div class="filter-section">
-                <h2 class="filter-title">Filtrer par format</h2>
+                <h2 class="filter-title">Filter by format</h2>
                 <div class="filter-options" id="format-filters">
                     <div class="loading"><div class="loading-spinner"></div></div>
                 </div>
             </div>
             
-            <button id="filter-clear" class="btn btn-secondary" style="width: 100%;">Effacer tous les filtres</button>
+            <div class="filter-section">
+                <h2 class="filter-title">Filter by date</h2>
+                <div class="filter-options" id="date-filters">
+                    <div class="date-filter-inputs">
+                        <div class="date-input-group">
+                            <label for="date-start">Start:</label>
+                            <input type="date" id="date-start" class="date-input">
+                        </div>
+                        <div class="date-input-group">
+                            <label for="date-end">End:</label>
+                            <input type="date" id="date-end" class="date-input">
+                        </div>
+                        <button id="date-filter-apply" class="btn btn-primary btn-sm">Apply</button>
+                    </div>
+                </div>
+            </div>
+            
+            <button id="filter-clear" class="btn btn-secondary" style="width: 100%;">Clear all filters</button>
         </aside>
         
         <main class="content">
@@ -47,13 +73,12 @@
                 <div class="loading"><div class="loading-spinner"></div></div>
             </div>
             
-            <div class="view-selector">
-                <div id="view-list" class="view-tab active">Liste</div>
-                <div id="view-tree-model" class="view-tab">Arborescence par modèle</div>
-                <div id="view-tree-vuln" class="view-tab">Arborescence par vulnérabilité</div>
-                <div id="view-tree-format" class="view-tab">Arborescence par format</div>
+            <!-- <div class="view-selector">
+                <div id="view-list" class="view-tab active">List</div>
+                <div id="view-tree-model" class="view-tab">Tree by model</div>
+                <div id="view-tree-vuln" class="view-tab">Tree by vulnerability</div>
             </div>
-            
+             -->
             <div id="reports-container">
                 <div class="loading"><div class="loading-spinner"></div></div>
             </div>
@@ -63,15 +88,15 @@
     <div id="report-modal" class="modal-overlay">
         <div class="modal">
             <div class="modal-header">
-                <h2 id="report-modal-title" class="modal-title">Aperçu du rapport</h2>
+                <h2 id="report-modal-title" class="modal-title">Report preview</h2>
                 <button class="modal-close" onclick="closeReportModal()">&times;</button>
             </div>
             <div id="report-modal-content" class="modal-body">
                 <div class="loading"><div class="loading-spinner"></div></div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-secondary" onclick="closeReportModal()">Fermer</button>
-                <button class="btn btn-primary" onclick="downloadReport()">Télécharger</button>
+                <div id="download-options" class="download-format-options"></div>
+                <button class="btn btn-secondary" onclick="closeReportModal()">Close</button>
             </div>
         </div>
     </div>
