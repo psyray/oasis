@@ -65,6 +65,8 @@ class OasisScanner:
                            help='Comma-separated list of models to use (bypasses interactive selection - use `all` to use all models)')
         parser.add_argument('-sm', '--scan-model', dest='scan_model', type=str,
                            help='Model to use for scanning (default: same as main model)')
+        parser.add_argument('--adaptive', action='store_true', 
+                            help='Use adaptive multi-level analysis that adjusts depth based on risk assessment')
         parser.add_argument('-lm', '--list-models', action='store_true',
                            help='List available models and exit')
         parser.add_argument('-x', '--extensions', type=str,

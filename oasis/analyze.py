@@ -8,7 +8,7 @@ import hashlib
 from enum import Enum
 
 # Import from configuration
-from .config import CHUNK_ANALYZE_TIMEOUT, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS, MAX_CHUNK_SIZE, DEFAULT_ARGS
+from .config import CHUNK_ANALYZE_TIMEOUT, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS, MAX_CHUNK_SIZE, DEFAULT_ARGS, ANALYSIS_VERSION
 
 # Import from other modules
 from .ollama_manager import OllamaManager
@@ -16,10 +16,14 @@ from .tools import chunk_content, logger, calculate_similarity, sanitize_name
 from .report import Report
 from .embedding import EmbeddingManager, build_vulnerability_embedding_prompt
 
-# Define analysis modes
+# Define analysis modes and types
 class AnalysisMode(Enum):
     SCAN = "scan"  # Lightweight scanning mode
     DEEP = "deep"  # Deep analysis mode
+
+class AnalysisType(Enum):
+    STANDARD = "standard"  # Standard two-phase analysis
+    ADAPTIVE = "adaptive"  # Multi-level adaptive analysis
 
 class SecurityAnalyzer:
     def __init__(self, llm_model: str, embedding_manager: EmbeddingManager, ollama_manager: OllamaManager,
@@ -47,6 +51,7 @@ class SecurityAnalyzer:
         
         # Set up scanning model (lighter model for initial passes)
         self.scan_model = scan_model or llm_model
+        self.ollama_manager.ensure_model_available(self.scan_model)
         logger.info(f"Using {self.ollama_manager.get_model_display_name(self.scan_model)} for initial scanning and {self.ollama_manager.get_model_display_name(self.llm_model)} for deep analysis")
         
         self.embedding_manager = embedding_manager
@@ -64,7 +69,7 @@ class SecurityAnalyzer:
 
     def _initialize_chunk_cache(self):
         """
-        Initialize the chunk cache system with support for multiple models
+        Initialize the chunk cache system with support for multiple models and analysis types
         """
         # Create base cache directory
         input_path = Path(self.embedding_manager.input_path)
@@ -86,41 +91,72 @@ class SecurityAnalyzer:
         else:
             self.scan_model_cache_dir = self.model_cache_dir
         
+        # Create analysis type subdirectories for both models
+        self.standard_cache_dir = {
+            AnalysisMode.DEEP: self.model_cache_dir / AnalysisType.STANDARD.value,
+            AnalysisMode.SCAN: self.scan_model_cache_dir / AnalysisType.STANDARD.value
+        }
+        
+        self.adaptive_cache_dir = {
+            AnalysisMode.DEEP: self.model_cache_dir / AnalysisType.ADAPTIVE.value,
+            AnalysisMode.SCAN: self.scan_model_cache_dir / AnalysisType.ADAPTIVE.value
+        }
+        
+        # Create all required directories
+        for directory in list(self.standard_cache_dir.values()) + list(self.adaptive_cache_dir.values()):
+            directory.mkdir(exist_ok=True)
+        
         # Initialize cache dictionaries for current session
-        self.chunk_cache = {}
-        self.scan_chunk_cache = {}
+        self.chunk_cache = {
+            AnalysisType.STANDARD: {},
+            AnalysisType.ADAPTIVE: {}
+        }
+        self.scan_chunk_cache = {
+            AnalysisType.STANDARD: {},
+            AnalysisType.ADAPTIVE: {}
+        }
+        
+        # Initialize adaptive cache for storing intermediate results
+        self.adaptive_analysis_cache = {}
 
-    def _get_chunk_cache_path(self, file_path: str, mode: AnalysisMode = AnalysisMode.DEEP) -> Path:
+    def _get_chunk_cache_path(self, file_path: str, mode: AnalysisMode = AnalysisMode.DEEP, 
+                             analysis_type: AnalysisType = AnalysisType.STANDARD) -> Path:
         """
         Get the path to the chunk cache file for a specific analyzed file
 
         Args:
             file_path: Path to the analyzed file
             mode: Analysis mode (scan or deep)
+            analysis_type: Analysis type (standard or adaptive)
             
         Returns:
             Path object to the cache file
         """
         sanitized_file_name = sanitize_name(file_path)
-        
-        if mode == AnalysisMode.SCAN:
-            return self.scan_model_cache_dir / f"{sanitized_file_name}.cache"
-        else:
-            return self.model_cache_dir / f"{sanitized_file_name}.cache"
 
-    def _get_cache_dict(self, mode: AnalysisMode):
+        if analysis_type == AnalysisType.STANDARD:
+            return self.standard_cache_dir[mode] / f"{sanitized_file_name}.cache"
+        else:
+            return self.adaptive_cache_dir[mode] / f"{sanitized_file_name}.cache"
+
+    def _get_cache_dict(self, mode: AnalysisMode, analysis_type: AnalysisType = AnalysisType.STANDARD):
         """
-        Get the appropriate cache dictionary based on analysis mode
+        Get the appropriate cache dictionary based on analysis mode and type
         
         Args:
             mode: Analysis mode (scan or deep)
+            analysis_type: Analysis type (standard or adaptive)
             
         Returns:
             Appropriate cache dictionary
         """
-        return self.scan_chunk_cache if mode == AnalysisMode.SCAN else self.chunk_cache
+        if mode == AnalysisMode.SCAN:
+            return self.scan_chunk_cache[analysis_type]
+        else:
+            return self.chunk_cache[analysis_type]
 
-    def _process_cache(self, action: str, file_path: str, mode: AnalysisMode):
+    def _process_cache(self, action: str, file_path: str, mode: AnalysisMode, 
+                      analysis_type: AnalysisType = AnalysisType.STANDARD):
         """
         Process cache operations (load or save)
         
@@ -128,13 +164,14 @@ class SecurityAnalyzer:
             action: Action to perform ('load' or 'save')
             file_path: Path to the file
             mode: Analysis mode (scan or deep)
+            analysis_type: Analysis type (standard or adaptive)
         
         Returns:
             For 'load' action, returns the loaded cache
             For 'save' action, returns None
         """
-        cache_path = self._get_chunk_cache_path(file_path, mode)
-        cache_dict = self._get_cache_dict(mode)
+        cache_path = self._get_chunk_cache_path(file_path, mode, analysis_type)
+        cache_dict = self._get_cache_dict(mode, analysis_type)
         
         if action == 'load':
             if file_path in cache_dict:
@@ -147,10 +184,10 @@ class SecurityAnalyzer:
             try:
                 with open(cache_path, 'rb') as f:
                     cache_dict[file_path] = pickle.load(f)
-                    logger.debug(f"Loaded {mode.value} chunk cache for {file_path}: {len(cache_dict[file_path])} entries")
+                    logger.debug(f"Loaded {mode.value} {analysis_type.value} chunk cache for {file_path}: {len(cache_dict[file_path])} entries")
                     return cache_dict[file_path]
             except Exception as e:
-                logger.exception(f"Error loading {mode.value} chunk cache: {str(e)}")
+                logger.exception(f"Error loading {mode.value} {analysis_type.value} chunk cache: {str(e)}")
                 cache_dict[file_path] = {}
                 return {}
         
@@ -159,34 +196,39 @@ class SecurityAnalyzer:
                 return
             
             try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(cache_path, 'wb') as f:
                     pickle.dump(cache_dict[file_path], f)
-                    logger.debug(f"Saved {mode.value} chunk cache for {file_path}: {len(cache_dict[file_path])} entries")
+                    logger.debug(f"Saved {mode.value} {analysis_type.value} chunk cache for {file_path}: {len(cache_dict[file_path])} entries")
             except Exception as e:
-                logger.exception(f"Error saving {mode.value} chunk cache: {str(e)}")
+                logger.exception(f"Error saving {mode.value} {analysis_type.value} chunk cache: {str(e)}")
 
-    def _load_specific_chunk_cache(self, file_path: str, mode: AnalysisMode = AnalysisMode.DEEP) -> Dict:
+    def _load_specific_chunk_cache(self, file_path: str, mode: AnalysisMode = AnalysisMode.DEEP,
+                                 analysis_type: AnalysisType = AnalysisType.STANDARD) -> Dict:
         """
-        Load appropriate chunk cache for a specific file based on mode
+        Load appropriate chunk cache for a specific file based on mode and analysis type
         
         Args:
             file_path: Path to the file
             mode: Analysis mode (scan or deep)
+            analysis_type: Analysis type (standard or adaptive)
             
         Returns:
             Dictionary with cached analysis results
         """
-        return self._process_cache('load', file_path, mode)
+        return self._process_cache('load', file_path, mode, analysis_type)
             
-    def _save_specific_chunk_cache(self, file_path: str, mode: AnalysisMode = AnalysisMode.DEEP):
+    def _save_specific_chunk_cache(self, file_path: str, mode: AnalysisMode = AnalysisMode.DEEP,
+                                 analysis_type: AnalysisType = AnalysisType.STANDARD):
         """
-        Save appropriate chunk cache for a specific file based on mode
+        Save appropriate chunk cache for a specific file based on mode and analysis type
         
         Args:
             file_path: Path to the file
             mode: Analysis mode (scan or deep)
+            analysis_type: Analysis type (standard or adaptive)
         """
-        self._process_cache('save', file_path, mode)
+        self._process_cache('save', file_path, mode, analysis_type)
 
     def _has_caching_info(self, file_path: str, chunk: str, vuln_name: str) -> bool:
         """
@@ -202,7 +244,9 @@ class SecurityAnalyzer:
         """
         return file_path is not None and chunk is not None and vuln_name is not None
 
-    def _get_cached_analysis(self, file_path: str, chunk: str, vuln_name: str, prompt: str) -> str:
+    def _get_cached_analysis(self, file_path: str, chunk: str, vuln_name: str, prompt: str, 
+                           mode: AnalysisMode = AnalysisMode.DEEP,
+                           analysis_type: AnalysisType = AnalysisType.STANDARD) -> str:
         """
         Check if analysis for a chunk is already cached
         
@@ -211,18 +255,21 @@ class SecurityAnalyzer:
             chunk: Code chunk content
             vuln_name: Vulnerability name (for better organization)
             prompt: Complete analysis prompt (to detect changes in prompt structure)
+            mode: Analysis mode (scan or deep)
+            analysis_type: Analysis type (standard or adaptive)
             
         Returns:
             Cached analysis result or None if not found
         """
         # Load cache for this file if not already loaded
-        if file_path not in self.chunk_cache:
-            self._load_specific_chunk_cache(file_path)
+        cache_dict = self._get_cache_dict(mode, analysis_type)
+        if file_path not in cache_dict:
+            self._load_specific_chunk_cache(file_path, mode, analysis_type)
         
         chunk_key = self._generate_cache_key(chunk, prompt, vuln_name)
         
         # Check if analysis exists in cache
-        return self.chunk_cache[file_path].get(chunk_key)
+        return cache_dict[file_path].get(chunk_key)
 
     def search_vulnerabilities(self, vulnerability: Union[str, Dict], threshold: float = DEFAULT_ARGS['THRESHOLD']) -> List[Tuple[str, float]]:
         """
@@ -262,17 +309,21 @@ class SecurityAnalyzer:
             logger.exception(f"Error during vulnerability search: {str(e)}")
             return []
 
-    def analyze_vulnerability(self, file_path: str, vulnerability: Union[str, Dict]) -> str:
+    def analyze_vulnerability(self, file_path: str, vulnerability: Union[str, Dict], adaptive: bool = False) -> str:
         """
-        Analyze a file for a specific vulnerability using a two-phase approach.
+        Analyze a file for a specific vulnerability.
         
-        Phase 1: Quick scan with lightweight model
-        Phase 2: Deep analysis of suspicious sections with powerful model
-
         Args:
             file_path: Path to the file to analyze
             vulnerability: Vulnerability to analyze
+            adaptive: Whether to use adaptive analysis or standard two-phase approach
+            
+        Returns:
+            Analysis results as string
         """
+        if adaptive:
+            return self.analyze_vulnerability_adaptive(file_path, vulnerability)
+        
         try:
             if file_path not in self.code_base:
                 return "File not found in indexed code base"
@@ -293,7 +344,9 @@ class SecurityAnalyzer:
                     # Use a simplified prompt for the scanning phase
                     scan_prompt = self._build_scan_prompt(vuln_name, vuln_desc, chunk)
                     scan_result = self._analyze_code_chunk(
-                        scan_prompt, file_path, chunk, vuln_name, mode=AnalysisMode.SCAN
+                        scan_prompt, file_path, chunk, vuln_name, 
+                        mode=AnalysisMode.SCAN, 
+                        analysis_type=AnalysisType.STANDARD
                     )
                     
                     # Check if chunk is flagged as suspicious
@@ -323,7 +376,9 @@ class SecurityAnalyzer:
                         chunk, chunk_idx, len(code_chunks)
                     )
                     analysis_result = self._analyze_code_chunk(
-                        prompt, file_path, chunk, vuln_name, mode=AnalysisMode.DEEP
+                        prompt, file_path, chunk, vuln_name, 
+                        mode=AnalysisMode.DEEP,
+                        analysis_type=AnalysisType.STANDARD
                     )
                     analyses.append(analysis_result)
                     chunk_pbar.update(1)
@@ -376,7 +431,12 @@ class SecurityAnalyzer:
                         file_pbar.set_postfix_str(f"File: {Path(file_path).name}")
                         
                         # Use the complete vulnerability object for detailed analysis
-                        analysis = self.analyze_vulnerability(file_path, vuln)
+                        # Use adaptive analysis if requested via argument
+                        analysis = self.analyze_vulnerability(
+                            file_path, 
+                            vuln, 
+                            adaptive=args.adaptive
+                        )
                         
                         detailed_results.append({
                             'file_path': file_path,
@@ -514,7 +574,8 @@ FORMAT REQUIREMENTS:
 """
 
     def _analyze_code_chunk(self, prompt: str, file_path: str = None, chunk: str = None, 
-                           vuln_name: str = None, mode: AnalysisMode = AnalysisMode.DEEP) -> str:
+                           vuln_name: str = None, mode: AnalysisMode = AnalysisMode.DEEP,
+                           analysis_type: AnalysisType = AnalysisType.STANDARD) -> str:
         """
         Analyze a single code chunk with the appropriate LLM based on mode.
 
@@ -524,53 +585,52 @@ FORMAT REQUIREMENTS:
             chunk: The code chunk being analyzed (for caching)
             vuln_name: Vulnerability name (for better organization)
             mode: Analysis mode (scan or deep)
+            analysis_type: Analysis type (standard or adaptive)
         """
         # Select the appropriate model and cache
         model = self.scan_model if mode == AnalysisMode.SCAN else self.llm_model
-        cache_dict = self._get_cache_dict(mode)
-        
+        cache_dict = self._get_cache_dict(mode, analysis_type)
+
         # Display model name with emoji
         model_display = self.ollama_manager.get_model_display_name(model)
-        
+
         # If caching info is provided, check appropriate cache first
         if self._has_caching_info(file_path, chunk, vuln_name):
             # Load cache for this file if not already loaded
             if file_path not in cache_dict:
-                self._load_specific_chunk_cache(file_path, mode)
-            
+                self._load_specific_chunk_cache(file_path, mode, analysis_type)
+
             chunk_key = self._generate_cache_key(chunk, prompt, vuln_name)
-            cached_result = cache_dict.get(file_path, {}).get(chunk_key)
-            
-            if cached_result:
-                logger.debug(f"Using cached {mode.value} analysis for chunk in {file_path} with {model_display}")
+            if cached_result := cache_dict.get(file_path, {}).get(chunk_key):
+                logger.debug(f"Using cached {mode.value} {analysis_type.value} analysis for chunk in {file_path} with {model_display}")
                 return cached_result
 
         try:
             # Add timeout to prevent infinite waiting
             timeout = CHUNK_ANALYZE_TIMEOUT  # Timeout in seconds (2 minutes)
-            
+
             logger.debug(f"Analyzing chunk with {model_display}")
-            
+
             # Make the API call with timeout
             response = self.client.chat(
                 model=model,
                 messages=[{'role': 'user', 'content': prompt}],
                 options={"timeout": timeout * 1000}  # Convert to milliseconds if API supports it
             )
-            
+
             result = response['message']['content']
-            
+
             # Cache the result if caching info is provided
             if self._has_caching_info(file_path, chunk, vuln_name):
                 if file_path not in cache_dict:
                     cache_dict[file_path] = {}
-                
+
                 chunk_key = self._generate_cache_key(chunk, prompt, vuln_name)
                 cache_dict[file_path][chunk_key] = result
-                
+
                 # Save cache after each analysis to allow resuming at any point
-                self._save_specific_chunk_cache(file_path, mode)
-                
+                self._save_specific_chunk_cache(file_path, mode, analysis_type)
+
             return result
         except Exception as e:
             logger.exception(f"Error during chunk analysis with {model_display}: {str(e)}")
@@ -656,7 +716,7 @@ FORMAT REQUIREMENTS:
             'analysis_version': self._get_analysis_version(),
         }
         
-        # Hachage composite
+        # Composite hash
         composite_string = ":".join([str(v) for k, v in sorted(factors.items())])
         return hashlib.sha256(composite_string.encode('utf-8')).hexdigest()
 
@@ -665,8 +725,6 @@ FORMAT REQUIREMENTS:
         Return the version of the analysis algorithm, which determines cache compatibility.
         This constant must be incremented manually ONLY when the analysis behavior changes in a way that would make cached results obsolete.
         """
-        # This constant could be defined in config.py
-        from .config import ANALYSIS_VERSION
         return ANALYSIS_VERSION
 
     def _build_scan_prompt(self, vuln_name: str, vuln_desc: str, chunk: str) -> str:
@@ -699,6 +757,415 @@ Code to analyze:
 ```
 YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
 """
+
+    def analyze_vulnerability_adaptive(self, file_path: str, vulnerability: Union[str, Dict]) -> str:
+        """
+        Analyze a file for a specific vulnerability using an adaptive multi-level approach.
+        
+        Args:
+            file_path: Path to the file to analyze
+            vulnerability: Vulnerability to analyze
+            
+        Returns:
+            Analysis results as string
+        """
+        try:
+            if file_path not in self.code_base:
+                return "File not found in indexed code base"
+
+            vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation = self._get_vulnerability_details(vulnerability)
+            if not vuln_name:
+                return "Invalid vulnerability type"
+
+            # Generate cache key for this analysis
+            analysis_cache_key = f"{file_path}_{vuln_name}"
+            
+            # Check if we have already analyzed this file/vulnerability combination
+            if analysis_cache_key in self.adaptive_analysis_cache:
+                logger.info(f"Using cached adaptive analysis for {file_path} - {vuln_name}")
+                return self.adaptive_analysis_cache[analysis_cache_key]
+
+            code = self.code_base[file_path]['content']
+            code_chunks = chunk_content(code, MAX_CHUNK_SIZE)
+            
+            # LEVEL 1: Pattern-based static analysis (fastest)
+            suspicious_chunks = self._static_pattern_analysis(code_chunks, vuln_patterns)
+            
+            # LEVEL 2: Lightweight model scan (fast)
+            if len(suspicious_chunks) < len(code_chunks) * 0.7:  # Only if static analysis filtered some chunks
+                # Analyze remaining chunks with lightweight model
+                suspicious_chunks = self._lightweight_model_scan(
+                    file_path, code_chunks, suspicious_chunks, vuln_name, vuln_desc
+                )
+            
+            # LEVEL 3: Medium-depth analysis for context-sensitive chunks
+            context_specific_chunks = self._identify_context_sensitive_chunks(suspicious_chunks, vuln_name)
+            
+            # Analyze context-sensitive chunks with medium model
+            medium_results = self._medium_model_analysis(
+                file_path, context_specific_chunks, vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation
+            )
+            
+            # LEVEL 4: Deep analysis only for highly suspicious chunks
+            high_risk_chunks = self._identify_high_risk_chunks(suspicious_chunks, medium_results)
+            
+            # Analyze high-risk chunks with powerful model
+            deep_results = self._deep_model_analysis(
+                file_path, high_risk_chunks, vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation
+            )
+            
+            # Combine results from different levels
+            result = self._combine_adaptive_results(
+                file_path, code_chunks, suspicious_chunks, medium_results, deep_results
+            )
+            
+            # Cache the final result
+            self.adaptive_analysis_cache[analysis_cache_key] = result
+            
+            return result
+            
+        except Exception as e:
+            logger.exception(f"Error during adaptive vulnerability analysis: {str(e)}")
+            return f"Error during analysis: {str(e)}"
+
+    def _static_pattern_analysis(self, code_chunks: List[str], vuln_patterns: List[str]) -> List[Tuple[int, str]]:
+        """
+        Perform fast pattern-based static analysis on code chunks.
+        
+        Args:
+            code_chunks: List of code chunks
+            vuln_patterns: List of vulnerability patterns to look for
+            
+        Returns:
+            List of potentially suspicious chunks with their indices
+        """
+        suspicious_chunks = []
+        
+        with tqdm(total=len(code_chunks), desc="Static pattern analysis", leave=False) as pbar:
+            for i, chunk in enumerate(code_chunks):
+                # Convert all patterns and chunk to lowercase for case-insensitive matching
+                chunk_lower = chunk.lower()
+                
+                # Check for common vulnerability patterns
+                for pattern in vuln_patterns:
+                    if pattern.lower() in chunk_lower:
+                        suspicious_chunks.append((i, chunk))
+                        break
+                
+                pbar.update(1)
+        
+        logger.debug(f"Static analysis identified {len(suspicious_chunks)}/{len(code_chunks)} suspicious chunks")
+        return suspicious_chunks
+
+    def _lightweight_model_scan(self, file_path: str, code_chunks: List[str], 
+                              static_suspicious_chunks: List[Tuple[int, str]], 
+                              vuln_name: str, vuln_desc: str) -> List[Tuple[int, str]]:
+        """
+        Scan code chunks with lightweight model.
+        
+        Args:
+            file_path: Path to the file
+            code_chunks: All code chunks
+            static_suspicious_chunks: Chunks identified as suspicious by static analysis
+            vuln_name: Name of the vulnerability
+            vuln_desc: Description of the vulnerability
+            
+        Returns:
+            Updated list of suspicious chunks
+        """
+        # Create a set of indices of chunks already identified as suspicious
+        suspicious_indices = {i for i, _ in static_suspicious_chunks}
+        final_suspicious_chunks = static_suspicious_chunks.copy()
+        
+        # Only scan chunks not already identified as suspicious
+        remaining_chunks = [(i, chunk) for i, chunk in enumerate(code_chunks) if i not in suspicious_indices]
+        
+        with tqdm(total=len(remaining_chunks), desc="Lightweight model scan", leave=False) as pbar:
+            for i, chunk in remaining_chunks:
+                # Use simplified scan prompt
+                scan_prompt = self._build_scan_prompt(vuln_name, vuln_desc, chunk)
+                scan_result = self._analyze_code_chunk(
+                    scan_prompt, file_path, chunk, vuln_name, 
+                    mode=AnalysisMode.SCAN,
+                    analysis_type=AnalysisType.ADAPTIVE
+                )
+                
+                # Add to suspicious chunks if flagged
+                if scan_result.strip() == "SUSPICIOUS":
+                    final_suspicious_chunks.append((i, chunk))
+                
+                pbar.update(1)
+        
+        logger.debug(f"After lightweight scan: {len(final_suspicious_chunks)}/{len(code_chunks)} suspicious chunks")
+        return final_suspicious_chunks
+
+    def _identify_context_sensitive_chunks(self, suspicious_chunks: List[Tuple[int, str]], vuln_name: str) -> List[Tuple[int, str]]:
+        """
+        Identify chunks that require more context-sensitive analysis based on vulnerability type.
+        
+        Args:
+            suspicious_chunks: List of suspicious chunks
+            vuln_name: Name of the vulnerability
+            
+        Returns:
+            List of chunks requiring context-sensitive analysis
+        """
+        # Different vulnerabilities require different levels of context sensitivity
+        context_sensitivity = {
+            'SQL Injection': 0.8,       # High - needs data flow analysis
+            'XSS': 0.7,                 # High - needs output context
+            'CSRF': 0.9,                # Very high - needs session context
+            'Path Traversal': 0.6,      # Medium - needs file operations
+            'SSRF': 0.7,                # High - needs network calls context
+            'XXE': 0.8,                 # High - needs XML processing context
+            'IDOR': 0.9,                # Very high - needs access control context
+            'RCE': 0.9,                 # Very high - needs command execution context
+            'Authentication Issues': 0.8, # High - needs auth flow context
+            'Sensitive Data Exposure': 0.5, # Medium - more pattern-based
+            'Insecure Cryptographic Usage': 0.6, # Medium - mostly API usage patterns
+        }
+        
+        # Default sensitivity if vulnerability not in the list
+        default_sensitivity = 0.7
+        sensitivity = context_sensitivity.get(vuln_name, default_sensitivity)
+        
+        # Select chunks based on sensitivity threshold
+        # Higher sensitivity means more chunks will be selected for deeper analysis
+        selected_count = max(1, int(len(suspicious_chunks) * sensitivity))
+        return suspicious_chunks[:selected_count]
+
+    def _medium_model_analysis(self, file_path: str, context_chunks: List[Tuple[int, str]], 
+                             vuln_name: str, vuln_desc: str, vuln_patterns: List[str],
+                             vuln_impact: str, vuln_mitigation: str) -> Dict[int, Dict]:
+        """
+        Analyze context-sensitive chunks with medium-depth model.
+        
+        Args:
+            file_path: Path to the file
+            context_chunks: Chunks requiring context-sensitive analysis
+            vuln_name, vuln_desc, etc.: Vulnerability details
+            
+        Returns:
+            Dictionary mapping chunk indices to analysis results
+        """
+        results = {}
+        
+        # Define a simplified prompt for medium analysis (less detailed than full analysis)
+        medium_prompt_template = """You are a security expert analyzing code for {vuln_name} vulnerabilities.
+Focus ONLY on {vuln_name} and analyze this code segment carefully.
+
+Vulnerability details:
+- Description: {vuln_desc}
+- Common patterns: {patterns}
+
+Code to analyze:
+```
+{chunk}
+```
+
+Provide a brief analysis:
+1. Is this code vulnerable to {vuln_name}? (Yes/No)
+2. If yes, briefly explain why and rate the severity (Low/Medium/High/Critical)
+3. Do NOT analyze other vulnerability types
+"""
+    
+        with tqdm(total=len(context_chunks), desc="Medium-depth analysis", leave=False) as pbar:
+            for i, chunk in context_chunks:
+                patterns_str = ", ".join(vuln_patterns[:3]) if vuln_patterns else "N/A"
+                
+                medium_prompt = medium_prompt_template.format(
+                    vuln_name=vuln_name,
+                    vuln_desc=vuln_desc,
+                    patterns=patterns_str,
+                    chunk=chunk
+                )
+                
+                # Analyze with medium settings
+                result = self._analyze_code_chunk(
+                    medium_prompt, file_path, chunk, vuln_name, 
+                    mode=AnalysisMode.SCAN,
+                    analysis_type=AnalysisType.ADAPTIVE
+                )
+                
+                # Store result
+                results[i] = {
+                    'result': result,
+                    'is_vulnerable': 'yes' in result.lower() and 'no ' not in result.lower()[:3],  # Quick check
+                    'severity': self._extract_severity_from_result(result)
+                }
+                
+                pbar.update(1)
+        
+        logger.debug(f"Medium analysis completed for {len(context_chunks)} chunks")
+        return results
+
+    def _identify_high_risk_chunks(self, suspicious_chunks: List[Tuple[int, str]], 
+                              medium_results: Dict[int, Dict]) -> List[Tuple[int, str]]:
+        """
+        Identify highest-risk chunks that need deep analysis.
+        
+        Args:
+            suspicious_chunks: All suspicious chunks
+            medium_results: Results from medium-depth analysis
+            
+        Returns:
+            List of highest-risk chunks
+        """
+        high_risk_chunks = []
+        
+        # Calculate risk scores
+        for i, chunk in suspicious_chunks:
+            # If chunk was analyzed at medium level
+            if i in medium_results:
+                result = medium_results[i]
+                
+                # Calculate risk score based on medium analysis
+                risk_score = 0
+                
+                # Increase score if marked as vulnerable
+                if result['is_vulnerable']:
+                    risk_score += 2
+                    
+                # Increase score based on severity
+                severity_scores = {
+                    'critical': 3,
+                    'high': 2,
+                    'medium': 1,
+                    'low': 0
+                }
+                
+                risk_score += severity_scores.get(result['severity'].lower(), 0)
+                
+                # High risk if score >= 3
+                if risk_score >= 3:
+                    high_risk_chunks.append((i, chunk))
+            else:
+                # If chunk wasn't analyzed at medium level, include based on static analysis
+                # This is a fallback and shouldn't typically happen
+                high_risk_chunks.append((i, chunk))
+        
+        # Limit to reasonable number to prevent excessive deep analysis
+        max_deep_chunks = min(5, max(1, len(suspicious_chunks) // 3))
+        selected_chunks = high_risk_chunks[:max_deep_chunks]
+        
+        logger.debug(f"Selected {len(selected_chunks)} high-risk chunks for deep analysis")
+        return selected_chunks
+
+    def _deep_model_analysis(self, file_path: str, high_risk_chunks: List[Tuple[int, str]],
+                           vuln_name: str, vuln_desc: str, vuln_patterns: List[str],
+                           vuln_impact: str, vuln_mitigation: str) -> Dict[int, str]:
+        """
+        Perform deep analysis on high-risk chunks.
+        
+        Args:
+            file_path: Path to the file
+            high_risk_chunks: List of high-risk chunks
+            vuln_name, vuln_desc, etc.: Vulnerability details
+            
+        Returns:
+            Dictionary mapping chunk indices to detailed analysis results
+        """
+        results = {}
+        
+        with tqdm(total=len(high_risk_chunks), desc="Deep analysis", leave=False) as pbar:
+            for i, chunk in high_risk_chunks:
+                # Use the full analysis prompt for deep analysis
+                prompt = self._build_analysis_prompt(
+                    vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation,
+                    chunk, i, len(high_risk_chunks)
+                )
+                
+                # Analyze with deep model
+                result = self._analyze_code_chunk(
+                    prompt, file_path, chunk, vuln_name, 
+                    mode=AnalysisMode.DEEP,
+                    analysis_type=AnalysisType.ADAPTIVE
+                )
+                
+                # Store result
+                results[i] = result
+                pbar.update(1)
+        
+        logger.debug(f"Deep analysis completed for {len(high_risk_chunks)} chunks")
+        return results
+
+    def _extract_severity_from_result(self, result: str) -> str:
+        """
+        Extract severity from analysis result.
+        
+        Args:
+            result: Analysis result text
+            
+        Returns:
+            Severity level (Critical, High, Medium, Low, or Unknown)
+        """
+        result_lower = result.lower()
+        
+        if 'critical' in result_lower:
+            return 'Critical'
+        elif 'high' in result_lower:
+            return 'High'
+        elif 'medium' in result_lower:
+            return 'Medium'
+        elif 'low' in result_lower:
+            return 'Low'
+        else:
+            return 'Unknown'
+
+    def _combine_adaptive_results(self, file_path: str, code_chunks: List[str], 
+                               suspicious_chunks: List[Tuple[int, str]],
+                               medium_results: Dict[int, Dict], 
+                               deep_results: Dict[int, str]) -> str:
+        """
+        Combine results from different analysis levels into a cohesive report.
+        
+        Args:
+            file_path: Path to the file
+            code_chunks: All code chunks
+            suspicious_chunks: All suspicious chunks
+            medium_results: Results from medium-depth analysis
+            deep_results: Results from deep analysis
+            
+        Returns:
+            Combined analysis report
+        """
+        # Collect all chunk indices that were analyzed
+        analyzed_chunk_indices = {i for i, _ in suspicious_chunks}
+
+        # Start building the report
+        report = [
+            "# Adaptive Security Analysis Report\n",
+            f"File: {file_path}\n",
+            f"Total chunks: {len(code_chunks)}\n",
+            f"Suspicious chunks: {len(suspicious_chunks)} ({len(suspicious_chunks) / len(code_chunks) * 100:.1f}%)\n",
+            f"Medium-analyzed chunks: {len(medium_results)}\n",
+            f"Deep-analyzed chunks: {len(deep_results)}\n\n",
+        ]
+
+        # Add deep analysis results (most detailed)
+        if deep_results:
+            report.append("## Deep Analysis Results\n")
+            for i, result in deep_results.items():
+                report.extend((f"### Chunk {i + 1}\n", result, "\n"))
+
+        # Add medium analysis results for chunks not covered by deep analysis
+        if medium_results:
+            added_medium = False
+
+            for i, result in medium_results.items():
+                if i not in deep_results:
+                    if not added_medium:
+                        report.append("## Medium Analysis Results\n")
+                        added_medium = True
+
+                    report.extend((f"### Chunk {i + 1}\n", result['result'], "\n"))
+        # Add summary of chunks considered clean
+        clean_chunks = len(code_chunks) - len(suspicious_chunks)
+        if clean_chunks > 0:
+            report.append("## Clean Chunks\n")
+            report.append(f"{clean_chunks} chunks were determined to be free of vulnerabilities after initial scanning.\n")
+
+        return "\n".join(report)
 
 class EmbeddingAnalyzer:
     """
