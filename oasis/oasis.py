@@ -2,7 +2,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from datetime import datetime
+import time
 import traceback
 from typing import Union
 
@@ -123,6 +123,7 @@ class OasisScanner:
             return False
 
         logger.info(f"\nStarting security analysis at {generate_timestamp()}")
+        start_time = time.time()
 
         # Analyze with each selected model
         for model in selected_models:
@@ -140,7 +141,7 @@ class OasisScanner:
         # Report generation
         self.report.report_generated(report_type='Vulnerability', report_structure=True)
 
-        logger.info(f"\nAnalysis completed successfully at {generate_timestamp()}")
+        logger.info(f"\nAnalysis completed successfully at {generate_timestamp()}, duration: {time.time() - start_time:.2f} seconds")
 
         return True
 

@@ -3,6 +3,16 @@ Configuration constants for OASIS
 """
 from typing import Set
 
+# Analysis version (used for cache compatibility)
+# This constant must be incremented manually ONLY when the analysis behavior changes in a way that would make cached results obsolete.
+#
+# The rule would be simple: the analysis version must be incremented when changes are made to:
+# The prompt generation (_build_analysis_prompt)
+# The result interpretation logic
+# The chunking logic
+# The prompt extensions (VULNERABILITY_PROMPT_EXTENSION)
+ANALYSIS_VERSION = "1.0"
+
 # Default args values
 DEFAULT_ARGS = {
     'THRESHOLD': 0.5,
@@ -88,8 +98,9 @@ SUPPORTED_EXTENSIONS: Set[str] = {
     'gitignore', 'gitattributes', 'gitmodules'
 } 
 
-# Maximum chunk size for embedding text
+# Chunk configuration
 MAX_CHUNK_SIZE = 2048
+CHUNK_ANALYZE_TIMEOUT = 120
 EMBEDDING_THRESHOLDS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
 # Ollama API endpoint

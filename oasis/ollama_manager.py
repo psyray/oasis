@@ -299,6 +299,9 @@ class OllamaManager:
             # Let user select models interactively
             return self.select_models(available_models)
 
+        if args.models == "all":
+            return available_models
+
         # Parse comma-separated list of models or indices
         requested_items = [item.strip() for item in args.models.split(',')]
         selected_models = []

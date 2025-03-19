@@ -3,9 +3,11 @@ from typing import List, Dict, Tuple, Any, Union
 from pathlib import Path
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
+import pickle
+import hashlib
 
 # Import from configuration
-from .config import VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS, MAX_CHUNK_SIZE, DEFAULT_ARGS
+from .config import CHUNK_ANALYZE_TIMEOUT, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS, MAX_CHUNK_SIZE, DEFAULT_ARGS
 
 # Import from other modules
 from .ollama_manager import OllamaManager
@@ -38,6 +40,112 @@ class SecurityAnalyzer:
         self.analyze_type = embedding_manager.analyze_type
         self.analyze_by_function = embedding_manager.analyze_by_function
         self.threshold = embedding_manager.threshold
+        
+        # Initialize chunk cache
+        self._initialize_chunk_cache()
+
+    def _initialize_chunk_cache(self):
+        """
+        Initialize the chunk cache system
+        """
+        # Create base cache directory
+        input_path = Path(self.embedding_manager.input_path)
+        if input_path.is_dir():
+            self.cache_dir = input_path.parent / '.oasis_cache'
+        else:
+            self.cache_dir = input_path.parent / '.oasis_cache'
+            
+        self.cache_dir.mkdir(exist_ok=True)
+        
+        # Create model-specific cache directory
+        self.model_cache_dir = self.cache_dir / sanitize_name(self.llm_model)
+        self.model_cache_dir.mkdir(exist_ok=True)
+        
+        # Initialize cache dictionary for current session
+        self.chunk_cache = {}
+        
+    def _get_chunk_cache_path(self, file_path: str) -> Path:
+        """
+        Get the path to the chunk cache file for a specific analyzed file
+        
+        Args:
+            file_path: Path to the analyzed file
+            
+        Returns:
+            Path object to the cache file
+        """
+        sanitized_file_name = sanitize_name(file_path)
+        return self.model_cache_dir / f"{sanitized_file_name}.cache"
+        
+    def _load_chunk_cache(self, file_path: str) -> Dict:
+        """
+        Load chunk cache for a specific file
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            Dictionary with cached analysis results
+        """
+        cache_path = self._get_chunk_cache_path(file_path)
+        
+        if file_path in self.chunk_cache:
+            return self.chunk_cache[file_path]
+            
+        if not cache_path.exists():
+            self.chunk_cache[file_path] = {}
+            return {}
+            
+        try:
+            with open(cache_path, 'rb') as f:
+                self.chunk_cache[file_path] = pickle.load(f)
+                logger.debug(f"Loaded chunk cache for {file_path}: {len(self.chunk_cache[file_path])} entries")
+                return self.chunk_cache[file_path]
+        except Exception as e:
+            logger.exception(f"Error loading chunk cache: {str(e)}")
+            self.chunk_cache[file_path] = {}
+            return {}
+            
+    def _save_chunk_cache(self, file_path: str):
+        """
+        Save chunk cache for a specific file
+        
+        Args:
+            file_path: Path to the file
+        """
+        if file_path not in self.chunk_cache:
+            return
+            
+        cache_path = self._get_chunk_cache_path(file_path)
+        
+        try:
+            with open(cache_path, 'wb') as f:
+                pickle.dump(self.chunk_cache[file_path], f)
+                logger.debug(f"Saved chunk cache for {file_path}: {len(self.chunk_cache[file_path])} entries")
+        except Exception as e:
+            logger.exception(f"Error saving chunk cache: {str(e)}")
+            
+    def _get_cached_analysis(self, file_path: str, chunk: str, vuln_name: str, prompt: str) -> str:
+        """
+        Check if analysis for a chunk is already cached
+        
+        Args:
+            file_path: Path to the file
+            chunk: Code chunk content
+            vuln_name: Vulnerability name (for better organization)
+            prompt: Complete analysis prompt (to detect changes in prompt structure)
+            
+        Returns:
+            Cached analysis result or None if not found
+        """
+        # Load cache for this file if not already loaded
+        if file_path not in self.chunk_cache:
+            self._load_chunk_cache(file_path)
+        
+        chunk_key = self._generate_cache_key(chunk, prompt, vuln_name)
+        
+        # Check if analysis exists in cache
+        return self.chunk_cache[file_path].get(chunk_key)
 
     def search_vulnerabilities(self, vulnerability: Union[str, Dict], threshold: float = DEFAULT_ARGS['THRESHOLD']) -> List[Tuple[str, float]]:
         """
@@ -102,7 +210,7 @@ class SecurityAnalyzer:
                      leave=False) as chunk_pbar:
                 for i, chunk in enumerate(code_chunks):
                     prompt = self._build_analysis_prompt(vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation, chunk, i, len(code_chunks))
-                    analysis_result = self._analyze_code_chunk(prompt, i+1, len(code_chunks))
+                    analysis_result = self._analyze_code_chunk(prompt, file_path, chunk, vuln_name)
                     analyses.append(analysis_result)
                     chunk_pbar.update(1)
                     chunk_pbar.set_postfix_str(f"Chunk {i+1}/{len(code_chunks)}")
@@ -183,7 +291,6 @@ class SecurityAnalyzer:
         
         # Generate executive summary with enhanced data
         report.generate_executive_summary(all_results, self.llm_model)
-        report.report_generated(report_type='Executive Summary', report_structure=False)
 
         return all_results
     
@@ -256,8 +363,8 @@ class SecurityAnalyzer:
         )
         
         # Build the complete prompt with clear sections
-        return f"""You are a cybersecurity expert specialized in code analysis. Focus ONLY on finding {vuln_name} vulnerabilities in the following code segment ({i + 1}/{total_chunks}).
-DO NOT analyze any other type of vulnerability.
+        return f"""You are a cybersecurityy expert specialized in code analysis. Focus ONLY on finding {vuln_name} vulnerabilities in the following code segment ({i + 1}/{total_chunks}).
+DO NOT analyze any other type of vulnerability
 
 VULNERABILITY DETAILS:
 {vuln_info}
@@ -281,18 +388,48 @@ Code segment to analyze:
 {VULNERABILITY_PROMPT_EXTENSION}
 """
 
-    def _analyze_code_chunk(self, prompt: str, chunk_index: int = None, total_chunks: int = None) -> str:
+    def _analyze_code_chunk(self, prompt: str, file_path: str = None, chunk: str = None, vuln_name: str = None) -> str:
         """
         Analyze a single code chunk with the LLM.
 
         Args:
             prompt: Prompt to analyze
-            chunk_index: Current chunk index (optional)
-            total_chunks: Total number of chunks to analyze (optional)
+            file_path: Path to the file being analyzed (for caching)
+            chunk: The code chunk being analyzed (for caching)
+            vuln_name: Vulnerability name (for better organization)
         """
+        # If caching info is provided, check cache first
+        if file_path and chunk and vuln_name:
+            cached_result = self._get_cached_analysis(file_path, chunk, vuln_name, prompt)
+            if cached_result:
+                logger.debug(f"Using cached analysis for chunk in {file_path}")
+                return cached_result
+
         try:
-            response = self.client.chat(model=self.llm_model, messages=[{'role': 'user', 'content': prompt}])
-            return response['message']['content']
+            # Add timeout to prevent infinite waiting
+            timeout = CHUNK_ANALYZE_TIMEOUT  # Timeout in seconds (2 minutes)
+            
+            # Make the API call with timeout
+            response = self.client.chat(
+                model=self.llm_model, 
+                messages=[{'role': 'user', 'content': prompt}],
+                options={"timeout": timeout * 1000}  # Convert to milliseconds if API supports it
+            )
+            
+            result = response['message']['content']
+            
+            # Cache the result if caching info is provided
+            if file_path and chunk and vuln_name:
+                if file_path not in self.chunk_cache:
+                    self.chunk_cache[file_path] = {}
+                
+                chunk_key = self._generate_cache_key(chunk, prompt, vuln_name)
+                self.chunk_cache[file_path][chunk_key] = result
+                
+                # Save cache after each analysis to allow resuming at any point
+                self._save_chunk_cache(file_path)
+                
+            return result
         except Exception as e:
             logger.exception(f"Error during chunk analysis: {str(e)}")
             return f"Error during chunk analysis: {str(e)}"
@@ -365,6 +502,30 @@ Code segment to analyze:
             return embedding  # Chunked embeddings
         else:
             return embedding  # Single embedding vector
+
+    def _generate_cache_key(self, chunk: str, prompt: str, vuln_name: str):
+        """Generate a robust cache key that takes all factors into account"""
+        # Factors that could affect the analysis
+        factors = {
+            'chunk_content': chunk,
+            'chunk_length': len(chunk),
+            'prompt': prompt,
+            'vuln_name': vuln_name,
+            'analysis_version': self._get_analysis_version(),
+        }
+        
+        # Hachage composite
+        composite_string = ":".join([str(v) for k, v in sorted(factors.items())])
+        return hashlib.sha256(composite_string.encode('utf-8')).hexdigest()
+
+    def _get_analysis_version(self):
+        """
+        Return the version of the analysis algorithm, which determines cache compatibility.
+        This constant must be incremented manually ONLY when the analysis behavior changes in a way that would make cached results obsolete.
+        """
+        # This constant could be defined in config.py
+        from .config import ANALYSIS_VERSION
+        return ANALYSIS_VERSION
 
 class EmbeddingAnalyzer:
     """
