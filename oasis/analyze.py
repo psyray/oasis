@@ -187,32 +187,6 @@ class SecurityAnalyzer:
         except Exception as e:
             logger.exception(f"Error clearing scan cache: {str(e)}")
 
-    def _is_cache_valid(self, max_age_days: int = 7) -> bool:
-        """
-        Check if cache file exists and is not too old
-
-        Args:
-            max_age_days: Maximum age of cache in days
-        Returns:
-            bool: True if cache is valid, False otherwise
-        """
-        if self.scan_chunk_cache is None or not self.scan_chunk_cache.exists():
-            return False
-            
-        # Check cache age
-        cache_age = datetime.now() - datetime.fromtimestamp(self.scan_chunk_cache.stat().st_mtime)
-        if cache_age.days > max_age_days:
-            return False
-            
-        # Try to load cache to verify integrity
-        try:
-            with open(self.scan_chunk_cache, 'rb') as f:
-                cached_data = pickle.load(f)
-            return bool(cached_data)  # Return True if cache is not empty
-        except Exception as e:
-            logger.exception(f"Cache validation failed: {str(e)}")
-            return False 
-
     def _get_chunk_cache_path(self, file_path: str, mode: AnalysisMode = AnalysisMode.DEEP, 
                              analysis_type: AnalysisType = AnalysisType.STANDARD) -> Path:
         """
@@ -852,7 +826,7 @@ Code to analyze:
 YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
 """
 
-    def analyze_vulnerability_adaptive(self, file_path: str, vulnerability: Union[str, Dict]) -> str:
+    def analyze_vulnerability_adaptive(self, file_path: str, vulnerability: Union[str, Dict], threshold: float = 0.7) -> str:
         """
         Analyze a file for a specific vulnerability using an adaptive multi-level approach.
         
@@ -886,7 +860,7 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
             suspicious_chunks = self._static_pattern_analysis(code_chunks, vuln_patterns)
             
             # LEVEL 2: Lightweight model scan (fast)
-            if len(suspicious_chunks) < len(code_chunks) * 0.7:  # Only if static analysis filtered some chunks
+            if len(suspicious_chunks) < len(code_chunks) * threshold:  # Only if static analysis filtered some chunks
                 # Analyze remaining chunks with lightweight model
                 suspicious_chunks = self._lightweight_model_scan(
                     file_path, code_chunks, suspicious_chunks, vuln_name, vuln_desc

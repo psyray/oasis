@@ -133,7 +133,7 @@ oasis --input-path [path_to_analyze] \
 
 ### 🎮 Command Line Arguments
 
-- `--input_path` `-i`: Path to file, directory, or .txt file containing newline-separated paths to analyze
+- `--input` `-i`: Path to file, directory, or .txt file containing newline-separated paths to analyze
 - `--cache-days` `-cd`: Maximum cache age in days (default: 7)
 - `--threshold` `-t`: Similarity threshold (default: 0.5)
 - `--vulns` `-v`: Vulnerability types to check (comma-separated or 'all')

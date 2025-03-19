@@ -290,10 +290,10 @@ def sanitize_name(name: str) -> str:
 
 def sanitize_filename(string: str) -> str:
     """
-    Sanitize string for filename creation
+    Sanitize string for file name creation
 
     Args:
-        string: Original string
+        string: Original string to be sanitized for file naming
     """
     return re.sub(r'[^a-zA-Z0-9]', '_', string)
 
