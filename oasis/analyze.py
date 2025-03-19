@@ -6,13 +6,14 @@ from multiprocessing import Pool, cpu_count
 import pickle
 import hashlib
 from enum import Enum
+import re
 
 # Import from configuration
 from .config import CHUNK_ANALYZE_TIMEOUT, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS, MAX_CHUNK_SIZE, DEFAULT_ARGS, ANALYSIS_VERSION
 
 # Import from other modules
 from .ollama_manager import OllamaManager
-from .tools import chunk_content, logger, calculate_similarity, sanitize_name
+from .tools import chunk_content, logger, calculate_similarity, sanitize_filename, sanitize_name
 from .report import Report
 from .embedding import EmbeddingManager, build_vulnerability_embedding_prompt
 
@@ -778,7 +779,7 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
                 return "Invalid vulnerability type"
 
             # Generate cache key for this analysis
-            analysis_cache_key = f"{file_path}_{vuln_name}"
+            analysis_cache_key = f"{sanitize_filename(file_path)}_{sanitize_filename(vuln_name)}"
             
             # Check if we have already analyzed this file/vulnerability combination
             if analysis_cache_key in self.adaptive_analysis_cache:
@@ -990,7 +991,7 @@ Provide a brief analysis:
                 # Store result
                 results[i] = {
                     'result': result,
-                    'is_vulnerable': 'yes' in result.lower() and 'no ' not in result.lower()[:3],  # Quick check
+                    'is_vulnerable': self._detect_vulnerability_in_result(result),
                     'severity': self._extract_severity_from_result(result)
                 }
                 
@@ -998,6 +999,61 @@ Provide a brief analysis:
         
         logger.debug(f"Medium analysis completed for {len(context_chunks)} chunks")
         return results
+
+    def _detect_vulnerability_in_result(self, result: str) -> bool:
+        """
+        More robust vulnerability detection in model result text.
+        
+        Args:
+            result: Analysis result text
+            
+        Returns:
+            Boolean indicating whether a vulnerability was detected
+        """
+        result_lower = result.lower()
+        
+        # Patterns that strongly indicate a vulnerability
+        vulnerable_patterns = [
+            r'\byes\b.*vuln',
+            r'\bis vulnerable\b',
+            r'\bcontains.*vulnerability\b',
+            r'\bvulnerable to\b',
+            r'\bfound.*vulnerability\b',
+            r'\bsecurity issue\b',
+            r'\bsecurity risk\b',
+            r'\bexploit'
+        ]
+        
+        # Patterns that strongly indicate no vulnerability
+        clean_patterns = [
+            r'\bno\b.*\bvulnerabilit',
+            r'\bnot\b.*\bvulnerable\b',
+            r'\bcode is safe\b',
+            r'\bno security issue',
+            r'\bnot .*\bexploitable\b',
+            r'\bsecure\b.*\bimplementation\b'
+        ]
+        
+        # Check for patterns indicating vulnerabilities
+        for pattern in vulnerable_patterns:
+            if re.search(pattern, result_lower):
+                return True
+        
+        # Check for patterns indicating no vulnerabilities
+        for pattern in clean_patterns:
+            if re.search(pattern, result_lower):
+                return False
+        
+        # If no strong signals, use a simple heuristic as fallback
+        # Count the occurrences of vulnerability-related terms
+        vulnerability_terms = ['vulnerability', 'exploit', 'risk', 'attack', 'threat', 'insecure']
+        security_terms = ['secure', 'protected', 'safe', 'properly', 'correctly']
+        
+        vuln_count = sum(term in result_lower for term in vulnerability_terms)
+        secure_count = sum(term in result_lower for term in security_terms)
+        
+        # If significantly more vulnerability terms than security terms, consider it vulnerable
+        return vuln_count > secure_count + 1
 
     def _identify_high_risk_chunks(self, suspicious_chunks: List[Tuple[int, str]], 
                               medium_results: Dict[int, Dict]) -> List[Tuple[int, str]]:
@@ -1166,6 +1222,61 @@ Provide a brief analysis:
             report.append(f"{clean_chunks} chunks were determined to be free of vulnerabilities after initial scanning.\n")
 
         return "\n".join(report)
+
+    def clear_scan_cache(self, analysis_type: AnalysisType = None):
+        """
+        Clear scan cache files for the specified analysis type
+        
+        Args:
+            analysis_type: Type of analysis cache to clear (if None, use current analysis type)
+        """
+        try:
+            # Determine which cache directories to clear
+            if analysis_type is None:
+                # Clear only the current analysis type directories
+                cache_dirs = [
+                    self.standard_cache_dir[AnalysisMode.SCAN] if AnalysisType.STANDARD in self.scan_chunk_cache else None,
+                    self.standard_cache_dir[AnalysisMode.DEEP] if AnalysisType.STANDARD in self.chunk_cache else None,
+                    self.adaptive_cache_dir[AnalysisMode.SCAN] if AnalysisType.ADAPTIVE in self.scan_chunk_cache else None,
+                    self.adaptive_cache_dir[AnalysisMode.DEEP] if AnalysisType.ADAPTIVE in self.chunk_cache else None
+                ]
+                cache_dirs = [d for d in cache_dirs if d is not None]
+            else:
+                # Clear only the specified analysis type
+                cache_dirs = [
+                    self.standard_cache_dir[AnalysisMode.SCAN] if analysis_type == AnalysisType.STANDARD else None,
+                    self.standard_cache_dir[AnalysisMode.DEEP] if analysis_type == AnalysisType.STANDARD else None,
+                    self.adaptive_cache_dir[AnalysisMode.SCAN] if analysis_type == AnalysisType.ADAPTIVE else None,
+                    self.adaptive_cache_dir[AnalysisMode.DEEP] if analysis_type == AnalysisType.ADAPTIVE else None
+                ]
+                cache_dirs = [d for d in cache_dirs if d is not None]
+            
+            if not cache_dirs:
+                logger.warning("No cache directories to clear")
+                return
+            
+            # Delete all cache files in these directories
+            files_count = 0
+            for cache_dir in cache_dirs:
+                if cache_dir.exists():
+                    for cache_file in cache_dir.glob("*.cache"):
+                        cache_file.unlink()
+                        files_count += 1
+            
+            # Reset cache dictionaries for the current session
+            if analysis_type is None or analysis_type == AnalysisType.STANDARD:
+                self.chunk_cache[AnalysisType.STANDARD] = {}
+                self.scan_chunk_cache[AnalysisType.STANDARD] = {}
+            
+            if analysis_type is None or analysis_type == AnalysisType.ADAPTIVE:
+                self.chunk_cache[AnalysisType.ADAPTIVE] = {}
+                self.scan_chunk_cache[AnalysisType.ADAPTIVE] = {}
+                self.adaptive_analysis_cache = {}
+            
+            logger.info(f"Cleared {files_count} scan cache files")
+        
+        except Exception as e:
+            logger.exception(f"Error clearing scan cache: {str(e)}")
 
 class EmbeddingAnalyzer:
     """

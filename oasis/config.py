@@ -789,7 +789,7 @@ Code embeddings are advanced representations that convert your code into numeric
 <div class="page-break"></div>
 
 ## How to Use This Report
-- **Start with high scores**: Focus first on findings above your threshold (default 0.4)
+- **Start with high scores**: Focus first on findings above your threshold (default 0.5)
 - **Adjust threshold** with `--threshold` flag (higher for fewer false positives, lower for more coverage)
 - **Compare code vs patterns**: Verify matches against the vulnerability descriptions
 - **Use distribution insights**: The threshold analysis shows how vulnerabilities cluster

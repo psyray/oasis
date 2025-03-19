@@ -135,7 +135,7 @@ oasis --input-path [path_to_analyze] \
 
 - `--input_path` `-i`: Path to file, directory, or .txt file containing newline-separated paths to analyze
 - `--cache-days` `-cd`: Maximum cache age in days (default: 7)
-- `--threshold` `-t`: Similarity threshold (default: 0.4)
+- `--threshold` `-t`: Similarity threshold (default: 0.5)
 - `--vulns` `-v`: Vulnerability types to check (comma-separated or 'all')
 - `--output-format` `-of`: Output format [pdf, html, markdown] (default: all)
 - `--debug` `-d`: Enable debug mode

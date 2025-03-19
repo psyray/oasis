@@ -1,6 +1,7 @@
 from datetime import datetime
 import logging
 from pathlib import Path
+import re
 import numpy as np
 from typing import List, Dict
 from weasyprint.logger import LOGGER as weasyprint_logger
@@ -286,6 +287,16 @@ def sanitize_name(name: str) -> str:
     base_name = name.split('/')[-1]
     # Replace any remaining special characters
     return base_name.replace(':', '_')
+
+def sanitize_filename(string: str) -> str:
+    """
+    Sanitize string for filename creation
+
+    Args:
+        string: Original string
+    """
+    return re.sub(r'[^a-zA-Z0-9]', '_', string)
+
 
 def display_logo():
     """
