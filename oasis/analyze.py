@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime
 from typing import List, Dict, Tuple, Any, Union
 from pathlib import Path
 from tqdm import tqdm
@@ -27,12 +28,13 @@ class AnalysisType(Enum):
     ADAPTIVE = "adaptive"  # Multi-level adaptive analysis
 
 class SecurityAnalyzer:
-    def __init__(self, llm_model: str, embedding_manager: EmbeddingManager, ollama_manager: OllamaManager,
+    def __init__(self, args, llm_model: str, embedding_manager: EmbeddingManager, ollama_manager: OllamaManager,
                  scan_model: str = None):
         """
         Initialize the security analyzer with support for tiered model analysis
 
         Args:
+            args: Command line arguments
             llm_model: Main model to use for deep analysis
             embedding_manager: Embedding manager to use for embeddings
             ollama_manager: Ollama manager for model interactions
@@ -62,13 +64,17 @@ class SecurityAnalyzer:
         self.analyze_by_function = embedding_manager.analyze_by_function
         self.threshold = embedding_manager.threshold
         
+        # Cache parameters
+        self.clear_cache_scan = args.clear_cache_scan if hasattr(args, 'clear_cache_scan') else False
+        self.cache_days = args.cache_days if hasattr(args, 'cache_days') else DEFAULT_ARGS['CACHE_DAYS']
+        
         # Cache for suspicious sections (to avoid re-scanning)
         self.suspicious_sections = {}
         
         # Initialize chunk cache
-        self._initialize_chunk_cache()
+        self._setup_cache()
 
-    def _initialize_chunk_cache(self):
+    def _setup_cache(self):
         """
         Initialize the chunk cache system with support for multiple models and analysis types
         """
@@ -119,6 +125,93 @@ class SecurityAnalyzer:
         
         # Initialize adaptive cache for storing intermediate results
         self.adaptive_analysis_cache = {}
+
+        # Clear scan cache if requested
+        if hasattr(self, 'clear_cache_scan') and self.clear_cache_scan:
+            analysis_type = AnalysisType.ADAPTIVE if self.analyze_by_function else AnalysisType.STANDARD
+            self._clear_scan_cache(analysis_type)
+        
+        # Validate cache files and clean expired ones
+        self._validate_cache_expiration()
+
+    def _clear_scan_cache(self, analysis_type: AnalysisType = None) -> None:
+        """
+        Clear scan cache file
+
+        Args:
+            None
+        """
+        try:
+            # Determine which cache directories to clear
+            if analysis_type is None:
+                # Clear only the current analysis type directories
+                cache_dirs = [
+                    self.standard_cache_dir[AnalysisMode.SCAN] if AnalysisType.STANDARD in self.scan_chunk_cache else None,
+                    self.standard_cache_dir[AnalysisMode.DEEP] if AnalysisType.STANDARD in self.chunk_cache else None,
+                    self.adaptive_cache_dir[AnalysisMode.SCAN] if AnalysisType.ADAPTIVE in self.scan_chunk_cache else None,
+                    self.adaptive_cache_dir[AnalysisMode.DEEP] if AnalysisType.ADAPTIVE in self.chunk_cache else None
+                ]
+            else:
+                # Clear only the specified analysis type
+                cache_dirs = [
+                    self.standard_cache_dir[AnalysisMode.SCAN] if analysis_type == AnalysisType.STANDARD else None,
+                    self.standard_cache_dir[AnalysisMode.DEEP] if analysis_type == AnalysisType.STANDARD else None,
+                    self.adaptive_cache_dir[AnalysisMode.SCAN] if analysis_type == AnalysisType.ADAPTIVE else None,
+                    self.adaptive_cache_dir[AnalysisMode.DEEP] if analysis_type == AnalysisType.ADAPTIVE else None
+                ]
+            cache_dirs = [d for d in cache_dirs if d is not None]
+            if not cache_dirs:
+                logger.warning("No cache directories to clear")
+                return
+
+            # Delete all cache files in these directories
+            files_count = 0
+            for cache_dir in cache_dirs:
+                if cache_dir.exists():
+                    for cache_file in cache_dir.glob("*.cache"):
+                        cache_file.unlink()
+                        files_count += 1
+
+            # Reset cache dictionaries for the current session
+            if analysis_type is None or analysis_type == AnalysisType.STANDARD:
+                self.chunk_cache[AnalysisType.STANDARD] = {}
+                self.scan_chunk_cache[AnalysisType.STANDARD] = {}
+
+            if analysis_type is None or analysis_type == AnalysisType.ADAPTIVE:
+                self.chunk_cache[AnalysisType.ADAPTIVE] = {}
+                self.scan_chunk_cache[AnalysisType.ADAPTIVE] = {}
+                self.adaptive_analysis_cache = {}
+
+            logger.info(f"Cleared {files_count} scan cache files")
+
+        except Exception as e:
+            logger.exception(f"Error clearing scan cache: {str(e)}")
+
+    def _is_cache_valid(self, max_age_days: int = 7) -> bool:
+        """
+        Check if cache file exists and is not too old
+
+        Args:
+            max_age_days: Maximum age of cache in days
+        Returns:
+            bool: True if cache is valid, False otherwise
+        """
+        if self.scan_chunk_cache is None or not self.scan_chunk_cache.exists():
+            return False
+            
+        # Check cache age
+        cache_age = datetime.now() - datetime.fromtimestamp(self.scan_chunk_cache.stat().st_mtime)
+        if cache_age.days > max_age_days:
+            return False
+            
+        # Try to load cache to verify integrity
+        try:
+            with open(self.scan_chunk_cache, 'rb') as f:
+                cached_data = pickle.load(f)
+            return bool(cached_data)  # Return True if cache is not empty
+        except Exception as e:
+            logger.exception(f"Cache validation failed: {str(e)}")
+            return False 
 
     def _get_chunk_cache_path(self, file_path: str, mode: AnalysisMode = AnalysisMode.DEEP, 
                              analysis_type: AnalysisType = AnalysisType.STANDARD) -> Path:
@@ -364,7 +457,7 @@ class SecurityAnalyzer:
                 return f"No {vuln_name} vulnerabilities found in initial scan. File appears to be clean."
 
             # Phase 2: Deep analysis of suspicious chunks only
-            logger.info(f"Found {len(suspicious_chunks)} suspicious chunks, performing deep analysis")
+            logger.debug(f"Found {len(suspicious_chunks)} suspicious chunks, performing deep analysis")
             
             analyses = []
             with tqdm(total=len(suspicious_chunks), 
@@ -1185,9 +1278,6 @@ Provide a brief analysis:
         Returns:
             Combined analysis report
         """
-        # Collect all chunk indices that were analyzed
-        analyzed_chunk_indices = {i for i, _ in suspicious_chunks}
-
         # Start building the report
         report = [
             "# Adaptive Security Analysis Report\n",
@@ -1223,60 +1313,41 @@ Provide a brief analysis:
 
         return "\n".join(report)
 
-    def clear_scan_cache(self, analysis_type: AnalysisType = None):
+    def _validate_cache_expiration(self):
         """
-        Clear scan cache files for the specified analysis type
-        
-        Args:
-            analysis_type: Type of analysis cache to clear (if None, use current analysis type)
+        Check all cache files and remove expired ones based on cache_days setting
         """
         try:
-            # Determine which cache directories to clear
-            if analysis_type is None:
-                # Clear only the current analysis type directories
-                cache_dirs = [
-                    self.standard_cache_dir[AnalysisMode.SCAN] if AnalysisType.STANDARD in self.scan_chunk_cache else None,
-                    self.standard_cache_dir[AnalysisMode.DEEP] if AnalysisType.STANDARD in self.chunk_cache else None,
-                    self.adaptive_cache_dir[AnalysisMode.SCAN] if AnalysisType.ADAPTIVE in self.scan_chunk_cache else None,
-                    self.adaptive_cache_dir[AnalysisMode.DEEP] if AnalysisType.ADAPTIVE in self.chunk_cache else None
-                ]
-                cache_dirs = [d for d in cache_dirs if d is not None]
-            else:
-                # Clear only the specified analysis type
-                cache_dirs = [
-                    self.standard_cache_dir[AnalysisMode.SCAN] if analysis_type == AnalysisType.STANDARD else None,
-                    self.standard_cache_dir[AnalysisMode.DEEP] if analysis_type == AnalysisType.STANDARD else None,
-                    self.adaptive_cache_dir[AnalysisMode.SCAN] if analysis_type == AnalysisType.ADAPTIVE else None,
-                    self.adaptive_cache_dir[AnalysisMode.DEEP] if analysis_type == AnalysisType.ADAPTIVE else None
-                ]
-                cache_dirs = [d for d in cache_dirs if d is not None]
+            # Get current time
+            now = datetime.now()
+            expired_count = 0
             
-            if not cache_dirs:
-                logger.warning("No cache directories to clear")
-                return
+            # Check both standard and adaptive cache directories
+            all_cache_dirs = list(self.standard_cache_dir.values()) + list(self.adaptive_cache_dir.values())
             
-            # Delete all cache files in these directories
-            files_count = 0
-            for cache_dir in cache_dirs:
-                if cache_dir.exists():
-                    for cache_file in cache_dir.glob("*.cache"):
-                        cache_file.unlink()
-                        files_count += 1
+            for cache_dir in all_cache_dirs:
+                if not cache_dir.exists():
+                    continue
+                    
+                # Check each cache file in this directory
+                for cache_file in cache_dir.glob("*.cache"):
+                    # Get file modification time
+                    mod_time = datetime.fromtimestamp(cache_file.stat().st_mtime)
+                    cache_age = now - mod_time
+                    
+                    # Check if file is older than cache_days
+                    if cache_age.days > self.cache_days:
+                        try:
+                            cache_file.unlink()
+                            expired_count += 1
+                        except Exception as e:
+                            logger.warning(f"Could not delete expired cache file {cache_file}: {e}")
             
-            # Reset cache dictionaries for the current session
-            if analysis_type is None or analysis_type == AnalysisType.STANDARD:
-                self.chunk_cache[AnalysisType.STANDARD] = {}
-                self.scan_chunk_cache[AnalysisType.STANDARD] = {}
+            if expired_count > 0:
+                logger.info(f"Removed {expired_count} expired cache files older than {self.cache_days} days")
             
-            if analysis_type is None or analysis_type == AnalysisType.ADAPTIVE:
-                self.chunk_cache[AnalysisType.ADAPTIVE] = {}
-                self.scan_chunk_cache[AnalysisType.ADAPTIVE] = {}
-                self.adaptive_analysis_cache = {}
-            
-            logger.info(f"Cleared {files_count} scan cache files")
-        
         except Exception as e:
-            logger.exception(f"Error clearing scan cache: {str(e)}")
+            logger.exception(f"Error validating cache expiration: {str(e)}")
 
 class EmbeddingAnalyzer:
     """

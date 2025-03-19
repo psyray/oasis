@@ -23,6 +23,7 @@ class EmbeddingManager:
 
         Args:
             args: Arguments
+            ollama_manager: Ollama manager
         """
         try:
             self.ollama_manager = ollama_manager
@@ -35,7 +36,7 @@ class EmbeddingManager:
             raise RuntimeError("Could not connect to Ollama server") from e
 
         self.input_path = args.input_path
-        self.clear_cache = args.clear_cache
+        self.clear_cache = args.clear_cache_embeddings
         self.cache_days = args.cache_days or DEFAULT_ARGS['CACHE_DAYS']
         self.embedding_model = args.embed_model or DEFAULT_ARGS['EMBED_MODEL']
         self.analyze_type = args.analyze_type or DEFAULT_ARGS['ANALYSIS_TYPE']
@@ -47,7 +48,7 @@ class EmbeddingManager:
         # Normalize extensions to a list regardless of input format
         self.supported_extensions = self._normalize_extensions(args.extensions)
         self.chunk_size = args.chunk_size or DEFAULT_ARGS['CHUNK_SIZE']
-        self.setup()
+        self._setup_cache()
 
     def _normalize_extensions(self, extensions_arg) -> List[str]:
         """
@@ -74,9 +75,9 @@ class EmbeddingManager:
         # Fallback - convert whatever we got to list
         return list(extensions_arg)
         
-    def setup(self):
+    def _setup_cache(self):
         """
-        Set up the embedding manager and cache file
+        Set up the embedding manager cache
 
         Args:
             args: Arguments

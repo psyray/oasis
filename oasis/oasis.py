@@ -46,53 +46,76 @@ class OasisScanner:
             formatter_class=CustomFormatter
         )
         
-        # Add arguments (keep all existing arguments)
-        parser.add_argument('-i', '--input', dest='input_path', type=str, 
-                           help='Path to file, directory, or .txt file containing paths to analyze')
-        parser.add_argument('-t', '--threshold', type=float, default=DEFAULT_ARGS['THRESHOLD'], 
-                           help=f'Similarity threshold (default: {DEFAULT_ARGS["THRESHOLD"]})')
-        parser.add_argument('-v', '--vulns', type=str, default=DEFAULT_ARGS['VULNS'], 
-                           help=self.get_vulnerability_help())
-        parser.add_argument('-of', '--output-format', type=str, default=DEFAULT_ARGS['OUTPUT_FORMAT'],
-                           help=f'Output format [pdf, html, md] (default: {DEFAULT_ARGS["OUTPUT_FORMAT"]})')
-        parser.add_argument('-d', '--debug', action='store_true',
-                           help='Enable debug output')
-        parser.add_argument('-s', '--silent', action='store_true',
-                           help='Disable all output messages')
-        parser.add_argument('-em', '--embed-model', type=str, default=DEFAULT_ARGS['EMBED_MODEL'],
-                          help=f'Model to use for embeddings (default: {DEFAULT_ARGS["EMBED_MODEL"]})')
-        parser.add_argument('-m', '--models', type=str,
-                           help='Comma-separated list of models to use (bypasses interactive selection - use `all` to use all models)')
-        parser.add_argument('-sm', '--scan-model', dest='scan_model', type=str,
-                           help='Model to use for scanning (default: same as main model)')
-        parser.add_argument('--adaptive', action='store_true', 
-                            help='Use adaptive multi-level analysis that adjusts depth based on risk assessment')
-        parser.add_argument('-lm', '--list-models', action='store_true',
-                           help='List available models and exit')
-        parser.add_argument('-x', '--extensions', type=str,
-                           help='Comma-separated list of file extensions to analyze (e.g., "py,js,java")')
-        parser.add_argument('-cc', '--clear-cache', action='store_true',
-                           help='Clear embeddings cache before starting')
-        parser.add_argument('-a', '--audit', action='store_true',
-                           help='Run embedding distribution analysis')
-        parser.add_argument('-cd', '--cache-days', type=int, default=DEFAULT_ARGS['CACHE_DAYS'], 
-                           help=f'Maximum age of cache in days (default: {DEFAULT_ARGS["CACHE_DAYS"]})')
-        parser.add_argument('-ch', '--chunk-size', type=int,
-                           help=f'Maximum size of text chunks for embedding (default: {DEFAULT_ARGS["CHUNK_SIZE"]})')
-        parser.add_argument('-at', '--analyze_type', choices=['file', 'function'], default=DEFAULT_ARGS['ANALYSIS_TYPE'],
-                           help=f'Analyze code by entire file or by individual functions [EXPERIMENTAL] (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
-        parser.add_argument('-ol', '--ollama-url', dest='ollama_url', type=str, 
-                           help='Ollama URL (default: http://localhost:11434)')
-        parser.add_argument('-w', '--web', action='store_true',
-                           help='Serve reports via a web interface')
-        parser.add_argument('-we', '--web-expose', dest='web_expose', type=str, default='local',
-                           help='Web interface exposure (local: 127.0.0.1, all: 0.0.0.0) (default: local)')
-        parser.add_argument('-wpw', '--web-password', dest='web_password', type=str,
-                           help='Web interface password (if not specified, a random password will be generated)')
-        parser.add_argument('-wp', '--web-port', dest='web_port', type=int, default=5000,
-                           help='Web interface port (default: 5000)')
+        # Input/Output Options
+        io_group = parser.add_argument_group('Input/Output Options')
+        io_group.add_argument('-i', '--input', dest='input_path', type=str, 
+                            help='Path to file, directory, or .txt file containing paths to analyze')
+        io_group.add_argument('-of', '--output-format', type=str, default=DEFAULT_ARGS['OUTPUT_FORMAT'],
+                            help=f'Output format [pdf, html, md] (default: {DEFAULT_ARGS["OUTPUT_FORMAT"]})')
+        io_group.add_argument('-x', '--extensions', type=str,
+                            help='Comma-separated list of file extensions to analyze (e.g., "py,js,java")')
+        
+        # Analysis Configuration
+        analysis_group = parser.add_argument_group('Analysis Configuration')
+        analysis_group.add_argument('-at', '--analyze_type', choices=['file', 'function'], default=DEFAULT_ARGS['ANALYSIS_TYPE'],
+                                    help=f'Analyze code by entire file or by individual functions [EXPERIMENTAL] (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
+        analysis_group.add_argument('-ad', '--adaptive', action='store_true', 
+                                    help='Use adaptive multi-level analysis that adjusts depth based on risk assessment')
+        analysis_group.add_argument('-t', '--threshold', type=float, default=DEFAULT_ARGS['THRESHOLD'], 
+                                    help=f'Similarity threshold (default: {DEFAULT_ARGS["THRESHOLD"]})')
+        analysis_group.add_argument('-v', '--vulns', type=str, default=DEFAULT_ARGS['VULNS'], 
+                                    help=self.get_vulnerability_help())
+        analysis_group.add_argument('-ch', '--chunk-size', type=int,
+                                    help=f'Maximum size of text chunks for embedding (default: {DEFAULT_ARGS["CHUNK_SIZE"]})')
+        
+        # Model Selection
+        model_group = parser.add_argument_group('Model Selection')
+        model_group.add_argument('-m', '--models', type=str,
+                                help='Comma-separated list of models to use (bypasses interactive selection - use `all` to use all models)')
+        model_group.add_argument('-sm', '--scan-model', dest='scan_model', type=str,
+                                help='Model to use for quick scanning (default: same as main model)')
+        model_group.add_argument('-em', '--embed-model', type=str, default=DEFAULT_ARGS['EMBED_MODEL'],
+                                help=f'Model to use for embeddings (default: {DEFAULT_ARGS["EMBED_MODEL"]})')
+        model_group.add_argument('-lm', '--list-models', action='store_true',
+                                help='List available models and exit')
+        
+        # Cache Management
+        cache_group = parser.add_argument_group('Cache Management', 'Options for managing cache files')
+        cache_group.add_argument('-cce', '--clear-cache-embeddings', action='store_true',
+                                help='Clear embeddings cache before starting')
+        cache_group.add_argument('-ccs', '--clear-cache-scan', action='store_true',
+                                help='Clear scan analysis cache for the current analysis type')
+        cache_group.add_argument('-cd', '--cache-days', type=int, default=DEFAULT_ARGS['CACHE_DAYS'], 
+                                help=f'Maximum age of cache in days (default: {DEFAULT_ARGS["CACHE_DAYS"]})')
+        
+        # Web Interface
+        web_group = parser.add_argument_group('Web Interface')
+        web_group.add_argument('-w', '--web', action='store_true',
+                            help='Serve reports via a web interface')
+        web_group.add_argument('-we', '--web-expose', dest='web_expose', type=str, default='local',
+                            help='Web interface exposure (local: 127.0.0.1, all: 0.0.0.0) (default: local)')
+        web_group.add_argument('-wpw', '--web-password', dest='web_password', type=str,
+                            help='Web interface password (if not specified, a random password will be generated)')
+        web_group.add_argument('-wp', '--web-port', dest='web_port', type=int, default=5000,
+                            help='Web interface port (default: 5000)')
+        
+        # Logging and Debug
+        logging_group = parser.add_argument_group('Logging and Debug')
+        logging_group.add_argument('-d', '--debug', action='store_true',
+                                help='Enable debug output')
+        logging_group.add_argument('-s', '--silent', action='store_true',
+                                help='Disable all output messages')
+        
+        # Special Modes
+        special_group = parser.add_argument_group('Special Modes')
+        special_group.add_argument('-a', '--audit', action='store_true',
+                                help='Run embedding distribution analysis')
+        special_group.add_argument('-ol', '--ollama-url', dest='ollama_url', type=str, 
+                                help='Ollama URL (default: http://localhost:11434)')
+        special_group.add_argument('-V', '--version', action='store_true',
+                                help='Show OASIS version and exit')
+        
         return parser
-
     def get_vulnerability_help(self) -> str:
         """
         Generate help text for vulnerability arguments
@@ -137,7 +160,7 @@ class OasisScanner:
             self.report.current_model = model
 
             # Create security analyzer for this model
-            analyzer = SecurityAnalyzer(model, self.embedding_manager, self.ollama_manager, self.args.scan_model)
+            analyzer = SecurityAnalyzer(self.args, model, self.embedding_manager, self.ollama_manager, self.args.scan_model)
             
             # Process analysis
             analyzer.process_analysis_with_model(vulnerabilities, self.args, self.report)
@@ -251,6 +274,12 @@ class OasisScanner:
             self.args = args
 
         # Handle special cases that should terminate early
+        if self.args.version:
+            # Import here to avoid circular imports
+            from .__init__ import __version__
+            print(f"OASIS - Ollama Automated Security Intelligence Scanner v{__version__}")
+            return None
+        
         if self.args.list_models:
             # Setup minimal logging without file creation
             setup_logging(debug=self.args.debug, silent=False, error_log_file=None)
