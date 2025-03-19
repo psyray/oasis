@@ -41,7 +41,9 @@ class EmojiFormatter(logging.Formatter):
         return any(start <= code <= end for start, end in emoji_ranges)  
 
     def determine_icon(self, record) -> str:  
-        if not (isinstance(record.msg, str) and not self.has_emoji_prefix(record.msg.strip())):  
+        if not isinstance(record.msg, str) or self.has_emoji_prefix(
+            record.msg.strip()
+        ):  
             return ''
         msg_lower = record.msg.lower()
         if record.levelno == logging.DEBUG:  

@@ -299,7 +299,7 @@ class OllamaManager:
             # Let user select models interactively
             return self.select_models(available_models)
 
-        if args.models == "all":
+        if args.models.lower().strip() == "all":
             return available_models
 
         # Parse comma-separated list of models or indices
@@ -569,4 +569,17 @@ class OllamaManager:
             formatted_parts.append(f"({', '.join(tech_info_parts)})")
         
         return " ".join(formatted_parts)
+    
+    def get_model_display_name(self, model_name: str) -> str:
+        """
+        Get a display name for a model with appropriate emoji
+        
+        Args:
+            model_name: Raw model name
+            
+        Returns:
+            Formatted model name with emoji
+        """
+        emoji = self._get_model_emoji(model_name)
+        return f"{emoji}{model_name}"
     

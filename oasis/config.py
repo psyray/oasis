@@ -22,6 +22,7 @@ DEFAULT_ARGS = {
     'ANALYSIS_TYPE': 'file',
     'CACHE_DAYS': 7,
     'EMBED_MODEL': 'nomic-embed-text:latest',
+    'SCAN_MODEL': None,  # If None, same as main model
 }
 
 

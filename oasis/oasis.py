@@ -62,7 +62,9 @@ class OasisScanner:
         parser.add_argument('-em', '--embed-model', type=str, default=DEFAULT_ARGS['EMBED_MODEL'],
                           help=f'Model to use for embeddings (default: {DEFAULT_ARGS["EMBED_MODEL"]})')
         parser.add_argument('-m', '--models', type=str,
-                           help='Comma-separated list of models to use (bypasses interactive selection)')
+                           help='Comma-separated list of models to use (bypasses interactive selection - use `all` to use all models)')
+        parser.add_argument('-sm', '--scan-model', dest='scan_model', type=str,
+                           help='Model to use for scanning (default: same as main model)')
         parser.add_argument('-lm', '--list-models', action='store_true',
                            help='List available models and exit')
         parser.add_argument('-x', '--extensions', type=str,
@@ -133,7 +135,7 @@ class OasisScanner:
             self.report.current_model = model
 
             # Create security analyzer for this model
-            analyzer = SecurityAnalyzer(model, self.embedding_manager, self.ollama_manager)
+            analyzer = SecurityAnalyzer(model, self.embedding_manager, self.ollama_manager, self.args.scan_model)
             
             # Process analysis
             analyzer.process_analysis_with_model(vulnerabilities, self.args, self.report)
