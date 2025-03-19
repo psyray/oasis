@@ -97,9 +97,15 @@ class SecurityAnalyzer:
             code_chunks = chunk_content(code, MAX_CHUNK_SIZE)
 
             analyses = []
-            for i, chunk in enumerate(code_chunks):
-                prompt = self._build_analysis_prompt(vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation, chunk, i, len(code_chunks))
-                analyses.append(self._analyze_code_chunk(prompt))
+            with tqdm(total=len(code_chunks), 
+                     desc=f"Analyzing chunks of {Path(file_path).name}", 
+                     leave=False) as chunk_pbar:
+                for i, chunk in enumerate(code_chunks):
+                    prompt = self._build_analysis_prompt(vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation, chunk, i, len(code_chunks))
+                    analysis_result = self._analyze_code_chunk(prompt, i+1, len(code_chunks))
+                    analyses.append(analysis_result)
+                    chunk_pbar.update(1)
+                    chunk_pbar.set_postfix_str(f"Chunk {i+1}/{len(code_chunks)}")
 
             return "\n\n<div class=\"page-break\"></div>\n\n".join(analyses)
 
@@ -275,12 +281,14 @@ Code segment to analyze:
 {VULNERABILITY_PROMPT_EXTENSION}
 """
 
-    def _analyze_code_chunk(self, prompt: str) -> str:
+    def _analyze_code_chunk(self, prompt: str, chunk_index: int = None, total_chunks: int = None) -> str:
         """
         Analyze a single code chunk with the LLM.
 
         Args:
             prompt: Prompt to analyze
+            chunk_index: Current chunk index (optional)
+            total_chunks: Total number of chunks to analyze (optional)
         """
         try:
             response = self.client.chat(model=self.llm_model, messages=[{'role': 'user', 'content': prompt}])
