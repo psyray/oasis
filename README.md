@@ -71,6 +71,42 @@
   python -m pipx ensurepath
   ```
 
+
+## 🛠️ Hardware Requirements
+
+### Minimum Requirements
+- **CPU**: 4+ cores (Intel i5/AMD Ryzen 5 or better)
+- **RAM**: 16GB minimum, 32GB recommended
+- **Storage**: 100GB free space for models (more for caching large codebases)
+- **GPU**: Not required for basic usage (will use CPU but really slow)
+
+### Recommended Setup
+- **CPU**: 8+ cores (Intel i7/i9 or AMD Ryzen 7/9)
+- **RAM**: 32GB-64GB for large codebases
+- **GPU**: NVIDIA with 8GB+ VRAM (RTX 3060 or better)
+- **Storage**: SSD with 100GB+ free space
+
+### Scaling Guidelines
+- **Small Projects** (< 10,000 LOC): Minimum requirements sufficient
+- **Medium Projects** (10,000-100,000 LOC): 8-core CPU, 32GB RAM recommended
+- **Large Projects** (> 100,000 LOC): High-end CPU, 64GB RAM, dedicated GPU essential
+
+### GPU Recommendations by Model Size
+- **4-8B parameter models**: 8GB VRAM minimum
+- **12-20B parameter models**: 16GB VRAM recommended
+- **30B+ parameter models**: 24GB+ VRAM (RTX 3090/4090/A5000 or better)
+
+### Network Requirements
+- Stable internet connection for model downloads
+- Initial model downloads: 3GB-15GB per model
+
+### Performance Tips
+- Use SSD storage for cache directories
+- Prioritize GPU memory over compute performance
+- Consider running overnight for large codebases
+- For enterprise usage, dedicated server with 128GB+ RAM and A100/H100 GPU recommended
+
+
 ## 📦 Installation
 
 1. Clone the repository:
@@ -89,13 +125,17 @@ pipx install --editable .
 
 If new releases are available, you can update the installation with:
 ```bash
+git pull origin master
 pipx upgrade oasis
 ```
-Between releases, you can update the installation with:
-```bash
-git pull origin master
+**NOTE**: because of the editable installation, you just need to pull the latest changes from the repository to update your global **oasis** command installed with pipx.
+So the pipx upgrade is not mandatory, only needed to bump version in pipx
+
+Or test a features branch before official release (could be unstable)
 ```
-note: because of the editable installation, you just need to pull the latest changes from the repository.
+git fetch --all
+git checkout feat/vX.X
+```
 
 ## 🗑️ Uninstallation
 ```bash
@@ -109,7 +149,7 @@ Basic usage:
 oasis --input-path [path_to_analyze]
 ```
 
-### 🚀 Quick Test
+## 🚀 Quick Test
 
 To quickly test OASIS with sample files:
 ```bash
@@ -124,7 +164,7 @@ oasis --input-path test_files/
 
 This will analyze the provided test files and generate security reports in the parent directory of the folder to analyze, `security_reports`.
 
-### 🔥 Advanced Usage Examples
+## 🔥 Advanced Usage Examples
 
 Standard two-phase analysis with separate models:
 ```bash
@@ -141,23 +181,23 @@ oasis -i [path_to_analyze] --adaptive -t 0.6 -m llama3
 Targeted vulnerability scan with caching control:
 ```bash
 # Analyze only for SQL Injection and XSS, clear cache, specify models
-oasis -i [path_to_analyze] -v sqli,xss --clear-cache-scan -sm phi3:mini -m phi3
+oasis -i [path_to_analyze] -v sqli,xss --clear-cache-scan -sm gemma3:4b -m gemma3:27b
 ```
 
 Full production scan:
 ```bash
 # Comprehensive scan of a large codebase
-oasis -i [path_to_analyze] -sm phi3:mini -m llama3,codellama -t 0.7 --vulns all
+oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:lates -t 0.7 --vulns all
 ```
 
-### 🎮 Command Line Arguments
+## 🎮 Command Line Arguments
 
-#### Input/Output Options
+### Input/Output Options
 - `--input` `-i`: Path to file, directory, or .txt file containing newline-separated paths to analyze
 - `--output-format` `-of`: Output format [pdf, html, md] (default: all)
 - `--extensions` `-x`: Custom file extensions to analyze (e.g., "py,js,java")
 
-#### Analysis Configuration
+### Analysis Configuration
 - `--analyze-type` `-at`: Analyze type [standard, deep] (default: standard)
 - `--embeddings-analyze-type` `-eat`: Analyze code by entire file or by individual functions [file, function] (default: file)
 - `--adaptive` `-ad`: Use adaptive multi-level analysis that adjusts depth based on risk assessment
@@ -165,35 +205,69 @@ oasis -i [path_to_analyze] -sm phi3:mini -m llama3,codellama -t 0.7 --vulns all
 - `--vulns` `-v`: Vulnerability types to check (comma-separated or 'all')
 - `--chunk-size` `-ch`: Maximum size of text chunks for embedding (default: auto-detected)
 
-#### Model Selection
+### Model Selection
 - `--models` `-m`: Comma-separated list of models to use for deep analysis
 - `--scan-model` `-sm`: Model to use for quick scanning (default: same as main model)
 - `--embed-model` `-em`: Model to use for embeddings (default: nomic-embed-text:latest)
 - `--list-models` `-lm`: List available models and exit
 
-#### Cache Management
+### Cache Management
 - `--clear-cache-embeddings` `-cce`: Clear embeddings cache before starting
 - `--clear-cache-scan` `-ccs`: Clear scan analysis cache for the current analysis type
-- `--cache-days` `-cd`: Maximum age of cache in days (default: 7)
+- `--cache-days` `-cd`: Maximum age in days for both embedding and analysis caches (default: 7)
 
-#### Web Interface
+### Web Interface
 - `--web` `-w`: Serve reports via a web interface
 - `--web-expose` `-we`: Web interface exposure (local: 127.0.0.1, all: 0.0.0.0) (default: local)
 - `--web-password` `-wpw`: Web interface password (if not specified, a random password will be generated)
 - `--web-port` `-wp`: Web interface port (default: 5000)
 
-#### Logging and Debug
+### Logging and Debug
 - `--debug` `-d`: Enable debug output
 - `--silent` `-s`: Disable all output messages
 
-#### Special Modes
+### Special Modes
 - `--audit` `-a`: Run embedding distribution analysis
 - `--ollama-url` `-ol`: Ollama URL (default: http://localhost:11434)
 - `--version` `-V`: Show OASIS version and exit
 
-### 💡 Getting the Most out of OASIS
+## 💡 Getting the Most out of OASIS
 
-For the best results with OASIS:
+### Optimizing Two-Phase Scanning
+- **Choose complementary models**: Use a lightweight model (4-7B parameters) for initial scanning and a powerful model (>20B parameters) for deep analysis
+- **Efficient workflow**: Specify with `-sm gemma:4b -m gemma:27b` to balance speed and accuracy
+- **Resource optimization**: The two-phase approach reduces GPU memory usage by using the appropriate model for each task
+- **Batch processing**: For large codebases, run initial scans during off-hours and deep analysis when needed
+
+### Model Selection Strategy
+- For initial scanning: Choose models optimized for speed (gemma3:4b, llama3.2:3b)
+- For deep analysis: Select models with strong reasoning capabilities (Gemma3:27b, deepseek-r1:32b, qwen2.5-coder:32b)
+- For specialized code: Use code-specific models like codestral, codellama, mistral-nemo ... for best results
+
+### Specific Model Selection Examples
+
+Here are specific examples for selecting models based on your security analysis needs:
+
+```bash
+# For quick analysis of a small project
+oasis -i ./src -sm llama3.2:3b -m llama3.2:8b
+
+# For thorough analysis of web application code (PHP, JavaScript)
+oasis -i ./webapp -sm gemma3:4b -m codellama:34b -v xss,sqli,csrf
+
+# For security audit of Python backend with specialized models
+oasis -i ./backend -sm phi3:mini -m deepseek-r1:32b,qwen2.5-coder:32b -v rce,input,data
+
+# For critical infrastructure security analysis (most thorough)
+oasis -i ./critical-service -sm gemma3:7b -m mixtral:instruct -v all --adaptive -t 0.6
+```
+
+Choose models based on the following criteria:
+- **Speed vs. Accuracy**: Smaller models (3B-7B) for initial scanning, larger models (>20B) for deep analysis
+- **Code Language Specialty**: Use codellama for general code, codestral for Python/C++, and starcoder/phind-codellama for web technologies
+- **Analysis Depth**: For critical applications, use stronger models like mistral-nemo, deepseek-r1, or qwen2.5-coder with the --adaptive flag
+
+### For the best results with OASIS:
 
 1. **Choose the right models**:
    - Use smaller models (4-7B parameters) for initial scanning
@@ -215,7 +289,85 @@ For the best results with OASIS:
    - Use the web interface for team collaboration
    - Export PDF reports for documentation and sharing
 
-### 🛡️ Supported Vulnerability Types
+
+## 🔎 Scanning Workflows: Standard vs Adaptive
+
+### Standard Two-Phase Workflow
+
+The standard workflow uses a sequential approach divided into two distinct phases:
+
+1. **Initial Scanning Phase**:
+   - Uses a lightweight model (e.g., 4-7B parameters)
+   - Scans entire codebase to identify potentially suspicious chunks
+   - Applies fast pattern matching to filter code segments
+   - Creates a map of suspicious sections for deep analysis
+
+2. **Deep Analysis Phase**:
+   - Uses a more powerful model (e.g., 20B+ parameters)
+   - Only analyzes chunks flagged as suspicious in phase 1
+   - Performs detailed vulnerability assessment
+   - Generates comprehensive analysis reports
+
+**Advantages**:
+- More efficient resource utilization
+- Faster for large codebases
+- Clear separation between scanning and analysis
+- Predictable resource requirements
+- Better caching opportunities
+
+**Disadvantages**:
+- May miss context-dependent vulnerabilities
+- Fixed analysis depth regardless of risk level
+- Two discrete phases can miss interrelated issues
+- Requires manual tuning of similarity threshold
+
+### Adaptive Multi-Level Workflow
+
+The adaptive workflow employs a dynamic approach that adjusts analysis depth based on risk assessment:
+
+1. **Level 1**: Static pattern-based analysis (fastest)
+   - Quick regex/pattern matching to identify obvious issues
+
+2. **Level 2**: Lightweight model scan
+   - Uses small models for initial screening
+   - Filters sections for deeper analysis
+
+3. **Level 3**: Medium-depth context analysis
+   - Examines context-sensitive code sections
+   - Assigns risk scores to chunks
+
+4. **Level 4**: Deep analysis
+   - Only high-risk chunks receive the most thorough analysis
+   - Uses powerful models only where truly needed
+
+**Advantages**:
+- More intelligent resource allocation
+- Better at finding context-dependent vulnerabilities
+- Adjusts analysis depth based on risk level
+- More thorough for critical code sections
+- Superior for complex codebases with varied risk profiles
+
+**Disadvantages**:
+- Higher computational overhead for risk assessment
+- More complex caching strategy
+- Less predictable resource utilization
+- Longer total analysis time for small projects
+- Requires more sophisticated prompt engineering
+
+### Comparison Table
+
+| Aspect | Standard Two-Phase | Adaptive Multi-Level |
+|--------|-------------------|----------------------|
+| **Speed** | Faster for average cases | Faster for low-risk code, slower overall |
+| **Resource Usage** | Predictable, efficient | Variable, optimized for risk |
+| **Detection Accuracy** | Good for obvious vulnerabilities | Better for subtle, context-dependent issues |
+| **False Positives** | More common | Reduced through context analysis |
+| **Resource Allocation** | Fixed per phase | Dynamically adjusted by risk |
+| **Best For** | Large codebases with uniform risk | Critical systems with varied risk profiles |
+| **Caching Efficiency** | High | Moderate |
+| **Configuration** | Simpler | More parameters to tune |
+
+## 🛡️ Supported Vulnerability Types
 
 | Tag | Description |
 |-----|-------------|

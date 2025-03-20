@@ -1,4 +1,4 @@
-## [0.4.0] - 2025-03-20
+## [0.4.0] - 2025-03-21
 
 ### Added
 - Added web interface authentication with password protection
@@ -12,7 +12,7 @@
 - Added support for separate scan and analysis models with `--scan-model` parameter
 - Added adaptive multi-level analysis mode that adjusts depth based on risk assessment
 - Added interactive model selection with separate prompts for scan and deep analysis models
-- Added parameter-based model filtering to recommend lightweight models for scanning
+- Added intelligent model filtering to recommend smaller parameter-count models (4-7B) for initial scanning phase
 - Added enhanced progress tracking with nested progress bars for each analysis phase
 - Added model parameter detection for intelligent model recommendations
 - Added new command-line options:
