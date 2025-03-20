@@ -262,7 +262,7 @@ class WebServer:
                         vulnerability_type = self._extract_vulnerability_type(report_file.stem)
                         
                         # Extract report stats if it's a markdown
-                        stats = self._extract_report_stats(report_file) if fmt == 'md' else {}
+                        stats = self._parse_vulnerability_statistics(report_file) if fmt == 'md' else {}
                         
                         # Build relative path for web access
                         relative_path = report_file.relative_to(security_reports_dir)
@@ -349,19 +349,16 @@ class WebServer:
             filename,
         )
     
-    def _extract_report_stats(self, report_file):
-        """Extract statistics from a report file"""
-        if not report_file.exists() or report_file.suffix != '.md':
-            return {}
-
-        try:
-            return self._extracted_from__extract_report_stats_(report_file)
-        except Exception as e:
-            print(f"Error extracting stats from {report_file}: {e}")
-            return {}
-
-    # TODO Rename this here and in `_extract_report_stats`
-    def _extracted_from__extract_report_stats_(self, report_file):
+    def _parse_vulnerability_statistics(self, report_file):
+        """
+        Parse vulnerability statistics from a report file
+        
+        Args:
+            report_file: Path to the report file to parse
+            
+        Returns:
+            Dictionary containing extracted statistics (files analyzed, risk levels, findings)
+        """
         with open(report_file, 'r', encoding='utf-8') as f:
             content = f.read()
 

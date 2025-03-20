@@ -212,15 +212,13 @@ class Report:
             report_type: Type of report (Vulnerability, Audit, Executive Summary)
             report_structure: Whether to display the report structure
         """
-        logger.info("--------------------------------")
+        logger.info("\n--------------------------------")
         logger.info(f"{report_type} report generated successfully")
         logger.info(f"{report_type} reports have been generated in: {self.output_dir}")
         
         # Show report structure
         if report_structure:
             self.display_report_structure()
-
-        logger.info("--------------------------------")
 
 
     def generate_audit_report(self, analyzer_results: Dict[str, Dict], 
@@ -655,7 +653,6 @@ class Report:
         self.output_dir_name = f"{input_name}_{timestamp}"
         
         return base_reports_dir / self.output_dir_name
-
 
 class PageBreakExtension(Extension):
     """
