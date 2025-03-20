@@ -39,9 +39,13 @@ class EmbeddingManager:
         self.clear_cache = args.clear_cache_embeddings
         self.cache_days = args.cache_days or DEFAULT_ARGS['CACHE_DAYS']
         self.embedding_model = args.embed_model or DEFAULT_ARGS['EMBED_MODEL']
-        self.analyze_type = args.embeddings_analyze_type or DEFAULT_ARGS['EMBEDDING_ANALYSIS_TYPE']
+
+        # Analysis type
+        self.analyze_type = args.analyze_type or DEFAULT_ARGS['ANALYSIS_TYPE']
+        self.embedding_analysis_type = args.embeddings_analyze_type or DEFAULT_ARGS['EMBEDDING_ANALYSIS_TYPE']
+        self.analyze_by_function = self.embedding_analysis_type == 'function'
+        
         self.threshold = args.threshold or DEFAULT_ARGS['THRESHOLD']
-        self.analyze_by_function = self.analyze_type == 'function'
         self.code_base: Dict = {}
         self.cache_file = None  # Will be set when directory is provided
 

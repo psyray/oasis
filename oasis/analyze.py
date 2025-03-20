@@ -276,86 +276,6 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
             logger.exception(f"Error during vulnerability search: {str(e)}")
             return []
 
-    def analyze_vulnerability(self, file_path: str, vulnerability: Union[str, Dict], adaptive: bool = False) -> str:
-        """
-        Analyze a file for a specific vulnerability.
-        
-        Args:
-            file_path: Path to the file to analyze
-            vulnerability: Vulnerability to analyze
-            adaptive: Whether to use adaptive analysis or standard two-phase approach
-            
-        Returns:
-            Analysis results as string
-        """
-        if adaptive:
-            return self.analyze_vulnerability_adaptive(file_path, vulnerability)
-        
-        try:
-            if file_path not in self.code_base:
-                return "File not found in indexed code base"
-
-            vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation = self._get_vulnerability_details(vulnerability)
-            if not vuln_name:  # Check if vulnerability details extraction failed
-                return "Invalid vulnerability type"
-
-            code = self.code_base[file_path]['content']
-            code_chunks = chunk_content(code, MAX_CHUNK_SIZE)
-
-            # Phase 1: Quick scan with lightweight model
-            suspicious_chunks = []
-            with tqdm(total=len(code_chunks), 
-                    desc=f"Initial scanning of {Path(file_path).name}", 
-                    leave=False) as chunk_pbar:
-                for i, chunk in enumerate(code_chunks):
-                    # Use a simplified prompt for the scanning phase
-                    scan_prompt = self._build_scan_prompt(vuln_name, vuln_desc, chunk)
-                    scan_result = self._analyze_code_chunk(
-                        scan_prompt, file_path, chunk, vuln_name, 
-                        mode=AnalysisMode.SCAN, 
-                        analysis_type=AnalysisType.STANDARD
-                    )
-                    
-                    # Check if chunk is flagged as suspicious
-                    if scan_result.strip() == "SUSPICIOUS":
-                        suspicious_chunks.append((i, chunk))
-                        
-                    chunk_pbar.update(1)
-                    chunk_pbar.set_postfix_str(f"Chunk {i+1}/{len(code_chunks)}")
-                    
-            # Store results for potential future use
-            self.suspicious_sections[(file_path, vuln_name)] = [idx for idx, _ in suspicious_chunks]
-            
-            if not suspicious_chunks:
-                return f"No {vuln_name} vulnerabilities found in initial scan. File appears to be clean."
-
-            # Phase 2: Deep analysis of suspicious chunks only
-            logger.debug(f"Found {len(suspicious_chunks)} suspicious chunks, performing deep analysis")
-            
-            analyses = []
-            with tqdm(total=len(suspicious_chunks), 
-                    desc=f"Deep analysis of {Path(file_path).name}", 
-                    leave=False) as chunk_pbar:
-                for i, (chunk_idx, chunk) in enumerate(suspicious_chunks):
-                    # Use the full detailed prompt for the deep analysis phase
-                    prompt = self._build_analysis_prompt(
-                        vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation, 
-                        chunk, chunk_idx, len(code_chunks)
-                    )
-                    analysis_result = self._analyze_code_chunk(
-                        prompt, file_path, chunk, vuln_name, 
-                        mode=AnalysisMode.DEEP,
-                        analysis_type=AnalysisType.STANDARD
-                    )
-                    analyses.append(analysis_result)
-                    chunk_pbar.update(1)
-
-            return "\n\n<div class=\"page-break\"></div>\n\n".join(analyses)
-
-        except Exception as e:
-            logger.exception(f"Error during analysis: {str(e)}")
-            return f"Error during analysis: {str(e)}"
-
     def analyze_vulnerability_adaptive(self, file_path: str, vulnerability: Union[str, Dict], threshold: float = 0.7) -> str:
         """
         Analyze a file for a specific vulnerability using an adaptive multi-level approach.
@@ -373,8 +293,9 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
 
     def process_analysis_with_model(self, vulnerabilities, args, report: Report):
         """
-        Process vulnerability analysis with current model using a two-phase approach
-        to optimize GPU memory usage
+        Process vulnerability analysis with current model using either:
+        - Standard two-phase approach (scan + deep analysis)
+        - Adaptive multi-level analysis
         
         Args:
             vulnerabilities: List of vulnerability types to analyze
@@ -384,7 +305,35 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
         Returns:
             Dictionary with analysis results
         """
-        # Store all results for executive summary
+        # Determine analysis type
+        adaptive = hasattr(args, 'adaptive') and args.adaptive
+        
+        # Select appropriate workflow based on analysis type
+        if adaptive:
+            all_results = self._perform_adaptive_analysis(vulnerabilities, args, report)
+        else:
+            all_results = self._perform_standard_analysis(vulnerabilities, args, report)
+        
+        # Generate final executive summary
+        logger.info("GENERATING FINAL REPORT")
+        report.generate_executive_summary(all_results, self.llm_model)
+        
+        return all_results
+
+    def _perform_standard_analysis(self, vulnerabilities, args, report):
+        """
+        Perform standard two-phase analysis:
+        1. Scan all files to identify suspicious chunks
+        2. Perform deep analysis on suspicious chunks only
+        
+        Args:
+            vulnerabilities: List of vulnerability types to analyze
+            args: Command line arguments
+            report: Report object
+        
+        Returns:
+            Dictionary with analysis results
+        """
         all_results = {}
         
         # Main progress bar for vulnerabilities
@@ -396,14 +345,100 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
             
             # Phase 2: Deep analysis of suspicious chunks with the powerful model
             all_results = self._perform_deep_analysis(suspicious_data, args, report, vuln_pbar)
-            
-            # Generate final executive summary
-            logger.info("\n")
-            logger.info("===== GENERATING FINAL REPORT =====")
-            report.generate_executive_summary(all_results, self.llm_model)
-
+        
         return all_results
-    
+
+    def _perform_adaptive_analysis(self, vulnerabilities, args, report):
+        """
+        Perform adaptive multi-level analysis that adjusts depth based on risk
+        assessment for each file and vulnerability
+        
+        Args:
+            vulnerabilities: List of vulnerability types to analyze
+            args: Command line arguments
+            report: Report object
+        
+        Returns:
+            Dictionary with analysis results
+        """
+        logger.info(f"Using {self.ollama_manager.get_model_display_name(self.llm_model)} for adaptive analysis")
+        
+        all_results = {}
+        
+        # Main progress bar for vulnerabilities
+        with tqdm(total=len(vulnerabilities), desc="Overall vulnerability progress", 
+                 position=0, leave=True, disable=args.silent) as vuln_pbar:
+            
+            for vuln in vulnerabilities:
+                vuln_name = vuln['name']
+                vuln_pbar.set_postfix_str(f"Analyzing: {vuln_name}")
+                
+                # Find potentially vulnerable files using embeddings
+                results = self.search_vulnerabilities(vuln, threshold=args.threshold)
+                filtered_results = [(path, score) for path, score in results if score >= args.threshold]
+                
+                # Skip if no files found
+                if not filtered_results:
+                    logger.info(f"No files found above threshold for {vuln_name}")
+                    vuln_pbar.update(1)
+                    continue
+                
+                # Process all files for this vulnerability using adaptive approach
+                detailed_results = self._process_files_adaptively(filtered_results, vuln, args.silent)
+                
+                # Store results
+                all_results[vuln_name] = detailed_results
+                
+                # Generate vulnerability report
+                if detailed_results:
+                    report.generate_vulnerability_report(
+                        vulnerability=vuln,
+                        results=detailed_results,
+                        model_name=self.llm_model,
+                    )
+                
+                vuln_pbar.update(1)
+        
+        return all_results
+
+    def _process_files_adaptively(self, filtered_results, vuln, silent=False):
+        """
+        Process all files for a vulnerability using adaptive analysis
+        
+        Args:
+            filtered_results: List of (file_path, similarity_score) tuples
+            vuln: Vulnerability data
+            silent: Whether to disable progress bars
+        
+        Returns:
+            List of detailed analysis results
+        """
+        detailed_results = []
+        
+        # Process each file with adaptive approach
+        with tqdm(filtered_results, desc=f"Adaptive analysis for {vuln['name']}", 
+                 disable=silent, leave=False) as file_pbar:
+            for file_path, similarity_score in file_pbar:
+                file_pbar.set_postfix_str(f"File: {Path(file_path).name}")
+                
+                # Use adaptive analysis pipeline
+                analysis = self.analyze_vulnerability_adaptive(file_path, vuln)
+                
+                # Add results
+                detailed_results.append({
+                    'file_path': file_path,
+                    'similarity_score': similarity_score,
+                    'analysis': analysis,
+                    'vulnerability': {
+                        'name': vuln['name'],
+                        'description': vuln['description'],
+                        'impact': vuln['impact'],
+                        'mitigation': vuln['mitigation']
+                    }
+                })
+        
+        return detailed_results
+
     def _perform_initial_scanning(self, vulnerabilities, args, main_pbar=None):
         """
         Perform initial scanning on all files for all vulnerabilities using lightweight model
@@ -834,7 +869,7 @@ class EmbeddingAnalyzer:
         self.code_base = embedding_manager.code_base
         self.embedding_model = embedding_manager.embedding_model
         self.results_cache = {}  # Cache for results by vulnerability type
-        self.analyze_type = embedding_manager.analyze_type
+        self.embedding_analysis_type = embedding_manager.embedding_analysis_type
         self.analyze_by_function = embedding_manager.analyze_by_function
 
     def analyze_vulnerability(self, vuln: Dict) -> List[Dict[str, Any]]:

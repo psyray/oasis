@@ -132,6 +132,11 @@ DEFAULT_MODELS = [
 # Keywords lists for logging emojis
 KEYWORD_LISTS = {
     'INSTALL_WORDS': ['installing', 'download', 'pulling', 'fetching'],
+    'START_WORDS': ['starting', 'beginning', 'beginning', 'starting'],
+    'FINISH_WORDS': ['finished', 'completed', 'done', 'finished'],
+    'SUCCESS_WORDS': ['success', 'done'],
+    'FAIL_WORDS': ['failed', 'error', 'crash', 'exception'],
+    'STOPPED_WORDS': ['interrupted', 'stopped'],
     'ANALYSIS_WORDS': ['analyzing', 'analysis', 'scanning', 'checking', 'inspecting', 'examining', 'found', 'querying'],
     'GENERATION_WORDS': ['generating', 'creating', 'building', 'processing'],
     'REPORT_WORDS': ['report'],
@@ -140,9 +145,6 @@ KEYWORD_LISTS = {
     'SAVE_WORDS': ['saved', 'written', 'exported'],
     'LOAD_WORDS': ['loading', 'reading', 'importing', 'loaded'],
     'DELETE_WORDS': ['deleting', 'removing', 'deleted'],
-    'SUCCESS_WORDS': ['success', 'completed', 'finished', 'done'],
-    'FAIL_WORDS': ['failed', 'error', 'crash', 'exception'],
-    'STOPPED_WORDS': ['interrupted', 'stopped'],
     'STATISTICS_WORDS': ['statistics'],
     'TOP_WORDS': ['top', 'highest', 'most', 'better'],
     'VULNERABILITY_WORDS': ['vulnerability', 'vulnerabilities']

@@ -220,8 +220,6 @@ class Report:
         if report_structure:
             self.display_report_structure()
 
-        logger.info("\n--------------------------------")
-
 
     def generate_audit_report(self, analyzer_results: Dict[str, Dict], 
                             embedding_manager) -> Dict[str, Path]:
@@ -655,7 +653,6 @@ class Report:
         self.output_dir_name = f"{input_name}_{timestamp}"
         
         return base_reports_dir / self.output_dir_name
-
 
 class PageBreakExtension(Extension):
     """

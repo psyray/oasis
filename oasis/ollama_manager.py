@@ -211,7 +211,7 @@ class OllamaManager:
         logger.warning(f"Could not detect context length for {model}, using default size: {MAX_CHUNK_SIZE}")
         return MAX_CHUNK_SIZE
     
-    def select_models(self, available_models: List[str], show_formatted: bool = True, max_models: int = None, msg: str = "") -> List[str]:
+    def select_models(self, available_models: List[str], show_formatted: bool = True, max_models: int = None, msg: str = "", recommend_lightweight: bool = False) -> List[str]:
         """
         Let user select models interactively
 
@@ -225,7 +225,15 @@ class OllamaManager:
         if not available_models:
             logger.error("No models available for selection")
             return []
-            
+
+        # Filter models to display only lightweight models if requested
+        if recommend_lightweight and (lightweight_models := self._filter_lightweight_models(available_models)):
+            logger.info(f"Filtering models to display only lightweight models (< 10B parameters): {len(lightweight_models)} models found.")
+            if not lightweight_models:
+                logger.warning("No lightweight models found, displaying all available models.")
+            else:
+                available_models = lightweight_models
+
         # Format models if requested
         if show_formatted:
             formatted_models = self.format_model_display_batch(available_models)
@@ -285,8 +293,8 @@ class OllamaManager:
                     
         except KeyboardInterrupt:
             logger.info("\nModel selection interrupted")
-            return []
-    
+            return []    
+
     def format_model_display(self, model_name: str) -> str:
         """
         Format a model name with emoji and technical info
@@ -440,13 +448,16 @@ class OllamaManager:
 
         return lightweight_models
     
-    def select_analysis_type(self) -> str:
+    def select_analysis_type(self, args) -> str:
         """
         Let user select analysis type interactively
         
         Returns:
             Selected analysis type ('standard' or 'adaptive')
         """
+        if hasattr(args, 'analyze_type') and args.analyze_type:
+            return args.analyze_type
+
         logger.info("\n==== ANALYSIS TYPE SELECTION ====")
         logger.info("\nSelect the type of vulnerability analysis to perform:")
         logger.info("1. Standard - Two-phase analysis (quick scan, then deep analysis)")
@@ -479,99 +490,46 @@ class OllamaManager:
         Returns:
             Dictionary with selected models, containing 'scan_model' and 'main_models' keys
         """
-        if not args.models:
-            # First, select analysis type if not specified
-            if not hasattr(args, 'adaptive') or not args.adaptive:
-                analysis_type = self.select_analysis_type()
-                # Set the adaptive flag based on selection
-                args.adaptive = (analysis_type == "adaptive")
-                
-                if args.adaptive:
-                    logger.info("Using adaptive analysis mode for enhanced risk-based scanning")
-                else:
-                    logger.info("Using standard two-phase analysis mode")
-            
-            # Let user select models interactively - first scan model, then main model
-            logger.info("\n==== MODEL SELECTION ====")
-            
-            # First, select the scan model - only show lightweight models
-            lightweight_models = self._filter_lightweight_models(available_models)
-            if not lightweight_models:
-                logger.warning("No lightweight models found, displaying all available models.")
-                lightweight_models = available_models
-            else:
-                logger.info(f"Filtering models to display only lightweight models (< 10B parameters): {len(lightweight_models)} models found.")
-            
-            msg = "\nFirst, for your quick scan (initial filtering), you should choose a lightweight model (< 10B parameters):"
-            scan_model = self.select_models(lightweight_models, show_formatted=True, max_models=1, msg=msg)
-            if not scan_model:
-                return None
-                
+        # Initialize variables
+        main_models = []
+        scan_model = None
+
+        # If models are provided as a comma-separated list, return them
+        if hasattr(args, 'models') and args.models:
+            main_models = [model.strip() for model in args.models.split(',')]
+
+        # If a scan model is provided, return it
+        if hasattr(args, 'scan_model') and args.scan_model:
+            scan_model = args.scan_model
+
+        if scan_model and main_models:
+            return {'scan_model': scan_model, 'main_models': main_models}
+
+        # If no models are provided, select the scan model
+        # First, select the scan model - only show lightweight models
+        if not hasattr(args, 'scan_model') or not scan_model:
+            msg = "First, choose your quick scan model (lightweight model for initial scanning):"
+            if not (scan_model := self.select_models(
+                available_models,
+                show_formatted=True,
+                msg=msg,
+                max_models=1,
+                recommend_lightweight=True
+            )):
+                scan_model = None
+
+        if not hasattr(args, 'models') or not main_models:
             # Then, select the main analysis model - show all models
             msg = "\nThen, choose your main model for deep vulnerability analysis:"
-            main_model = self.select_models(available_models, show_formatted=True, msg=msg)
-            if not main_model:
-                return None
-                
-            # Combine models, ensuring no duplicates
-            selected_models = scan_model + [m for m in main_model if m not in scan_model]
-            
-            # send a structured dictionary:
-            result = {
-                'scan_model': None,
-                'main_models': []
-            }
-            
-            # If the user specified a scan_model via the -sm argument, use it
-            if hasattr(args, 'scan_model') and args.scan_model:
-                result['scan_model'] = args.scan_model
-            # Otherwise, if models were selected interactively, use the first as scan_model
-            elif selected_models:
-                result['scan_model'] = selected_models[0]
-            
-            # For the main models:
-            # If the user specified models via the -m argument, use them
-            if hasattr(args, 'model') and args.model:
-                if isinstance(args.model, list):
-                    result['main_models'] = args.model
-                else:
-                    result['main_models'] = [args.model]
-            # Otherwise, if multiple models were selected interactively, use the others (after the first)
-            elif len(selected_models) > 1:
-                result['main_models'] = selected_models[1:]
-            # If only one model was selected (and it's already used as scan_model), use it also as main_model
-            elif selected_models:
-                result['main_models'] = [selected_models[0]]
-            
-            return result
+            if not (main_models := self.select_models(
+                available_models, show_formatted=True, msg=msg
+            )):
+                main_models = None
 
-        if args.models.lower().strip() == "all":
-            return available_models
+        if scan_model and main_models:
+            return {'scan_model': scan_model[0], 'main_models': main_models}
 
-        # Parse comma-separated list of models or indices
-        requested_items = [item.strip() for item in args.models.split(',')]
-        selected_models = []
-
-        for item in requested_items:
-            # Check if item is a number (index)
-            if item.isdigit():
-                index = int(item) - 1  # Convert to 0-based index
-                if 0 <= index < len(available_models):
-                    selected_models.append(available_models[index])
-                else:
-                    logger.error(f"Invalid model index: {item} (must be between 1 and {len(available_models)})")
-                    return None
-            elif item in available_models:
-                selected_models.append(item)
-            elif self.ensure_model_available(item):
-                selected_models.append(item)
-            else:
-                logger.error(f"Model not available: {item}")
-                logger.error("Use --list-models to see available models")
-                return None
-
-        logger.info(f"Using specified models: {', '.join(selected_models)}")
-        return selected_models
+        return None
 
     def ensure_model_available(self, model: str) -> bool:
         """

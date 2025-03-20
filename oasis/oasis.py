@@ -8,7 +8,7 @@ from typing import Union
 
 
 # Import from configuration
-from .config import REPORT, DEFAULT_ARGS
+from .config import MODEL_EMOJIS, REPORT, DEFAULT_ARGS
 
 # Import from other modules
 from .tools import generate_timestamp, setup_logging, logger, display_logo, get_vulnerability_mapping
@@ -137,39 +137,65 @@ class OasisScanner:
             + "\n\nUse 'all' to check all vulnerabilities (default)"
         )
 
-    def run_analysis_mode(self, selected_models, vuln_mapping):
-        """Run security analysis on selected models."""
+    def run_analysis_mode(self, main_models, scan_model, vuln_mapping):
         """
-        Run security analysis on selected models
-
+        Run the security analysis with specified models
+        
         Args:
-            selected_models: List of selected models
+            main_models: List of main models for deep analysis
+            scan_model: Model for initial scanning
             vuln_mapping: Vulnerability mapping
+            
+        Returns:
+            True if successful, False otherwise
         """
         # Get vulnerabilities to check
         vulnerabilities, invalid_tags = SecurityAnalyzer.get_vulnerabilities_to_check(self.args, vuln_mapping)
         if invalid_tags:
             return False
 
-        logger.info(f"\nStarting security analysis at {generate_timestamp()}")
+        logger.info(f"\nStarting security analysis at {generate_timestamp()}\n")
         start_time = time.time()
+        
+        # Determine analysis type (adaptive or standard)
+        adaptive = hasattr(self.args, 'adaptive') and self.args.adaptive
+        analysis_type = "🧠 adaptive" if adaptive else "📋 standard"
+        logger.info(f"Using {analysis_type} analysis mode")
 
-        # Analyze with each selected model
-        for model in selected_models:
-            logger.debug(f"\nAnalyzing with model: {model}")
+        # Process all main models one by one
+        for i, main_model in enumerate(main_models):
+            msg = f"Running analysis with model {i+1}/{len(main_models)}: {main_model}"
+            logger.info(f"\n{'='*len(msg)}")
+            logger.info(msg)
+            logger.info(f"{'='*len(msg)}")
+            
+            # Create analyzer with current main model and scan model
+            security_analyzer = SecurityAnalyzer(
+                args=self.args,
+                llm_model=main_model,
+                embedding_manager=self.embedding_manager,
+                ollama_manager=self.ollama_manager,
+                scan_model=scan_model
+            )
             
             # Set the current model for report generation
-            self.report.current_model = model
+            self.report.current_model = main_model
 
-            # Create security analyzer for this model
-            analyzer = SecurityAnalyzer(self.args, model, self.embedding_manager, self.ollama_manager, self.args.scan_model)
-            
-            # Process analysis
-            analyzer.process_analysis_with_model(vulnerabilities, self.args, self.report)
-
-        # Report generation
-        self.report.report_generated(report_type='Vulnerability', report_structure=True)
-
+            # Process analysis with selected model
+            try:
+                security_analyzer.process_analysis_with_model(
+                    vulnerabilities, 
+                    self.args, 
+                    self.report
+                )
+            except Exception as e:
+                logger.exception(f"Error during security analysis with {main_model}: {str(e)}")
+                # Continue with next model instead of failing completely
+                continue
+        
+        # Report generation complete
+        self.report.report_generated(report_type='Security', report_structure=True)
+        
         logger.info(f"\nAnalysis completed successfully at {generate_timestamp()}, duration: {time.time() - start_time:.2f} seconds")
 
         return True
@@ -380,12 +406,18 @@ class OasisScanner:
         Args:
             vuln_mapping: Vulnerability mapping
         """
+        # Get analysis type
+        analysis_type = self.ollama_manager.select_analysis_type(self.args)
+        if not analysis_type:
+            return 1
+
         # Get available models
         available_models = self.ollama_manager.get_available_models()
         if not available_models:
             logger.error("No models available. Please check Ollama installation.")
             return 1
 
+        # Get selected models (either from args or interactive selection)
         selected_model_data = self.ollama_manager.select_analysis_models(self.args, available_models)
         if not selected_model_data:
             return 1
@@ -401,19 +433,24 @@ class OasisScanner:
         if not main_models:
             logger.warning("No main models were selected, using scan model for deep analysis as well")
             main_models = [scan_model]
-            
-        # Store the models in the arguments for future use
+        
+        # Store the scan model in the arguments
         self.args.scan_model = scan_model
-        self.args.model = ','.join(main_models)
         
-        # Update the models in the report
+        # Log model selection information
+        display_scan_model = self.ollama_manager.get_model_display_name(scan_model)
+        display_main_models = ", ".join([self.ollama_manager.get_model_display_name(m) for m in main_models])
+        if len(main_models) == 1 and scan_model == main_models[0]:
+            logger.info(f"{MODEL_EMOJIS['default']}Using '{display_scan_model}' for both scanning and deep analysis")
+        else:
+            logger.info(f"{MODEL_EMOJIS['default']}Using '{display_scan_model}' for scanning and {display_main_models} for deep analysis")
+        
+        # Create the report directories for all main models
         self.report.models = main_models
-        
-        # Create the report directories
         self.report.create_report_directories(self.args.input_path, models=main_models)
 
-        # Run analysis with the main model (scan_model is passed to SecurityAnalyzer)
-        result = self.run_analysis_mode(main_models, vuln_mapping)
+        # Run analysis with all main models
+        result = self.run_analysis_mode(main_models, scan_model, vuln_mapping)
         if not result:
             return 1
 

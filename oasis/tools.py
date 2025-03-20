@@ -68,19 +68,21 @@ class EmojiFormatter(logging.Formatter):
             # Map keyword categories to icons
             keyword_to_icon = {
                 'INSTALL_WORDS': '📥 ',
-                'ANALYSIS_WORDS': '🔎 ',
+                'START_WORDS': '🚀 ',
+                'FINISH_WORDS': '🏁 ',
+                'STOPPED_WORDS': '🛑 ',
+                'DELETE_WORDS': '🗑️ ',
+                'SUCCESS_WORDS': '✅ ',
                 'GENERATION_WORDS': '⚙️  ',
                 'REPORT_WORDS': '📄 ',
                 'MODEL_WORDS': '🤖 ',
                 'CACHE_WORDS': '💾 ',
                 'SAVE_WORDS': '💾 ',
                 'LOAD_WORDS': '📂 ',
-                'STOPPED_WORDS': '🛑 ',
-                'DELETE_WORDS': '🗑️ ',
-                'SUCCESS_WORDS': '✅ ',
                 'STATISTICS_WORDS': '📊 ',
                 'TOP_WORDS': '🏆 ',
-                'VULNERABILITY_WORDS': '🚨 '
+                'VULNERABILITY_WORDS': '🚨 ',
+                'ANALYSIS_WORDS': '🔎 ',
             }
             
             # Check each category and return the first matching icon
