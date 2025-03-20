@@ -129,9 +129,9 @@ git pull origin master
 pipx upgrade oasis
 ```
 **NOTE**: because of the editable installation, you just need to pull the latest changes from the repository to update your global **oasis** command installed with pipx.
-So the pipx upgrade is not mandatory, only needed to bump version in pipx
+So the pipx upgrade is not mandatory, only if needed to bump version in pipx
 
-Or test a features branch before official release (could be unstable)
+Or test a feature branch before official release (could be unstable)
 ```
 git fetch --all
 git checkout feat/vX.X
@@ -200,6 +200,9 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:lates -t 0.7
 ### Analysis Configuration
 - `--analyze-type` `-at`: Analyze type [standard, deep] (default: standard)
 - `--embeddings-analyze-type` `-eat`: Analyze code by entire file or by individual functions [file, function] (default: file)
+    - file: Performs the embedding on the entire file as a single unit, preserving overall context but potentially diluting details.  
+    - function (**EXPERIMENTAL**): Splits the file into individual functions for analysis, allowing for more precise detection of issues within specific code blocks but with less contextual linkage across functions.  
+
 - `--adaptive` `-ad`: Use adaptive multi-level analysis that adjusts depth based on risk assessment
 - `--threshold` `-t`: Similarity threshold (default: 0.5)
 - `--vulns` `-v`: Vulnerability types to check (comma-separated or 'all')

@@ -31,6 +31,7 @@ class OllamaManager:
         self.excluded_models = EXCLUDED_MODELS
         self.default_models = DEFAULT_MODELS
         self._client_lock = threading.Lock()
+        self._cache_lock = threading.Lock() 
         self.formatted_models = []
         # Cache for storing model information to avoid repeated API calls
         self._model_info_cache = {}
@@ -143,9 +144,10 @@ class OllamaManager:
             Model information from Ollama API or cache
         """
         # Check if the model info is already in the cache
-        if model in self._model_info_cache:
-            logger.debug(f"Using cached model information for {model}")
-            return self._model_info_cache[model]
+        with self._cache_lock:
+            if model in self._model_info_cache:
+                logger.debug(f"Using cached model information for {model}")
+                return self._model_info_cache[model]
             
         # Not in cache, query the API
         client = self.get_client()
@@ -154,7 +156,8 @@ class OllamaManager:
         try:
             model_info = client.show(model)
             # Store in cache for future use
-            self._model_info_cache[model] = model_info
+            with self._cache_lock:
+                self._model_info_cache[model] = model_info
             return model_info
         except Exception as e:
             logger.warning(f"Error fetching model info for {model}: {str(e)}")
@@ -169,13 +172,14 @@ class OllamaManager:
             model: Optional specific model to clear from cache.
                   If None, clears the entire cache.
         """
-        if model:
-            if model in self._model_info_cache:
-                logger.debug(f"Clearing cache for model: {model}")
-                del self._model_info_cache[model]
-        else:
-            logger.debug("Clearing entire model information cache")
-            self._model_info_cache = {}
+        with self._cache_lock:
+            if model:
+                if model in self._model_info_cache:
+                    logger.debug(f"Clearing cache for model: {model}")
+                    del self._model_info_cache[model]
+            else:
+                logger.debug("Clearing entire model information cache")
+                self._model_info_cache = {}
         
     def detect_optimal_chunk_size(self, model: str) -> int:
         """
@@ -331,7 +335,9 @@ class OllamaManager:
         Args:
             model_names: List of model names to preload information for
         """
-        models_to_load = [m for m in model_names if m not in self._model_info_cache]
+        # Check first which models are not in cache
+        with self._cache_lock:
+            models_to_load = [m for m in model_names if m not in self._model_info_cache]
         
         if not models_to_load:
             logger.debug("All models already cached, no need to preload")
@@ -342,13 +348,15 @@ class OllamaManager:
         
         for model in tqdm(models_to_load, desc="Preloading model info", unit="model"):
             try:
-                if model not in self._model_info_cache:
-                    model_info = client.show(model)
-                    self._model_info_cache[model] = model_info
+                model_info = client.show(model)
+                with self._cache_lock:
+                    if model not in self._model_info_cache:
+                        self._model_info_cache[model] = model_info
             except Exception as e:
                 logger.warning(f"Error preloading model info for {model}: {str(e)}")
                 # Use empty dict to avoid repeated attempts
-                self._model_info_cache[model] = {}
+                with self._cache_lock:
+                    self._model_info_cache[model] = {}
     
     def format_model_display_batch(self, model_names: List[str]) -> List[str]:
         """
@@ -614,7 +622,7 @@ class OllamaManager:
             Formatted parameter information
         """
         parameters = 0
-        
+
         # Handle different types of responses from Ollama API
         try:
             # 1. Check if model_info is a dictionary (newer Ollama API format)
@@ -630,7 +638,7 @@ class OllamaManager:
                             parameters = float(param_size.replace('M', '')) * 1_000_000
                         else:
                             parameters = float(param_size)
-                
+
                 # Then check if 'modelinfo' contains parameter count
                 if parameters == 0 and 'modelinfo' in model_info and model_info['modelinfo']:
                     modelinfo = model_info['modelinfo']
@@ -641,27 +649,21 @@ class OllamaManager:
             elif hasattr(model_info, 'details') and model_info.details:
                 details = model_info.details
                 if hasattr(details, 'parameter_size') and details.parameter_size:
-                        try:
-                            # Handle strings like "8.0B"
-                            param_size = details.parameter_size
-                            if isinstance(param_size, str) and 'B' in param_size:
-                                parameters = float(param_size.replace('B', '')) * 1_000_000_000
-                            elif isinstance(param_size, str) and 'M' in param_size:
-                                parameters = float(param_size.replace('M', '')) * 1_000_000
-                            else:
-                                parameters = float(param_size)
-                        except (ValueError, TypeError):
-                            pass
-
+                    with contextlib.suppress(ValueError, TypeError):
+                        # Handle strings like "8.0B"
+                        param_size = details.parameter_size
+                        if isinstance(param_size, str) and 'B' in param_size:
+                            parameters = float(param_size.replace('B', '')) * 1_000_000_000
+                        elif isinstance(param_size, str) and 'M' in param_size:
+                            parameters = float(param_size.replace('M', '')) * 1_000_000
+                        else:
+                            parameters = float(param_size)
             # Also check in modelinfo attribute
             if parameters == 0 and hasattr(model_info, 'modelinfo') and model_info.modelinfo:
                 modelinfo = model_info.modelinfo
                 if isinstance(modelinfo, dict) and 'general.parameter_count' in modelinfo:
-                        try:
-                            parameters = int(modelinfo['general.parameter_count'])
-                        except (ValueError, TypeError):
-                            pass
-        
+                    with contextlib.suppress(ValueError, TypeError):
+                        parameters = int(modelinfo['general.parameter_count'])
         except Exception as e:
             logger.debug(f"Error extracting parameters: {str(e)}")
             return ""
