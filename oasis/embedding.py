@@ -39,7 +39,7 @@ class EmbeddingManager:
         self.clear_cache = args.clear_cache_embeddings
         self.cache_days = args.cache_days or DEFAULT_ARGS['CACHE_DAYS']
         self.embedding_model = args.embed_model or DEFAULT_ARGS['EMBED_MODEL']
-        self.analyze_type = args.analyze_type or DEFAULT_ARGS['ANALYSIS_TYPE']
+        self.analyze_type = args.embeddings_analyze_type or DEFAULT_ARGS['EMBEDDING_ANALYSIS_TYPE']
         self.threshold = args.threshold or DEFAULT_ARGS['THRESHOLD']
         self.analyze_by_function = self.analyze_type == 'function'
         self.code_base: Dict = {}
@@ -254,7 +254,7 @@ class EmbeddingManager:
             if 'embedding' in normalized and isinstance(normalized['embedding'], list):
                 if not hasattr(self, 'embedding_dim') or self.embedding_dim is None:
                     self.embedding_dim = len(normalized['embedding'])
-                    logger.info(f"Initialized self.embedding_dim to {self.embedding_dim} based on the first embedding encountered")
+                    logger.debug(f"Initialized self.embedding_dim to {self.embedding_dim} based on the first embedding encountered")
                 elif len(normalized['embedding']) != self.embedding_dim:
                     logger.error(f"Inconsistent embedding dimension: expected {self.embedding_dim}, got {len(normalized['embedding'])} for entry")
 

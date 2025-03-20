@@ -19,7 +19,8 @@ DEFAULT_ARGS = {
     'CHUNK_SIZE': 'auto-detected',
     'VULNS': 'all',
     'OUTPUT_FORMAT': 'all',
-    'ANALYSIS_TYPE': 'file',
+    'ANALYSIS_TYPE': 'standard',
+    'EMBEDDING_ANALYSIS_TYPE': 'file',
     'CACHE_DAYS': 7,
     'EMBED_MODEL': 'nomic-embed-text:latest',
     'SCAN_MODEL': None,  # If None, same as main model
@@ -177,7 +178,8 @@ MODEL_EMOJIS = {
     "openhermes": "🌟 ",
     "solar": "☀️ ",
     "neural-chat": "🧠💬 ",
-    "nous": "👥 "
+    "nous": "👥 ",
+    "default": "🤖 "
 }
 
 # Vulnerability mappings

@@ -57,7 +57,9 @@ class OasisScanner:
         
         # Analysis Configuration
         analysis_group = parser.add_argument_group('Analysis Configuration')
-        analysis_group.add_argument('-at', '--analyze_type', choices=['file', 'function'], default=DEFAULT_ARGS['ANALYSIS_TYPE'],
+        analysis_group.add_argument('-at', '--analyze-type', choices=['standard', 'deep'], default=DEFAULT_ARGS['ANALYSIS_TYPE'],
+                                    help=f'Analyze type (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
+        analysis_group.add_argument('-eat', '--embeddings-analyze-type', choices=['file', 'function'], default=DEFAULT_ARGS['ANALYSIS_TYPE'],
                                     help=f'Analyze code by entire file or by individual functions [EXPERIMENTAL] (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
         analysis_group.add_argument('-ad', '--adaptive', action='store_true', 
                                     help='Use adaptive multi-level analysis that adjusts depth based on risk assessment')
@@ -154,7 +156,7 @@ class OasisScanner:
 
         # Analyze with each selected model
         for model in selected_models:
-            logger.info(f"\nAnalyzing with model: {model}")
+            logger.debug(f"\nAnalyzing with model: {model}")
             
             # Set the current model for report generation
             self.report.current_model = model
@@ -383,19 +385,38 @@ class OasisScanner:
         if not available_models:
             logger.error("No models available. Please check Ollama installation.")
             return 1
-            
-        # Select models for analysis
-        selected_models = self.ollama_manager.select_analysis_models(self.args, available_models)
-        if not selected_models:
+
+        selected_model_data = self.ollama_manager.select_analysis_models(self.args, available_models)
+        if not selected_model_data:
             return 1
-        self.report.models = selected_models
-        self.report.create_report_directories(self.args.input_path, models=selected_models)
+        
+        # Extract the scan model and main models
+        scan_model = selected_model_data['scan_model']
+        main_models = selected_model_data['main_models']
+        
+        if not scan_model:
+            logger.error("No scan model was selected.")
+            return 1
             
-        # Run analysis with selected models
-        result = self.run_analysis_mode(selected_models, vuln_mapping)
+        if not main_models:
+            logger.warning("No main models were selected, using scan model for deep analysis as well")
+            main_models = [scan_model]
+            
+        # Store the models in the arguments for future use
+        self.args.scan_model = scan_model
+        self.args.model = ','.join(main_models)
+        
+        # Update the models in the report
+        self.report.models = main_models
+        
+        # Create the report directories
+        self.report.create_report_directories(self.args.input_path, models=main_models)
+
+        # Run analysis with the main model (scan_model is passed to SecurityAnalyzer)
+        result = self.run_analysis_mode(main_models, vuln_mapping)
         if not result:
             return 1
-            
+
         # Output cache file location
         logger.info(f"\nCache file: {self.embedding_manager.cache_file}")
         return 0
