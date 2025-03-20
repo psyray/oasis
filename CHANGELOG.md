@@ -1,4 +1,41 @@
-# Changelog
+## [0.4.0] - 2025-03-21
+
+### Added
+- Added web interface authentication with password protection
+- Added option to expose web interface on different network interfaces
+- Added command line arguments for web interface configuration:
+  - `--web-expose`: Control web interface exposure (local/all, default: local)
+  - `--web-password`: Set a password for web interface access
+  - `--web-port`: Configure the web server port (default: 5000)
+- Added login page with consistent design to match the application's style
+- Added two-phase scanning architecture for optimized analysis workflow
+- Added support for separate scan and analysis models with `--scan-model` parameter
+- Added adaptive multi-level analysis mode that adjusts depth based on risk assessment
+- Added interactive model selection with separate prompts for scan and deep analysis models
+- Added intelligent model filtering to recommend smaller parameter-count models (4-7B) for initial scanning phase
+- Added enhanced progress tracking with nested progress bars for each analysis phase
+- Added model parameter detection for intelligent model recommendations
+- Added new command-line options:
+  - `--scan-model` / `-sm`: Specify lightweight model for initial scanning
+  - `--adaptive` / `-ad`: Use adaptive multi-level analysis instead of standard
+  - `--clear-cache-scan` / `-ccs`: Clear scan cache before starting
+
+### Fixed
+- Fixed model selection and switching to use the correct model for each phase
+- Fixed progress bar rendering for nested analysis operations
+- Fixed cache handling for different analysis modes
+- Fixed inconsistencies between displayed and actual models used
+- Fixed memory usage issues with large models during scanning
+
+### Changed
+- Improved analysis workflow to reduce model switching and optimize GPU memory usage
+- Enhanced model selection interface with clearer prompts and recommendations
+- Improved logging with better status updates for each analysis phase
+- Enhanced vulnerability scanning with optimized two-phase scanning
+- Reorganized analysis architecture for better code organization and modularity
+- Updated progress bars to show more detailed progress information
+- Improved caching system to handle both deep and quick scan results
+- Enhanced documentation with new examples and usage patterns
 
 ## [0.3.0] - 2025-03-17
 

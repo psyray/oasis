@@ -23,6 +23,7 @@ class EmbeddingManager:
 
         Args:
             args: Arguments
+            ollama_manager: Ollama manager
         """
         try:
             self.ollama_manager = ollama_manager
@@ -35,19 +36,23 @@ class EmbeddingManager:
             raise RuntimeError("Could not connect to Ollama server") from e
 
         self.input_path = args.input_path
-        self.clear_cache = args.clear_cache
+        self.clear_cache = args.clear_cache_embeddings
         self.cache_days = args.cache_days or DEFAULT_ARGS['CACHE_DAYS']
         self.embedding_model = args.embed_model or DEFAULT_ARGS['EMBED_MODEL']
+
+        # Analysis type
         self.analyze_type = args.analyze_type or DEFAULT_ARGS['ANALYSIS_TYPE']
+        self.embedding_analysis_type = args.embeddings_analyze_type or DEFAULT_ARGS['EMBEDDING_ANALYSIS_TYPE']
+        self.analyze_by_function = self.embedding_analysis_type == 'function'
+        
         self.threshold = args.threshold or DEFAULT_ARGS['THRESHOLD']
-        self.analyze_by_function = self.analyze_type == 'function'
         self.code_base: Dict = {}
         self.cache_file = None  # Will be set when directory is provided
 
         # Normalize extensions to a list regardless of input format
         self.supported_extensions = self._normalize_extensions(args.extensions)
         self.chunk_size = args.chunk_size or DEFAULT_ARGS['CHUNK_SIZE']
-        self.setup()
+        self._setup_cache()
 
     def _normalize_extensions(self, extensions_arg) -> List[str]:
         """
@@ -74,9 +79,9 @@ class EmbeddingManager:
         # Fallback - convert whatever we got to list
         return list(extensions_arg)
         
-    def setup(self):
+    def _setup_cache(self):
         """
-        Set up the embedding manager and cache file
+        Set up the embedding manager cache
 
         Args:
             args: Arguments
@@ -253,7 +258,7 @@ class EmbeddingManager:
             if 'embedding' in normalized and isinstance(normalized['embedding'], list):
                 if not hasattr(self, 'embedding_dim') or self.embedding_dim is None:
                     self.embedding_dim = len(normalized['embedding'])
-                    logger.info(f"Initialized self.embedding_dim to {self.embedding_dim} based on the first embedding encountered")
+                    logger.debug(f"Initialized self.embedding_dim to {self.embedding_dim} based on the first embedding encountered")
                 elif len(normalized['embedding']) != self.embedding_dim:
                     logger.error(f"Inconsistent embedding dimension: expected {self.embedding_dim}, got {len(normalized['embedding'])} for entry")
 

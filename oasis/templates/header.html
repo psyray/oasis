@@ -1,0 +1,13 @@
+<header class="header">
+    <div class="logo-container">
+        <div class="logo-circle">
+            <img src="{{ url_for('static', filename='img/oasis-logo.jpg') }}" alt="OASIS Logo" class="oasis-logo-img">
+        </div>
+        <h1 class="title">{% block header_title %}OASIS{% endblock %}</h1>
+    </div>
+    {% if session.get('logged_in') %}
+    <div class="header-actions">
+        <a href="{{ url_for('logout') }}" class="header-link">Logout</a>
+    </div>
+    {% endif %}
+</header> 
