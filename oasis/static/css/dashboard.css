@@ -694,7 +694,7 @@ body {
     background-color: white;
     border-radius: 8px;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-    padding: 15px;
+    padding: 0px;
     margin-bottom: 20px;
     transition: transform 0.2s, box-shadow 0.2s;
 }
@@ -1171,7 +1171,7 @@ body {
 .modal {
     max-width: 90%;
     max-height: 90%;
-    width: 800px;
+    width: 100vh;
 }
 
 .modal-body {
@@ -1522,3 +1522,10 @@ h1 {
 .login-body h1 {
     margin-bottom: 0;
 }
+
+/* Ajouter cette règle pour masquer les options de filtre vides */
+.empty-filter {
+    opacity: 0.5;
+}
+
+/* Pour garder l'ordre dans le CSS, vous pouvez l'ajouter à la fin du fichier */

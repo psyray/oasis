@@ -3,11 +3,97 @@ document.addEventListener('DOMContentLoaded', function() {
     let currentViewMode = 'list'; // 'list', 'tree-model', 'tree-vuln'
     let reportData = [];
     let stats = {};
+    let cardTemplate = null; // Variable pour stocker le template
     let activeFilters = {
         models: [],
         formats: [],
         vulnerabilities: [],
         dateRange: null
+    };
+    let filtersPopulated = false;
+    
+    // Fonctions utilitaires pour afficher/masquer le loader
+    const showLoading = (containerId) => {
+        const container = document.getElementById(containerId);
+        if (container) {
+            container.innerHTML = '<div class="loading"><div class="loading-spinner"></div></div>';
+        }
+    };
+    
+    const hideLoading = (containerId) => {
+        // Le contenu sera remplacé par les fonctions de rendu
+    };
+    
+    // Déplacer les fonctions utilisées avant leur déclaration au début
+    const renderFilters = () => {
+        const modelFiltersContainer = document.getElementById('model-filters-section');
+        const vulnFiltersContainer = document.getElementById('vulnerability-filters-section');
+        const formatFiltersContainer = document.getElementById('format-filters-section');
+        const dateFiltersContainer = document.getElementById('date-filters-section');
+        
+        if (modelFiltersContainer) {
+            modelFiltersContainer.innerHTML = `
+                <div class="filter-title">Filter by model</div>
+                <div class="filter-options" id="model-filters"></div>
+                <div style="margin-top: 10px;" id="active-models-list"></div>
+            `;
+        }
+        
+        if (vulnFiltersContainer) {
+            vulnFiltersContainer.innerHTML = `
+                <div class="filter-title">Filter by vulnerability</div>
+                <div class="filter-options" id="vulnerability-filters"></div>
+            `;
+        }
+        
+        if (formatFiltersContainer) {
+            formatFiltersContainer.innerHTML = `
+                <div class="filter-title">Filter by format</div>
+                <div class="filter-options" id="format-filters"></div>
+            `;
+        }
+        
+        if (dateFiltersContainer) {
+            dateFiltersContainer.innerHTML = `
+                <div class="filter-title">Filter by date range</div>
+                <div id="date-filters"></div>
+            `;
+        }
+    };
+    
+    const groupReportsByModelAndVuln = (reports) => {
+        return reports.map(report => {
+            // Extraction des propriétés importantes
+            const { model, vulnerability_type, path, date, format, stats, alternative_formats } = report;
+            
+            // Construction d'un rapport simplifié
+            return {
+                model,
+                vulnerability_type,
+                path,
+                date,
+                format,
+                stats: stats || { high_risk: 0, medium_risk: 0, low_risk: 0, total: 0 },
+                alternative_formats: alternative_formats || {}
+            };
+        });
+    };
+    
+    const formatDisplayName = (name, type) => {
+        if (!name) {
+            return 'Unknown';
+        }
+        
+        if (type === 'format') {
+            return name.toUpperCase();
+        }
+        
+        // For vulnerability types and models
+        return name
+            .replace(/_/g, ' ')
+            .split(' ')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
     };
     
     // Add the date filter event listener here
@@ -23,6 +109,7 @@ document.addEventListener('DOMContentLoaded', function() {
         };
         
         fetchReports();
+        fetchStats();
     });
         
     // Function to get the emoji of a model
@@ -87,13 +174,39 @@ document.addEventListener('DOMContentLoaded', function() {
     const fetchStats = () => {
         showLoading('stats-container');
         
-        fetch('/api/stats')
+        // Building filter parameters
+        const filterParams = new URLSearchParams();
+        if (activeFilters.models.length > 0) {
+          filterParams.append('model', activeFilters.models.join(','));
+        }
+        if (activeFilters.formats.length > 0) {
+          filterParams.append('format', activeFilters.formats.join(','));
+        }
+        if (activeFilters.vulnerabilities.length > 0) {
+          filterParams.append('vulnerability', activeFilters.vulnerabilities.join(','));
+        }
+        if (activeFilters.dateRange) {
+            if (activeFilters.dateRange.start) {
+              filterParams.append('start_date', activeFilters.dateRange.start);
+            }
+            if (activeFilters.dateRange.end) {
+              filterParams.append('end_date', activeFilters.dateRange.end);
+            }
+        }
+        
+        fetch(`/api/stats?${filterParams.toString()}`)
             .then(response => response.json())
             .then(data => {
                 stats = data;
                 hideLoading('stats-container');
                 renderStats();
+                // Update filter counts but not change selected filters
+                if (!filtersPopulated) {
                 populateFilters();
+                    filtersPopulated = true;
+                } else {
+                    updateFilterCounts();
+                }
             })
             .catch(error => {
                 console.error('Error fetching stats:', error);
@@ -148,187 +261,87 @@ document.addEventListener('DOMContentLoaded', function() {
         `;
     };
     
+    // Nouvelle fonction pour mettre à jour uniquement les comptes dans les filtres
+    const updateFilterCounts = () => {
+        // Sauvegarder l'état actuel des filtres
+        const checkedFilters = {
+            model: {},
+            vulnerability: {},
+            format: {}
+        };
+        
+        document.querySelectorAll('.filter-checkbox').forEach(checkbox => {
+            const type = checkbox.dataset.type;
+            const value = checkbox.dataset.value;
+            checkedFilters[type][value] = checkbox.checked;
+        });
+        
+        // Mettre à jour les filtres de modèle - toujours afficher tous les modèles
+        const modelFilters = document.querySelectorAll('.filter-option[data-type="model"]');
+        modelFilters.forEach(option => {
+            const modelValue = option.dataset.value;
+            const countSpan = option.querySelector('.filter-count');
+            
+            if (modelValue && countSpan && stats.models) {
+                countSpan.textContent = `(${stats.models[modelValue] || 0})`;
+            }
+        });
+        
+        // Mettre à jour les filtres de vulnérabilité
+        // Si des modèles sont sélectionnés, ne montrer que les vulnérabilités associées à ces modèles
+        const vulnFilters = document.querySelectorAll('.filter-option[data-type="vulnerability"]');
+        vulnFilters.forEach(option => {
+            const vulnValue = option.dataset.value;
+            const countSpan = option.querySelector('.filter-count');
+            
+            // Toujours afficher toutes les vulnérabilités, mais mettre à jour les comptes
+            if (vulnValue && countSpan && stats.vulnerabilities) {
+                countSpan.textContent = `(${stats.vulnerabilities[vulnValue] || 0})`;
+                
+                // Si le compte est 0, on peut masquer cette option
+                if (stats.vulnerabilities[vulnValue] === 0) {
+                    option.classList.add('empty-filter');
+                } else {
+                    option.classList.remove('empty-filter');
+                }
+            }
+        });
+        
+        // Mettre à jour les filtres de format
+        const formatFilters = document.querySelectorAll('.filter-option[data-type="format"]');
+        formatFilters.forEach(option => {
+            const formatValue = option.dataset.value;
+            const countSpan = option.querySelector('.filter-count');
+            
+            if (formatValue && countSpan && stats.formats) {
+                countSpan.textContent = `(${stats.formats[formatValue] || 0})`;
+            }
+        });
+    };
+    
     const renderCurrentView = () => {
-        switch(currentViewMode) {
-            case 'list':
-                renderListView();
-                break;
+        // This function renders the current view based on the view mode
+        switch (currentViewMode) {
             case 'tree-model':
                 renderTreeView('model');
                 break;
             case 'tree-vuln':
                 renderTreeView('vulnerability_type');
                 break;
+            case 'list':
             default:
                 renderListView();
-        }
-    };
-
-    const renderFilters = () => {
-        const container = document.getElementById('reports-filters');
-        // Add quick date filter buttons
-        let dateFilterButtons = `
-            <div class="date-filter-buttons">
-                <button class="btn btn-sm" onclick="filterByDateRange('today')">Today</button>
-                <button class="btn btn-sm" onclick="filterByDateRange('week')">This week</button>
-                <button class="btn btn-sm" onclick="filterByDateRange('month')">This month</button>
-                <button class="btn btn-sm" onclick="filterByDateRange('all')">All</button>
-            </div>
-        `;
-        let html = `
-            ${dateFilterButtons}
-        `;
-
-        container.innerHTML = html;
-    };
-    
-    const renderListView = () => {
-        const container = document.getElementById('reports-container');
-        
-        if (reportData.length === 0) {
-            container.innerHTML = '<div class="no-data">No reports match your filters. Please adjust your criteria.</div>';
-            return;
+                break;
         }
         
-        // Sort reports: Executive Summary and Audit Report first, then alphabetically
-        reportData.sort((a, b) => {
-            if (a.vulnerability_type === "Audit Report") {
-              return -1;
-            }
-            if (b.vulnerability_type === "Audit Report") {
-              return 1;
-            }
-            if (a.vulnerability_type === "Executive Summary") {
-              return -1;
-            }
-            if (b.vulnerability_type === "Executive Summary") {
-              return 1;
-            }
-            return a.vulnerability_type.localeCompare(b.vulnerability_type);
-        });
-        
-        // Add a visual separator after special reports
-        let hasSpecialReports = reportData.some(r => 
-            r.vulnerability_type === "Executive Summary" || r.vulnerability_type === "Audit Report");
-        
-        let html = '<div class="report-grid">';
-        reportData.forEach((report, index) => {
-            // Add a separator after special reports
-            if (hasSpecialReports && index > 0 && 
-                (reportData[index-1].vulnerability_type === "Audit Report" || 
-                 reportData[index-1].vulnerability_type === "Executive Summary") &&
-                report.vulnerability_type !== "Executive Summary" && 
-                report.vulnerability_type !== "Audit Report") {
-                
-                html += `</div><div class="report-separator">Vulnerability reports</div><div class="report-grid">`;
-                hasSpecialReports = false; // Don't repeat the separator
-            }
-            
-            // Get report statistics
-            const totalFindings = report.stats?.total_findings || 0;
-            const highRisk = report.stats?.high_risk || 0;
-            const mediumRisk = report.stats?.medium_risk || 0;
-            const lowRisk = report.stats?.low_risk || 0;
-            
-            // Build format buttons
-            let formatButtons = '<div class="format-options">';
-            for (const [fmt, formatData] of Object.entries(report.formats)) {
-                const formattedFormat = formatDisplayName(fmt, 'format');
-                formatButtons += `<button class="btn btn-sm btn-format" 
-                                  onclick="openReport('${formatData.path}', '${fmt}')">
-                                  ${formattedFormat}</button>`;
-            }
-            formatButtons += '</div>';
-            
-            // Build list of models with links to reports
-            let modelsHtml = '<div class="report-models">';
-            if (report.models && report.models.length > 0) {
-                modelsHtml += `<div class="data-label">Models:</div><div class="models-list">`;
-                report.models.forEach(model => {
-                    const formattedModel = formatDisplayName(model, 'model');
-                    
-                    // Find the best MD report for this model
-                    let mdPath = '';
-                    // Take the latest date
-                    if (report.dates && report.dates.length > 0) {
-                        const latestDate = report.dates.sort((a, b) => a.date < b.date ? 1 : -1)[0];
-                        // Search for the MD format in the available formats
-                        if (report.formats.md) {
-                            mdPath = report.formats.md.path;
-                        }
-                    }
-                    
-                    if (mdPath) {
-                        modelsHtml += `<span class="model-tag clickable" onclick="openReport('${mdPath}', 'md')" title="See the report for ${formattedModel}">${formattedModel}</span>`;
+        // Update view mode buttons
+        document.querySelectorAll('.view-tab').forEach(tab => {
+            if (tab.dataset.mode === currentViewMode) {
+                tab.classList.add('active');
                     } else {
-                        modelsHtml += `<span class="model-tag">${formattedModel}</span>`;
-                    }
-                });
-                modelsHtml += `</div>`;
+                tab.classList.remove('active');
             }
-            modelsHtml += '</div>';
-            
-            // Build list of dates with links to reports
-            let datesHtml = '<div class="report-dates">';
-            if (report.dates && report.dates.length > 0) {
-                // Sort dates from newest to oldest
-                const sortedDates = [...report.dates].sort((a, b) => a.date < b.date ? 1 : -1);
-                datesHtml += `<div class="data-label">Dates:</div><div class="dates-list">`;
-                sortedDates.forEach(dateInfo => {
-                    // Search for the MD format in the available formats
-                    let mdPath = '';
-                    if (report.formats.md) {
-                        mdPath = report.formats.md.path;
-                    }
-                    
-                    if (mdPath) {
-                        datesHtml += `<span class="date-tag clickable" onclick="openReport('${mdPath}', 'md')" title="See the report for ${dateInfo.date}">${dateInfo.date}</span>`;
-                    } else {
-                        datesHtml += `<span class="date-tag" title="${dateInfo.dir}">${dateInfo.date}</span>`;
-                    }
-                });
-                datesHtml += `</div>`;
-            }
-            datesHtml += '</div>';
-            
-            // Format the vulnerability title
-            const formattedVulnType = formatDisplayName(report.vulnerability_type, 'vulnerability');
-            
-            // Build the HTML card
-            html += `
-                <div class="report-card">
-                    <div class="report-card-header">
-                        <h3 class="report-title">${formattedVulnType}</h3>
-                    </div>
-                    <div class="report-card-body">
-                        ${modelsHtml}
-                        ${datesHtml}
-                        <div class="report-stats">
-                            <div class="stat">
-                                <span class="stat-value">${totalFindings}</span>
-                                <span class="stat-label">Total</span>
-                            </div>
-                            <div class="stat high-risk">
-                                <span class="stat-value">${highRisk}</span>
-                                <span class="stat-label">High</span>
-                            </div>
-                            <div class="stat medium-risk">
-                                <span class="stat-value">${mediumRisk}</span>
-                                <span class="stat-label">Medium</span>
-                            </div>
-                            <div class="stat low-risk">
-                                <span class="stat-value">${lowRisk}</span>
-                                <span class="stat-label">Low</span>
-                            </div>
-                        </div>
-                        ${formatButtons}
-                    </div>
-                </div>
-            `;
         });
-        
-        html += '</div>';
-        container.innerHTML = html;
     };
     
     const renderTreeView = (groupBy) => {
@@ -373,165 +386,128 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // For each group (model or vulnerability type)
         sortedKeys.forEach(key => {
-            const reports = grouped[key];
-            const totalFindings = reports.reduce((sum, r) => sum + (r.stats.total || 0), 0);
-            const highRisk = reports.reduce((sum, r) => sum + (r.stats.high_risk || 0), 0);
-            const mediumRisk = reports.reduce((sum, r) => sum + (r.stats.medium_risk || 0), 0);
-            const lowRisk = reports.reduce((sum, r) => sum + (r.stats.low_risk || 0), 0);
+            const reportsInGroup = grouped[key];
+            const formattedKey = formatDisplayName(key, groupBy === 'model' ? 'model' : 'vulnerability');
+            const emoji = groupBy === 'model' ? getModelEmoji(key) : '';
             
             html += `
                 <div class="tree-section">
                     <div class="tree-header" onclick="toggleTreeSection(this)">
-                        <span class="tree-toggle">▼</span>
-                        <span class="tree-title">${formatDisplayName(key, groupBy === 'model' ? 'model' : 'vulnerability')}</span>
-                        <div class="report-stats ml-auto">
-                            <span class="stat-total">Total: ${totalFindings}</span>
-                            <span class="stat-high">High: ${highRisk}</span>
-                            <span class="stat-medium">Medium: ${mediumRisk}</span>
-                            <span class="stat-low">Low: ${lowRisk}</span>
+                        <span class="tree-toggle">▼</span> ${emoji}${formattedKey} (${reportsInGroup.length})
                         </div>
-                    </div>
-                    <div class="tree-content" style="display: block;">
+                    <div class="tree-content">
             `;
             
-            // If we group by model, create elements for each vulnerability type
-            if (groupBy === 'model') {
-                // Get all unique vulnerability types for this model
-                const vulnerabilityTypes = [...new Set(reports.map(r => r.vulnerability_type))];
+            // For vulnerability-based tree, group by model within each vulnerability type
+            if (groupBy === 'vulnerability_type') {
+                // Group by model within this vulnerability
+                const modelGroups = {};
+                reportsInGroup.forEach(report => {
+                    if (!modelGroups[report.model]) {
+                        modelGroups[report.model] = [];
+                    }
+                    modelGroups[report.model].push(report);
+                });
                 
-                vulnerabilityTypes.forEach(vulnType => {
-                    const vulnReports = reports.filter(r => r.vulnerability_type === vulnType);
-                    const vulnDates = [];
-                    const formatButtons = {};
-                    
-                    // Collect all available dates and formats for this vulnerability type
-                    vulnReports.forEach(report => {
-                        vulnDates.push({
-                            date: report.date,
-                            path: report.path,
-                            format: report.format
-                        });
-                        
-                        // Collect available formats
-                        Object.entries(report.alternative_formats || {}).forEach(([fmt, path]) => {
-                            formatButtons[fmt] = `<button class="btn btn-format" onclick="downloadReportFile('${path}', '${fmt}')">${fmt.toUpperCase()}</button>`;
-                        });
-                    });
-                    
-                    // Sort dates (newest first)
-                    vulnDates.sort((a, b) => new Date(b.date) - new Date(a.date));
-                    
-                    // Build HTML for dates
-                    let datesHtml = '<div class="tree-dates-list">';
-                    vulnDates.forEach(dateInfo => {
-                        const formatPath = dateInfo.path;
-                        const {format} = dateInfo;
-                        
-                        if (formatPath) {
-                            datesHtml += `<span class="date-tag clickable" 
-                                         data-vulnerability="${vulnType}"
-                                         onclick="openReport('${formatPath}', '${format}')" 
-                                         title="${dateInfo.date}">
-                                         ${dateInfo.date}</span>`;
-                        }
-                    });
-                    datesHtml += `</div>`;
-                    
-                    // Build HTML for format buttons
-                    let formatButtonsHtml = '<div class="format-options">';
-                    Object.values(formatButtons).forEach(button => {
-                        formatButtonsHtml += button;
-                    });
-                    formatButtonsHtml += '</div>';
+                // Sort models
+                const sortedModels = Object.keys(modelGroups).sort();
+                
+                sortedModels.forEach(model => {
+                    const reportsForModel = modelGroups[model];
+                    const formattedModel = formatDisplayName(model, 'model');
+                    const modelEmoji = getModelEmoji(model);
                     
                     html += `
                         <div class="tree-item">
                             <div class="tree-item-header">
-                                <span class="vuln-tag clickable" 
-                                      data-vulnerability="${vulnType}"
-                                      onclick="updateDatesForVulnerability(this, '${vulnType}')">
-                                    ${formatDisplayName(vulnType, 'vulnerability')}
-                                </span>
+                                <div class="tree-item-title">${modelEmoji}${formattedModel}</div>
                             </div>
-                            <div class="tree-item-content">
-                                ${datesHtml}
-                                ${formatButtonsHtml}
+                            <div class="tree-dates-list">
+                    `;
+                    
+                    // Sort reports by date
+                    reportsForModel.sort((a, b) => new Date(b.date) - new Date(a.date));
+                    
+                    // Add date entries
+                    reportsForModel.forEach(report => {
+                        const reportDate = report.date ? new Date(report.date).toLocaleDateString() : 'No date';
+                        html += `
+                            <span class="date-tag clickable" 
+                                onclick="openReport('${report.path}', '${report.format}')" 
+                                data-model="${model}" 
+                                data-vulnerability="${report.vulnerability_type}">
+                                ${reportDate}
+                            </span>
+                        `;
+                    });
+                    
+                    html += `
                             </div>
                         </div>
                     `;
                 });
-            }
-            // If we group by vulnerability type, create elements for each model
-            else if (groupBy === 'vulnerability_type') {
-                // Get all unique models for this vulnerability type
-                const models = [...new Set(reports.map(r => r.model))];
-                
-                // Build HTML for models
-                let modelsHtml = '<div class="models-container">';
-                models.forEach(model => {
-                    modelsHtml += `<span class="model-tag clickable" 
-                                 data-model="${model}"
-                                 onclick="updateDatesForModel(this, '${model}')">
-                                 ${formatDisplayName(model, 'model')}</span>`;
-                });
-                modelsHtml += '</div>';
-                
-                // Collect all available dates and formats for all models
-                const allDates = [];
-                const formatButtons = {};
-                
-                reports.forEach(report => {
-                    allDates.push({
-                        date: report.date,
-                        path: report.path,
-                        format: report.format,
-                        model: report.model
-                    });
-                    
-                    // Collect available formats
-                    Object.entries(report.alternative_formats || {}).forEach(([fmt, path]) => {
-                        formatButtons[fmt] = `<button class="btn btn-format" onclick="downloadReportFile('${path}', '${fmt}')">${fmt.toUpperCase()}</button>`;
-                    });
-                });
-                
-                // Sort dates (newest first)
-                allDates.sort((a, b) => new Date(b.date) - new Date(a.date));
-                
-                // Build HTML for dates
-                let datesHtml = '<div class="tree-dates-list">';
-                allDates.forEach(dateInfo => {
-                    const formatPath = dateInfo.path;
-                    const {format} = dateInfo;
-                    
-                    if (formatPath) {
-                        datesHtml += `<span class="date-tag clickable" 
-                                     data-model="${dateInfo.model}"
-                                     onclick="openReport('${formatPath}', '${format}')" 
-                                     title="${dateInfo.date} - ${formatDisplayName(dateInfo.model, 'model')}">
-                                     ${dateInfo.date}</span>`;
+            } 
+            // For model-based tree, group by vulnerability within each model
+            else if (groupBy === 'model') {
+                // Group by vulnerability within this model
+                const vulnGroups = {};
+                reportsInGroup.forEach(report => {
+                    if (!vulnGroups[report.vulnerability_type]) {
+                        vulnGroups[report.vulnerability_type] = [];
                     }
+                    vulnGroups[report.vulnerability_type].push(report);
                 });
-                datesHtml += '</div>';
                 
-                // Build HTML for format buttons
-                let formatButtonsHtml = '<div class="format-options">';
-                Object.values(formatButtons).forEach(button => {
-                    formatButtonsHtml += button;
+                // Sort vulnerabilities - put Executive Summary and Audit Report first
+                const sortedVulns = Object.keys(vulnGroups).sort((a, b) => {
+                    if (a === 'Executive Summary') {
+                      return -1;
+                    }
+                    if (b === 'Executive Summary') {
+                      return 1;
+                    }
+                    if (a === 'Audit Report') {
+                      return -1;
+                    }
+                    if (b === 'Audit Report') {
+                      return 1;
+                    }
+                    return a.localeCompare(b);
                 });
-                formatButtonsHtml += '</div>';
                 
-                html += `
-                    <div class="tree-item">
-                        <div class="tree-item-header">
-                            <span class="tree-item-title">Models:</span>
-                        </div>
-                        <div class="tree-item-content">
-                            ${modelsHtml}
-                            ${datesHtml}
-                            ${formatButtonsHtml}
-                        </div>
+                sortedVulns.forEach(vuln => {
+                    const reportsForVuln = vulnGroups[vuln];
+                    const formattedVuln = formatDisplayName(vuln, 'vulnerability');
+                    
+                    html += `
+                        <div class="tree-item">
+                            <div class="tree-item-header">
+                                <div class="tree-item-title">${formattedVuln}</div>
                     </div>
-                `;
+                            <div class="tree-dates-list">
+                    `;
+                    
+                    // Sort reports by date
+                    reportsForVuln.sort((a, b) => new Date(b.date) - new Date(a.date));
+                    
+                    // Add date entries
+                    reportsForVuln.forEach(report => {
+                        const reportDate = report.date ? new Date(report.date).toLocaleDateString() : 'No date';
+                        html += `
+                            <span class="date-tag clickable" 
+                                onclick="openReport('${report.path}', '${report.format}')" 
+                                data-model="${report.model}" 
+                                data-vulnerability="${vuln}">
+                                ${reportDate}
+                                </span>
+                        `;
+                    });
+                    
+                    html += `
+                            </div>
+                        </div>
+                    `;
+                });
             }
             
             html += `
@@ -542,6 +518,145 @@ document.addEventListener('DOMContentLoaded', function() {
         
         html += '</div>';
         container.innerHTML = html;
+    };
+    
+    const renderListView = () => {
+        const container = document.getElementById('reports-container');
+        
+        if (reportData.length === 0) {
+            container.innerHTML = '<div class="no-data">No reports match your filters. Please adjust your criteria.</div>';
+            return;
+        }
+        
+        // Charger le template s'il n'est pas encore chargé
+        if (!cardTemplate) {
+            fetch('/static/templates/dashboard_card.html')
+                .then(response => response.text())
+                .then(template => {
+                    cardTemplate = template;
+                    renderListViewWithTemplate();
+                })
+                .catch(error => {
+                    console.error('Error loading template:', error);
+                    container.innerHTML = '<div class="error-message">Error loading template. Please refresh the page.</div>';
+                });
+        } else {
+            renderListViewWithTemplate();
+        }
+        
+        function renderListViewWithTemplate() {
+        // Group by vulnerability type
+        const vulnGroups = {};
+        reportData.forEach(report => {
+            if (!vulnGroups[report.vulnerability_type]) {
+                vulnGroups[report.vulnerability_type] = [];
+            }
+            vulnGroups[report.vulnerability_type].push(report);
+        });
+        
+        // Sort vulnerability types - Ensure Executive Summary and Audit Report come first
+        const sortedVulns = Object.keys(vulnGroups).sort((a, b) => {
+                if (a === 'Executive Summary') return -1;
+                if (b === 'Executive Summary') return 1;
+                if (a === 'Audit Report') return -1;
+                if (b === 'Audit Report') return 1;
+            return a.localeCompare(b);
+        });
+        
+        let html = '<div class="report-grid">';
+        
+        sortedVulns.forEach(vuln => {
+            const reportsForVuln = vulnGroups[vuln];
+            const formattedVuln = formatDisplayName(vuln, 'vulnerability');
+            
+            // Group models for this vulnerability
+            const models = [...new Set(reportsForVuln.map(report => report.model))];
+            
+            // Get report statistics
+            const totalFindings = reportsForVuln.reduce((sum, r) => sum + (r.stats?.total || 0), 0);
+            const highRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.high_risk || 0), 0);
+            const mediumRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.medium_risk || 0), 0);
+            const lowRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.low_risk || 0), 0);
+            
+            // Determine format paths for buttons
+            let mdPath = '';
+            let htmlPath = '';
+            let pdfPath = '';
+            
+            // Get the latest report for each format
+            reportsForVuln.sort((a, b) => new Date(b.date) - new Date(a.date));
+            const latestReport = reportsForVuln[0];
+            
+            if (latestReport) {
+                // Format paths
+                mdPath = latestReport.format === 'md' ? latestReport.path : 
+                        (latestReport.alternative_formats && latestReport.alternative_formats.md ? 
+                        latestReport.alternative_formats.md : '');
+                
+                htmlPath = latestReport.format === 'html' ? latestReport.path : 
+                        (latestReport.alternative_formats && latestReport.alternative_formats.html ? 
+                        latestReport.alternative_formats.html : '');
+                
+                pdfPath = latestReport.format === 'pdf' ? latestReport.path : 
+                        (latestReport.alternative_formats && latestReport.alternative_formats.pdf ? 
+                        latestReport.alternative_formats.pdf : '');
+            }
+                    
+                // Generate models HTML
+                let modelsHTML = '';
+                models.forEach(model => {
+                const formattedModel = formatDisplayName(model, 'model');
+                const modelEmoji = getModelEmoji(model);
+                
+                    modelsHTML += `
+                    <span class="model-tag clickable" 
+                        onclick="filterDatesByModel(this)" 
+                        data-model="${model}">
+                        ${modelEmoji}${formattedModel}
+                    </span>
+                `;
+            });
+                
+                // Generate dates HTML
+                let datesHTML = '';
+                reportsForVuln.sort((a, b) => new Date(b.date) - new Date(a.date)).forEach(report => {
+                    // Ne montrer que les dates des rapports MD
+                    if (report['date_visible']) {
+                        const reportDate = report.date ? new Date(report.date).toLocaleDateString() : 'No date';
+                        
+                        datesHTML += `
+                        <span class="date-tag clickable" 
+                            onclick="openReport('${report.path}', '${report.format}')" 
+                            data-model="${report.model}">
+                            ${reportDate}
+                        </span>
+                        `;
+                    }
+                });
+                
+                // Generate format buttons HTML
+                let formatButtons = '';
+                if (pdfPath) formatButtons += `<button class="btn btn-format" onclick="openReport('${pdfPath}', 'pdf')">PDF</button>`;
+                if (mdPath) formatButtons += `<button class="btn btn-format" onclick="openReport('${mdPath}', 'md')">MD</button>`;
+                if (htmlPath) formatButtons += `<button class="btn btn-format" onclick="openReport('${htmlPath}', 'html')">HTML</button>`;
+                
+                // Use the template and replace placeholders
+                let cardHTML = cardTemplate
+                    .replace('${formattedVulnType}', formattedVuln)
+                    .replace('${modelsHTML}', modelsHTML)
+                    .replace('${datesHTML}', datesHTML)
+                    .replace('${totalFindings}', totalFindings)
+                    .replace('${highRisk}', highRisk)
+                    .replace('${mediumRisk}', mediumRisk)
+                    .replace('${lowRisk}', lowRisk)
+                    .replace('${formatButtons}', formatButtons);
+                
+                html += cardHTML;
+        });
+        
+        html += '</div>';
+        container.innerHTML = html;
+        }
     };
     
     const switchView = (viewMode) => {
@@ -565,10 +680,10 @@ document.addEventListener('DOMContentLoaded', function() {
             const count = stats.models[model];
             const formattedModel = formatDisplayName(model, 'model');
             modelFiltersHtml += `
-                <div class="filter-option">
+                <div class="filter-option" data-type="model" data-value="${model}">
                     <label>
                         <input type="checkbox" class="filter-checkbox" data-type="model" data-value="${model}">
-                        ${formattedModel} (${count})
+                        ${formattedModel} <span class="filter-count">(${count})</span>
                     </label>
                 </div>
             `;
@@ -584,10 +699,10 @@ document.addEventListener('DOMContentLoaded', function() {
             const count = stats.vulnerabilities[vuln];
             const formattedVuln = formatDisplayName(vuln, 'vulnerability');
             vulnFiltersHtml += `
-                <div class="filter-option">
+                <div class="filter-option" data-type="vulnerability" data-value="${vuln}">
                     <label>
                         <input type="checkbox" class="filter-checkbox" data-type="vulnerability" data-value="${vuln}">
-                        ${formattedVuln} (${count})
+                        ${formattedVuln} <span class="filter-count">(${count})</span>
                     </label>
                 </div>
             `;
@@ -603,10 +718,10 @@ document.addEventListener('DOMContentLoaded', function() {
             const count = stats.formats[format];
             const formattedFormat = formatDisplayName(format, 'format');
             formatFiltersHtml += `
-                <div class="filter-option">
+                <div class="filter-option" data-type="format" data-value="${format}">
                     <label>
                         <input type="checkbox" class="filter-checkbox" data-type="format" data-value="${format}">
-                        ${formattedFormat} (${count})
+                        ${formattedFormat} <span class="filter-count">(${count})</span>
                     </label>
                 </div>
             `;
@@ -616,7 +731,40 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Re-add event listeners
         document.querySelectorAll('.filter-checkbox').forEach(checkbox => {
-            checkbox.addEventListener('change', handleFilterChange);
+            checkbox.addEventListener('change', function() {
+                const type = this.dataset.type;
+                const value = this.dataset.value;
+                const isChecked = this.checked;
+                
+                // Map filter type to the corresponding property in activeFilters using object lookup
+                const typeMapping = {
+                    'model': 'models',
+                    'vulnerability': 'vulnerabilities',
+                    'format': 'formats'
+                };
+                
+                const filterType = typeMapping[type];
+                
+                // Return early if unknown type
+                if (!filterType) {
+                  return;
+                }
+                
+                // Update active filters array
+                if (isChecked) {
+                    // Add value if it's not already present
+                    if (!activeFilters[filterType].includes(value)) {
+                        activeFilters[filterType].push(value);
+                    }
+                } else {
+                    // Remove value if it's present
+                    activeFilters[filterType] = activeFilters[filterType].filter(item => item !== value);
+                }
+                
+                // Refresh reports and stats with new filters
+                fetchReports();
+                fetchStats();
+            });
         });
         
         // Add date filter HTML
@@ -656,46 +804,8 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('date-end').value = '';
             
             fetchReports();
+            fetchStats();
         });
-        
-        // Initialize all filters based on checkboxes
-        document.addEventListener('change', function(e) {
-            if (e.target.classList.contains('filter-checkbox')) {
-                const {type, value} = e.target.dataset;
-                
-                handleFilterChange(type, value, e.target.checked);
-            }
-        });
-    };
-    
-    const handleFilterChange = (type, value, isChecked) => {
-        // Map filter type to the corresponding property in activeFilters using object lookup
-        const typeMapping = {
-            'model': 'models',
-            'vulnerability': 'vulnerabilities',
-            'format': 'formats'
-        };
-        
-        const filterType = typeMapping[type];
-        
-        // Return early if unknown type
-        if (!filterType) {
-          return;
-        }
-        
-        // Update active filters array
-        if (isChecked) {
-            // Add value if it's not already present
-            if (!activeFilters[filterType].includes(value)) {
-                activeFilters[filterType].push(value);
-            }
-        } else {
-            // Remove value if it's present
-            activeFilters[filterType] = activeFilters[filterType].filter(item => item !== value);
-        }
-        
-        // Refresh reports with new filters
-        fetchReports();
     };
     
     const clearFilters = () => {
@@ -712,17 +822,8 @@ document.addEventListener('DOMContentLoaded', function() {
             dateRange: null
         };
         
-        // Refresh reports
+        // Refresh reports only - stats will be calculated from reports
         fetchReports();
-    };
-    
-    const showLoading = (containerId) => {
-        const container = document.getElementById(containerId);
-        container.innerHTML = '<div class="loading"><div class="loading-spinner"></div></div>';
-    };
-    
-    const hideLoading = (containerId) => {
-        // The content will be replaced by the rendering functions
     };
     
     // Expose functions to the window for onclick handlers
@@ -772,7 +873,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 .then(data => {
                     if (data.content) {
                         // Use a more robust Markdown library like marked.js
-                        modalContent.innerHTML = convertMarkdownToHtml(data.content);
+                        modalContent.innerHTML = data.content;
                     } else {
                         modalContent.innerHTML = '<div class="error-message">Unable to load report content.</div>';
                     }
@@ -821,7 +922,6 @@ document.addEventListener('DOMContentLoaded', function() {
                             width: 100%;
                             max-height: calc(100vh - 200px);
                             overflow-y: auto;
-                            padding: 15px;
                         }
                     `;
                     modalContent.appendChild(style);
@@ -973,176 +1073,18 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     };
     
-    // Function to format Markdown content
+    // Function to format Markdown content using marked.js
     const convertMarkdownToHtml = (markdown) => {
         if (!markdown) {
           return '<p>Empty content</p>';
         }
         
-        // Conversion of titles
-        let html = markdown;
-        html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-        html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-        html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-        html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
-        
-        // Conversion of lists
-        html = html.replace(/^\* (.+)$/gm, '<ul><li>$1</li></ul>');
-        html = html.replace(/^\- (.+)$/gm, '<ul><li>$1</li></ul>');
-        html = html.replace(/^(\d+)\. (.+)$/gm, '<ol><li>$2</li></ol>');
-        
-        // Correct consecutive lists (ul and ol)
-        html = html.replace(/<\/ul>\s*<ul>/g, '');
-        html = html.replace(/<\/ol>\s*<ol>/g, '');
-        
-        // Bold and italic
-        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-        html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-        
-        // Liens
-        html = html.replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank">$1</a>');
-        
-        // Paragraphs (avoid transforming already HTML)
-        html = html.replace(/^([^<#\-\*\d].+)$/gm, '<p>$1</p>');
-        
-        // Line breaks
-        html = html.replace(/\n\n/g, '<br>');
-        
-        return html;
-    };
-    
-    // New function to group reports
-    const groupReportsByModelAndVuln = (reports) => {
-        const grouped = {};
-        const result = [];
-        
-        // Group by vulnerability type
-        reports.forEach(report => {
-            const key = `${report.vulnerability_type}`;
-            
-            if (!grouped[key]) {
-                grouped[key] = {
-                    vulnerability_type: report.vulnerability_type,
-                    models: {},
-                    dates: {},
-                    formats: {},
-                    stats: report.stats || {}
-                };
-            }
-            
-            // Add model if it doesn't exist yet
-            if (!grouped[key].models[report.model]) {
-                grouped[key].models[report.model] = true;
-            }
-            
-            // Add date if it doesn't exist yet and is not empty
-            if (report.date && !grouped[key].dates[report.date]) {
-                grouped[key].dates[report.date] = report.timestamp_dir || '';
-            }
-            
-            // Add this format to the group
-            grouped[key].formats[report.format] = {
-                path: report.path,
-                stats: report.stats || {}
-            };
-            
-            // Update stats if they are more complete
-            if (report.stats && Object.keys(report.stats).length > Object.keys(grouped[key].stats).length) {
-                grouped[key].stats = report.stats;
-            }
-        });
-        
-        // Convert grouped object to array
-        for (const key in grouped) {
-            const entry = grouped[key];
-            result.push({
-                vulnerability_type: entry.vulnerability_type,
-                models: Object.keys(entry.models),
-                dates: Object.entries(entry.dates).map(([date, dir]) => ({ date, dir })),
-                formats: entry.formats,
-                stats: entry.stats
-            });
+        try {
+            return marked(markdown);
+        } catch (error) {
+            console.error('Error converting Markdown:', error);
+            return `<pre style="white-space: pre-wrap;">${markdown.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
         }
-        
-        // Sort by latest date
-        result.sort((a, b) => {
-            const aLatestDate = a.dates.length > 0 ? a.dates.sort((d1, d2) => d1.date < d2.date ? 1 : -1)[0].date : '';
-            const bLatestDate = b.dates.length > 0 ? b.dates.sort((d1, d2) => d1.date < d2.date ? 1 : -1)[0].date : '';
-            
-            if (!aLatestDate) {
-              return 1;
-            }
-            if (!bLatestDate) {
-              return -1;
-            }
-            return aLatestDate < bLatestDate ? 1 : -1;
-        });
-        
-        return result;
-    }
-    
-    // Function to filter by date range
-    window.filterByDateRange = function(range) {
-        let startDate = null;
-        let endDate = null;
-        const now = new Date();
-        
-        switch(range) {
-            case 'today':
-                startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-                break;
-            case 'week':
-                const firstDayOfWeek = new Date(now);
-                firstDayOfWeek.setDate(now.getDate() - now.getDay());
-                startDate = new Date(firstDayOfWeek.getFullYear(), firstDayOfWeek.getMonth(), firstDayOfWeek.getDate()).toISOString();
-                break;
-            case 'month':
-                startDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-                break;
-            case 'all':
-                // Reset date filter
-                break;
-        }
-        
-        activeFilters.dateRange = {
-            start: startDate,
-            end: endDate
-        };
-        
-        // Refresh reports with new filter
-        fetchReports();
-        
-        // Update UI to indicate active filter
-        document.querySelectorAll('.date-filter-buttons .btn').forEach(btn => {
-            btn.classList.remove('btn-primary');
-        });
-        
-        if (range !== 'all') {
-            document.querySelector(`.date-filter-buttons .btn[onclick="filterByDateRange('${range}')"]`).classList.add('btn-primary');
-        }
-    };
-    
-    // Add this utility function to format names
-    const formatDisplayName = (name, type) => {
-        if (!name) {
-          return '';
-        }
-        
-        if (type === 'model') {
-            return getModelEmoji(name) + name;
-        }
-        
-        // For file formats
-        if (type === 'format') {
-            return name.toUpperCase();
-        }
-        
-        // For vulnerability types and models
-        return name
-            .replace(/_/g, ' ')
-            .split(' ')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-            .join(' ');
     };
     
     // Function to collapse/expand tree sections
@@ -1288,6 +1230,76 @@ document.addEventListener('DOMContentLoaded', function() {
     // document.getElementById('view-list').addEventListener('click', () => switchView('list'));
     // document.getElementById('view-tree-model').addEventListener('click', () => switchView('tree-model'));
     // document.getElementById('view-tree-vuln').addEventListener('click', () => switchView('tree-vuln'));
+
+    // Add function to refresh the entire dashboard
+    const refreshDashboard = () => {
+        // Show loading indicators
+        showLoading('stats-container');
+        showLoading('reports-container');
+        
+        // Use Promise.all to run both fetch operations concurrently
+        Promise.all([
+            fetch('/api/stats?force=1').then(response => response.json()),
+            fetch('/api/reports').then(response => response.json())
+        ])
+        .then(([statsData, reportsData]) => {
+            // Update the global variables
+            stats = statsData;
+            reportData = groupReportsByModelAndVuln(reportsData);
+            
+            // Render the updated data
+            hideLoading('stats-container');
+            hideLoading('reports-container');
+            renderStats();
+            renderCurrentView();
+            
+            // Update filter counts only
+            if (!filtersPopulated) {
+                populateFilters();
+                filtersPopulated = true;
+            } else {
+                updateFilterCounts();
+            }
+            
+            console.log('Dashboard refreshed successfully');
+        })
+        .catch(error => {
+            console.error('Error refreshing dashboard:', error);
+            document.getElementById('stats-container').innerHTML = 
+                '<div class="error-message">Error refreshing dashboard. Please try again later.</div>';
+        });
+    };
+    
+    // Find refresh/reload link using a more robust approach
+    document.addEventListener('click', function(e) {
+        // Look for any link with text 'Reload' or specific URL
+        if (e.target.tagName === 'A' && 
+            (e.target.innerText.includes('Reload') || 
+             e.target.href.includes('get_stats'))) {
+            
+            e.preventDefault();
+            refreshDashboard();
+        }
+    });
+
+    // At the beginning of the document.ready function
+    cardTemplate = '';
+    fetch('/static/templates/dashboard_card.html')
+        .then(response => response.text())
+        .then(template => {
+            cardTemplate = template;
+        });
+
+    // Then in your rendering functions:
+    const renderCard = (data) => {
+        let html = cardTemplate;
+        // Replace placeholders with actual data
+        html = html.replace('${formattedVulnType}', formatDisplayName(data.vulnerability_type, 'vulnerability'));
+        html = html.replace('${totalFindings}', data.stats?.total_findings || 0);
+        // etc.
+        
+        return html;
+    };
 
     // Initial data loading *after* function definitions
     fetchReports();

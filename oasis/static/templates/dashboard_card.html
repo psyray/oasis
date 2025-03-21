@@ -1,0 +1,43 @@
+<div class="report-card">
+    <div class="report-card-header" style="background-color: #1a3a5f; color: white; padding: 10px; border-radius: 5px 5px 0 0;">
+        <h3 class="report-title">${formattedVulnType}</h3>
+    </div>
+    <div class="report-card-body">
+        <div class="models-container">
+            <div class="data-label">Models:</div>
+            <div class="models-list">
+                ${modelsHTML}
+            </div>
+        </div>
+        
+        <div class="report-dates">
+            <div class="data-label">Dates:</div>
+            <div class="dates-list">
+                ${datesHTML}
+            </div>
+        </div>
+        
+        <div class="report-stats">
+            <div class="stat">
+                <span class="stat-value">${totalFindings}</span>
+                <span class="stat-label">Total</span>
+            </div>
+            <div class="stat high-risk">
+                <span class="stat-value">${highRisk}</span>
+                <span class="stat-label">High</span>
+            </div>
+            <div class="stat medium-risk">
+                <span class="stat-value">${mediumRisk}</span>
+                <span class="stat-label">Medium</span>
+            </div>
+            <div class="stat low-risk">
+                <span class="stat-value">${lowRisk}</span>
+                <span class="stat-label">Low</span>
+            </div>
+        </div>
+        
+        <div class="format-options">
+            ${formatButtons}
+        </div>
+    </div>
+</div> 
