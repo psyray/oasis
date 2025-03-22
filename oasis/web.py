@@ -333,7 +333,7 @@ class WebServer:
         }
         
         for report in reports:
-            # count only markdown files for accurate statistics
+            # Count only markdown files for accurate statistics
             if report["format"] == "md":
                 stats["total_reports"] += 1
                 
@@ -469,10 +469,10 @@ class WebServer:
             
         filtered = self.report_data
         
-        # Si nous voulons seulement les dates au format MD mais pas filtrer par format,
-        # nous devons préparer deux listes: une pour les dates (MD seulement) et une pour les formats
+        # If we only want dates in MD format but no filtering by format,
+        # we need to prepare two lists: one for dates (MD only) and one for formats
         if md_dates_only and not format_filter:
-            # Filtrer reports généraux en fonction des critères (sauf format)
+            # Filter general reports based on criteria (except format)
             if model_filter:
                 model_filters = [m.lower() for m in model_filter.split(',')]
                 filtered = [r for r in filtered if any(m in r['model'].lower() for m in model_filters)]
@@ -490,16 +490,16 @@ class WebServer:
                 end_date = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
                 filtered = [r for r in filtered if r.get('date') and datetime.strptime(r['date'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc) <= end_date]
                 
-            # Créer une liste distincte pour les dates (MD seulement)
+            # Create a distinct list for dates (MD only)
             md_reports = [r for r in filtered if r['format'] == 'md']
             
-            # Pour chaque rapport qui n'est pas MD, marquer date_visible=False
+            # For each report that isn't MD, mark date_visible=False
             for report in filtered:
                 report['date_visible'] = report['format'] == 'md'
                 
             return filtered
         else:
-            # Comportement standard si md_dates_only est désactivé ou si un format est spécifié
+            # Standard behavior if md_dates_only is disabled or if a format is specified
             if model_filter:
                 model_filters = [m.lower() for m in model_filter.split(',')]
                 filtered = [r for r in filtered if any(m in r['model'].lower() for m in model_filters)]
@@ -521,7 +521,7 @@ class WebServer:
                 end_date = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
                 filtered = [r for r in filtered if r.get('date') and datetime.strptime(r['date'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc) <= end_date]
             
-            # Marquer tous les rapports comme visibles dans les dates
+            # Mark all reports as visible in dates
             for report in filtered:
                 report['date_visible'] = True
             
@@ -559,8 +559,7 @@ class WebServer:
         
         # Calculate statistics based on the provided reports
         for report in reports_to_analyze:
-            # Le même code que vous avez pour calculer les statistiques
-            # count only markdown files for accurate statistics
+            # Count only markdown files for accurate statistics
             if report["format"] == "md":
                 stats["total_reports"] += 1
                 

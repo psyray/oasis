@@ -3,7 +3,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let currentViewMode = 'list'; // 'list', 'tree-model', 'tree-vuln'
     let reportData = [];
     let stats = {};
-    let cardTemplate = null; // Variable pour stocker le template
+    let cardTemplate = null; // Variable to store the template
     let activeFilters = {
         models: [],
         formats: [],
@@ -12,7 +12,7 @@ document.addEventListener('DOMContentLoaded', function() {
     };
     let filtersPopulated = false;
     
-    // Fonctions utilitaires pour afficher/masquer le loader
+    // Utility functions to show/hide the loader
     const showLoading = (containerId) => {
         const container = document.getElementById(containerId);
         if (container) {
@@ -21,10 +21,10 @@ document.addEventListener('DOMContentLoaded', function() {
     };
     
     const hideLoading = (containerId) => {
-        // Le contenu sera remplacé par les fonctions de rendu
+        // The content will be replaced by rendering functions
     };
     
-    // Déplacer les fonctions utilisées avant leur déclaration au début
+    // Move functions used before their declaration to the beginning
     const renderFilters = () => {
         const modelFiltersContainer = document.getElementById('model-filters-section');
         const vulnFiltersContainer = document.getElementById('vulnerability-filters-section');
@@ -63,10 +63,10 @@ document.addEventListener('DOMContentLoaded', function() {
     
     const groupReportsByModelAndVuln = (reports) => {
         return reports.map(report => {
-            // Extraction des propriétés importantes
+            // Extraction of important properties
             const { model, vulnerability_type, path, date, format, stats, alternative_formats } = report;
             
-            // Construction d'un rapport simplifié
+            // Construction of a simplified report
             return {
                 model,
                 vulnerability_type,
@@ -261,9 +261,9 @@ document.addEventListener('DOMContentLoaded', function() {
         `;
     };
     
-    // Nouvelle fonction pour mettre à jour uniquement les comptes dans les filtres
+    // New function to update only the counts in the filters
     const updateFilterCounts = () => {
-        // Sauvegarder l'état actuel des filtres
+        // Save the current state of filters
         const checkedFilters = {
             model: {},
             vulnerability: {},
@@ -276,7 +276,7 @@ document.addEventListener('DOMContentLoaded', function() {
             checkedFilters[type][value] = checkbox.checked;
         });
         
-        // Mettre à jour les filtres de modèle - toujours afficher tous les modèles
+        // Update model filters - always display all models
         const modelFilters = document.querySelectorAll('.filter-option[data-type="model"]');
         modelFilters.forEach(option => {
             const modelValue = option.dataset.value;
@@ -287,18 +287,18 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
         
-        // Mettre à jour les filtres de vulnérabilité
-        // Si des modèles sont sélectionnés, ne montrer que les vulnérabilités associées à ces modèles
+        // Update vulnerability filters
+        // If models are selected, only show vulnerabilities associated with these models
         const vulnFilters = document.querySelectorAll('.filter-option[data-type="vulnerability"]');
         vulnFilters.forEach(option => {
             const vulnValue = option.dataset.value;
             const countSpan = option.querySelector('.filter-count');
             
-            // Toujours afficher toutes les vulnérabilités, mais mettre à jour les comptes
+            // Always display all vulnerabilities, but update the counts
             if (vulnValue && countSpan && stats.vulnerabilities) {
                 countSpan.textContent = `(${stats.vulnerabilities[vulnValue] || 0})`;
                 
-                // Si le compte est 0, on peut masquer cette option
+                // If the count is 0, we can hide this option
                 if (stats.vulnerabilities[vulnValue] === 0) {
                     option.classList.add('empty-filter');
                 } else {
@@ -307,7 +307,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
         
-        // Mettre à jour les filtres de format
+        // Update format filters
         const formatFilters = document.querySelectorAll('.filter-option[data-type="format"]');
         formatFilters.forEach(option => {
             const formatValue = option.dataset.value;
@@ -528,7 +528,7 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         
-        // Charger le template s'il n'est pas encore chargé
+        // Load the template if it's not already loaded
         if (!cardTemplate) {
             fetch('/static/templates/dashboard_card.html')
                 .then(response => response.text())
@@ -620,7 +620,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Generate dates HTML
                 let datesHTML = '';
                 reportsForVuln.sort((a, b) => new Date(b.date) - new Date(a.date)).forEach(report => {
-                    // Ne montrer que les dates des rapports MD
+                    // Only show dates for MD reports
                     if (report['date_visible']) {
                         const reportDate = report.date ? new Date(report.date).toLocaleDateString() : 'No date';
                         
@@ -837,7 +837,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     let currentReportPath = '';
     let currentReportFormat = '';
-    let currentResizeObserver = null; // Variable pour stocker l'observateur
+    let currentResizeObserver = null; // Variable to store the observer
 
     window.openReport = function(path, format) {
         const modal = document.getElementById('report-modal');
@@ -903,7 +903,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     const elementsToRemove = htmlContainer.querySelectorAll('html, head, body, script');
                     elementsToRemove.forEach(el => {
                         if (el.tagName.toLowerCase() === 'body') {
-                            // Pour body, on veut conserver son contenu
+                            // For body, we want to keep its content
                             const bodyContent = el.innerHTML;
                             el.parentNode.innerHTML = bodyContent;
                         } else {

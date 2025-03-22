@@ -1,5 +1,6 @@
 :root {
     --dark-blue: #0e1f2b;
+    --dark-blue-2: #1a3a5f;
     --sand: #e6e0cc;
     --light-sand: #f5f2e9;
     --turquoise: #40b4c4;
@@ -317,85 +318,6 @@ body {
     color: var(--medium-gray);
 }
 
-/* Modal for report preview */
-.modal-overlay {
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: rgba(0,0,0,0.5);
-    z-index: 1000;
-}
-
-.modal {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background-color: white;
-    width: 80%;
-    height: 80%;
-    border-radius: 8px;
-    box-shadow: 0 0 20px rgba(0,0,0,0.3);
-    display: flex;
-    flex-direction: column;
-}
-
-.modal-header {
-    padding: 15px 20px;
-    border-bottom: 1px solid var(--border-color);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.modal-title {
-    font-size: 18px;
-    font-weight: bold;
-    color: var(--dark-blue);
-}
-
-.modal-close {
-    background: none;
-    border: none;
-    font-size: 20px;
-    cursor: pointer;
-    color: var(--medium-gray);
-}
-
-.modal-body {
-    flex: 1;
-    padding: 20px;
-    overflow-y: auto;
-}
-
-.modal-footer {
-    padding: 15px 20px;
-    border-top: 1px solid var(--border-color);
-    display: flex;
-    justify-content: space-between;
-}
-
-.btn {
-    padding: 8px 15px;
-    border-radius: 4px;
-    font-weight: bold;
-    cursor: pointer;
-    border: none;
-}
-
-.btn-primary {
-    background-color: var(--turquoise);
-    color: white;
-}
-
-.btn-secondary {
-    background-color: var(--light-gray);
-    color: var(--dark-blue);
-}
-
 /* View selector tabs */
 .view-selector {
     display: flex;
@@ -619,6 +541,24 @@ body {
     justify-content: flex-end;
 }
 
+.btn {
+    padding: 8px 15px;
+    border-radius: 4px;
+    font-weight: bold;
+    cursor: pointer;
+    border: none;
+}
+
+.btn-primary {
+    background-color: var(--turquoise);
+    color: white;
+}
+
+.btn-secondary {
+    background-color: var(--light-gray);
+    color: var(--dark-blue);
+}
+
 .btn-sm {
     padding: 3px 8px;
     font-size: 12px;
@@ -704,10 +644,12 @@ body {
     box-shadow: 0 8px 15px rgba(0,0,0,0.1);
 }
 
-.report-card-header {
+.report-card-header, .modal-header {
+    color: var(--white);
+    padding: 10px;
+    border-radius: 5px 5px 0 0;
     padding: 12px 15px;
-    background-color: var(--dark-blue);
-    color: white;
+    background-color: var(--dark-blue-2);
     border-bottom: 2px solid var(--turquoise);
 }
 
@@ -1148,7 +1090,7 @@ body {
 .date-tag.clickable {
     cursor: pointer;
     background-color: var(--light-turquoise);
-    padding: 4px 8px;
+    padding: 4px 4px;
     border-radius: 4px;
     display: inline-block;
     margin: 3px;
@@ -1161,22 +1103,6 @@ body {
     color: white;
     transform: translateY(-1px);
     box-shadow: 0 2px 3px rgba(0,0,0,0.1);
-}
-
-/* Improvement of the modal */
-.modal-overlay.visible {
-    display: flex;
-}
-
-.modal {
-    max-width: 90%;
-    max-height: 90%;
-    width: 100vh;
-}
-
-.modal-body {
-    max-height: 70vh;
-    overflow-y: auto;
 }
 
 .dates-container {
@@ -1523,9 +1449,273 @@ h1 {
     margin-bottom: 0;
 }
 
-/* Ajouter cette règle pour masquer les options de filtre vides */
 .empty-filter {
     opacity: 0.5;
 }
 
-/* Pour garder l'ordre dans le CSS, vous pouvez l'ajouter à la fin du fichier */
+/* Styles pour le nouveau format des dates */
+.date-tag {
+    display: inline-block;
+    background-color: var(--light-turquoise);
+    border-radius: 4px;
+    padding: 5px 8px;
+    margin: 2px;
+    text-align: center;
+    min-width: 80px;
+    cursor: pointer;
+    transition: background-color 0.2s, transform 0.1s;
+}
+
+.date-tag:hover {
+    background-color: var(--turquoise);
+    transform: translateY(-2px);
+}
+
+.date-main {
+    font-weight: bold;
+    font-size: 12px;
+    line-height: 1.2;
+}
+
+.date-time {
+    font-size: 10px;
+    color: var(--dark-blue);
+    opacity: 0.8;
+    line-height: 1.2;
+}
+
+.date-label {
+    font-size: 11px;
+    font-weight: bold;
+    margin-bottom: 2px;
+}
+
+/* Style pour les conteneurs de dates */
+.dates-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 5px;
+}
+
+.tree-dates-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 5px;
+    padding-left: 10px;
+}
+
+/* Improvement of the modal */
+.modal-overlay.visible {
+    display: flex;
+}
+
+.modal-body {
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+/* Modal for report preview */
+.modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0,0,0,0.5);
+    z-index: 1000;
+}
+
+.modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: white;
+    width: 80%;
+    height: 80%;
+    border-radius: 8px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.3);
+    display: flex;
+    flex-direction: column;
+}
+
+/* .modal-dialog {
+    position: relative;
+    max-width: 90%;
+    max-height: 90%;
+    width: 100vh;
+    margin: 30px auto;
+    background-color: #fff;
+    border-radius: 5px;
+    box-shadow: 0 5px 15px rgba(0,0,0,.5);
+}
+
+.modal-content {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    pointer-events: auto;
+    background-color: #fff;
+    border: 1px solid rgba(0,0,0,.2);
+    border-radius: 5px;
+    outline: 0;
+} */
+
+.modal-header {
+    padding: 15px 20px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.modal-title {
+    font-size: 18px;
+    font-weight: bold;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: var(--medium-gray);
+}
+
+.modal-body {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+}
+
+.modal-footer {
+    padding: 15px 20px;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+}
+
+.close {
+    float: right;
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1;
+    color: #000;
+    text-shadow: 0 1px 0 #fff;
+    opacity: .5;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+}
+
+.close:hover {
+    opacity: 1;
+}
+
+.modal-open {
+    overflow: hidden;
+}
+
+.report-html-content {
+    padding: 10px;
+    line-height: 1.6;
+}
+
+.report-html-content h1, 
+.report-html-content h2, 
+.report-html-content h3 {
+    margin-top: 1em;
+    margin-bottom: 0.5em;
+}
+
+.report-html-content p {
+    margin-bottom: 1em;
+}
+
+.report-html-content pre {
+    background-color: #f5f5f5;
+    padding: 10px;
+    border-radius: 5px;
+    overflow-x: auto;
+}
+
+.report-html-content code {
+    background-color: #f5f5f5;
+    padding: 2px 4px;
+    border-radius: 3px;
+}
+
+/* #report-modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    overflow: auto;
+} */
+
+#report-modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.7);
+    overflow: auto;
+}
+
+#report-modal.visible {
+    display: block;
+}
+
+.modal-dialog {
+    position: relative;
+    background: white;
+    border-radius: 5px;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
+    width: 80%;
+    height: 80%;
+    margin: 0px auto;
+    margin-top: 5%;
+}
+
+.modal-content {
+    display: flex;
+    flex-direction: column;
+    height: 80vh;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px;
+    border-bottom: 1px solid #e5e5e5;
+}
+
+.modal-body {
+    flex: 1;
+    padding: 15px;
+    overflow-y: auto;
+}
+
+.modal-footer {
+    padding: 15px;
+    border-top: 1px solid #e5e5e5;
+    text-align: right;
+}
+
+.close {
+    font-size: 24px;
+    font-weight: bold;
+    background: none;
+    border: none;
+    cursor: pointer;
+}
+
+body.modal-open {
+    overflow: hidden;
+}
