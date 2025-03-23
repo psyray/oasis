@@ -4,7 +4,6 @@ from datetime import datetime
 import hashlib
 import pickle
 
-from .config import ANALYSIS_VERSION
 from .enums import AnalysisMode, AnalysisType
 from .tools import sanitize_name, logger
 
@@ -95,21 +94,24 @@ class CacheManager:
         else:
             return self.adaptive_cache_dir[mode] / f"{sanitized_file_name}.cache"
     
-    def get_cache_dict(self, mode: AnalysisMode, analysis_type: AnalysisType):
+    def get_cache_dict(self, mode: AnalysisMode, analysis_type: AnalysisType) -> Dict:
         """
-        Get the appropriate cache dictionary based on analysis mode and type
+        Get the appropriate cache dictionary based on mode and type
         
         Args:
             mode: Analysis mode (scan or deep)
             analysis_type: Analysis type (standard or adaptive)
             
         Returns:
-            Appropriate cache dictionary
+            Cache dictionary
         """
+        if analysis_type == AnalysisType.ADAPTIVE:
+            return self.adaptive_analysis_cache
+            
+        # Standard analysis cache selection
         if mode == AnalysisMode.SCAN:
             return self.scan_chunk_cache[analysis_type]
-        else:
-            return self.chunk_cache[analysis_type]
+        return self.chunk_cache[analysis_type]
     
     def process_cache(self, action: str, file_path: str, mode: AnalysisMode, 
                      analysis_type: AnalysisType = AnalysisType.STANDARD):
@@ -186,19 +188,25 @@ class CacheManager:
         """
         self.process_cache('save', file_path, mode, analysis_type)
     
-    def has_caching_info(self, file_path: str, chunk: str, vuln_name: str) -> bool:
+    def has_caching_info(self, file_path: str, chunk: str, vuln_name: str, analysis_type: AnalysisType = AnalysisType.STANDARD) -> bool:
         """
-        Check if all necessary information for caching is provided
+        Check if we have enough info to cache this analysis
         
         Args:
-            file_path: Path to the file being analyzed
+            file_path: Path to the file
             chunk: Code chunk content
             vuln_name: Vulnerability name
+            analysis_type: Type of analysis (standard or adaptive)
             
         Returns:
-            True if all info is provided, False otherwise
+            True if we have enough info to cache
         """
-        return file_path is not None and chunk is not None and vuln_name is not None
+        # For adaptive analysis, we only need file_path and vuln_name
+        if analysis_type == AnalysisType.ADAPTIVE:
+            return bool(file_path and vuln_name)
+            
+        # For standard analysis, we need all three
+        return bool(file_path and chunk and vuln_name)
     
     def get_cached_analysis(self, file_path: str, chunk: str, vuln_name: str, prompt: str, 
                           mode: AnalysisMode = AnalysisMode.DEEP,
@@ -222,7 +230,7 @@ class CacheManager:
         if file_path not in cache_dict:
             self.load_chunk_cache(file_path, mode, analysis_type)
         
-        chunk_key = self.generate_cache_key(chunk, prompt, vuln_name)
+        chunk_key = self.generate_cache_key(chunk, prompt, vuln_name, file_path)
         
         # Check if analysis exists in cache
         return cache_dict[file_path].get(chunk_key)
@@ -241,43 +249,42 @@ class CacheManager:
             mode: Analysis mode
             analysis_type: Analysis type
         """
-        if not self.has_caching_info(file_path, chunk, vuln_name):
+        if not self.has_caching_info(file_path, chunk, vuln_name, analysis_type):
             return
             
         cache_dict = self.get_cache_dict(mode, analysis_type)
         if file_path not in cache_dict:
             cache_dict[file_path] = {}
 
-        chunk_key = self.generate_cache_key(chunk, prompt, vuln_name)
+        chunk_key = self.generate_cache_key(chunk, prompt, vuln_name, file_path)
         cache_dict[file_path][chunk_key] = result
 
         # Save cache after each analysis to allow resuming at any point
         self.save_chunk_cache(file_path, mode, analysis_type)
     
-    def generate_cache_key(self, chunk: str, prompt: str, vuln_name: str) -> str:
+    def generate_cache_key(self, chunk: str, prompt: str, vuln_name: str, file_path: str = None) -> str:
         """
-        Generate a robust cache key that takes all factors into account
+        Generate a cache key for a chunk
         
         Args:
             chunk: Code chunk content
             prompt: Analysis prompt
             vuln_name: Vulnerability name
+            file_path: Path to the file (for adaptive analysis)
             
         Returns:
-            Cache key as string
+            Cache key
         """
-        # Factors that could affect the analysis
-        factors = {
-            'chunk_content': chunk,
-            'chunk_length': len(chunk),
-            'prompt': prompt,
-            'vuln_name': vuln_name,
-            'analysis_version': ANALYSIS_VERSION,
-        }
-        
-        # Composite hash
-        composite_string = ":".join([str(v) for k, v in sorted(factors.items())])
-        return hashlib.sha256(composite_string.encode('utf-8')).hexdigest()
+        # For adaptive analysis (empty chunk)
+        if not chunk:
+            if file_path:
+                return f"{sanitize_name(file_path)}_{sanitize_name(vuln_name)}"
+            return sanitize_name(vuln_name)
+            
+        # For standard analysis
+        chunk_hash = hashlib.md5(chunk.encode()).hexdigest()
+        prompt_hash = hashlib.md5(prompt.encode()).hexdigest()
+        return f"{chunk_hash}_{prompt_hash}_{sanitize_name(vuln_name)}"
     
     def clear_scan_cache(self, analysis_type: AnalysisType = None) -> None:
         """
