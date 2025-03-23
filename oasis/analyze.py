@@ -120,6 +120,9 @@ class SecurityAnalyzer:
             f"- Mitigation: {vuln_mitigation}"
         )
         
+        # Get common format requirements
+        common_prompt = _get_common_prompt(vuln_name)
+        
         # Build the complete prompt with clear sections and strict instructions
         return f"""You are a cybersecurityy expert specialized in {vuln_name} vulnerabilities ONLY. 
 
@@ -138,21 +141,7 @@ CODE SEGMENT TO ANALYZE:
 YOUR TASK:
 Analyze this code segment ({i + 1}/{total_chunks}) for {vuln_name} vulnerabilities ONLY.
 
-If you find {vuln_name} vulnerabilities:
-1. Quote the exact vulnerable code snippets related ONLY to {vuln_name}
-2. Explain specifically how this code is vulnerable to {vuln_name}
-3. Provide severity level (Critical/High/Medium/Low) for this {vuln_name} vulnerability
-4. Describe the potential impact specific to this {vuln_name} vulnerability
-5. Provide remediation recommendations with secure code examples
-
-If NO {vuln_name} vulnerabilities are found, respond with ONLY:
-"No {vuln_name} vulnerabilities found in this segment."
-
-FORMAT REQUIREMENTS:
-- Use Markdown formatting
-- For each {vuln_name} vulnerability found, start with the vulnerable code block in a code fence
-- DO NOT MENTION any other vulnerability types besides {vuln_name}
-- Focus ONLY on {vuln_name} - this is extremely important
+{common_prompt}
 
 {VULNERABILITY_PROMPT_EXTENSION}
 """
@@ -625,7 +614,7 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
         Returns:
             List of detailed results for this vulnerability
         """
-        detailed_results = []
+        deep_results = []
 
         # Get all files with suspicious chunks for this vulnerability
         suspicious_files = [file_path for (file_path, vname), _ in all_suspicious_chunks.items() 
@@ -648,11 +637,11 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
                 if file_result := self._analyze_file_suspicious_chunks(
                     file_path, suspicious_data, vuln, silent
                 ):
-                    detailed_results.append(file_result)
+                    deep_results.append(file_result)
 
                 file_pbar.update(1)
 
-        return detailed_results
+        return deep_results
     
     def _analyze_file_suspicious_chunks(self, file_path, suspicious_data, vuln, silent=False):
         """
@@ -1672,6 +1661,9 @@ DO NOT include any other text in your response.
         """
         deep_results = []
         
+        # Get common format requirements
+        common_prompt = _get_common_prompt(vuln_name)
+        
         with tqdm(total=len(high_risk_chunks), desc="Deep analysis of high-risk chunks", leave=False) as pbar:
             for chunk_idx, chunk_text in high_risk_chunks:
                 # Build comprehensive analysis prompt
@@ -1692,21 +1684,7 @@ CODE SEGMENT TO ANALYZE:
 YOUR TASK:
 Analyze this code segment for {vuln_name} vulnerabilities ONLY.
 
-If you find {vuln_name} vulnerabilities:
-1. Quote the exact vulnerable code snippets related ONLY to {vuln_name}
-2. Explain specifically how this code is vulnerable to {vuln_name}
-3. Provide severity level (Critical/High/Medium/Low) for this {vuln_name} vulnerability
-4. Describe the potential impact specific to this {vuln_name} vulnerability
-5. Provide remediation recommendations with secure code examples
-
-If NO {vuln_name} vulnerabilities are found, respond with ONLY:
-"No {vuln_name} vulnerabilities found in this segment."
-
-FORMAT REQUIREMENTS:
-- Use Markdown formatting
-- For each {vuln_name} vulnerability found, start with the vulnerable code block in a code fence
-- DO NOT MENTION any other vulnerability types besides {vuln_name}
-- Focus ONLY on {vuln_name} - this is extremely important
+{common_prompt}
 """
 
                 # Use deep model for comprehensive analysis
@@ -1790,3 +1768,59 @@ FORMAT REQUIREMENTS:
 
         # 3. Combine all parts
         return "\n".join(report_parts)
+
+def _get_common_prompt(vuln_name: str) -> str:
+    """
+    Génère les instructions de formatage communes utilisées dans les différents prompts.
+    
+    Args:
+        vuln_name: Nom de la vulnérabilité
+        
+    Returns:
+        Instructions de formatage sous forme de chaîne de caractères
+    """
+    return f"""
+If you find {vuln_name} vulnerabilities:
+1. Quote the exact vulnerable code snippets related ONLY to {vuln_name}
+2. Explain specifically how this code is vulnerable to {vuln_name}
+3. Provide severity level (Critical/High/Medium/Low) for this {vuln_name} vulnerability
+4. Describe the potential impact specific to this {vuln_name} vulnerability
+5. Identify the application entry point and execution path:
+   - Determine the initial entry point (route, API endpoint, function or method)
+   - Create an ASCII flowchart showing the complete execution path from entry point to vulnerability
+   - Show all relevant functions/methods called in the execution chain
+6. Identify the complete attack/exploitation path:
+   - HTTP methods involved (GET, POST, PUT, DELETE)
+   - Specific parameters or variables that can be manipulated (form fields, URL parameters, headers)
+   - Step-by-step exploitation scenario with example payloads
+   - Any dependencies or conditions required for successful exploitation
+7. Provide detailed remediation recommendations with secure code examples
+
+If NO {vuln_name} vulnerabilities are found, respond with ONLY:
+"No {vuln_name} vulnerabilities found in this segment."
+
+FORMAT REQUIREMENTS:
+- Use Markdown formatting
+- For each {vuln_name} vulnerability found, start with the vulnerable code block in a code fence
+- DO NOT MENTION any other vulnerability types besides {vuln_name}
+- Focus ONLY on {vuln_name} - this is extremely important
+- Step-by-step exploitation scenario with example payloads, including precise request methods (e.g., GET, POST) and explicit parameter names (e.g., 'user_id', 'token')
+- When providing the ASCII flowchart, make sure to do the following:
+  1. Begin with a header "## Execution Path"
+  2. Use a properly formatted code block with triple backticks (```) at the beginning AND end
+  3. Do not add any other content inside the code block besides the ASCII diagram
+  4. Format the ASCII diagram like this:
+  ```
+  Entry Point: /api/endpoint
+       |
+       v
+  [process_data]
+       |
+       v
+  [validate_input]
+       |
+       v
+  [parse_user_data] <-- Vulnerable Function
+  ```
+  5. After the closing triple backticks, continue with the next section
+"""
