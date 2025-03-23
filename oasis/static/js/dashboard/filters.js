@@ -21,13 +21,6 @@ DashboardApp.renderFilters = function() {
         `;
     }
     
-    if (formatFiltersContainer) {
-        formatFiltersContainer.innerHTML = `
-            <div class="filter-title">Filter by format</div>
-            <div class="filter-options" id="format-filters"></div>
-        `;
-    }
-    
     if (dateFiltersContainer) {
         dateFiltersContainer.innerHTML = `
             <div class="filter-title">Filter by date range</div>
@@ -155,6 +148,22 @@ DashboardApp.populateFilters = function() {
                 <button id="date-filter-apply" class="btn btn-primary btn-sm">Apply</button>
             </div>
         `;
+        
+        const dateFilterBtn = document.getElementById('date-filter-apply');
+        dateFilterBtn.addEventListener('click', function() {
+            const startDate = document.getElementById('date-start').value;
+            const endDate = document.getElementById('date-end').value;
+            
+            console.log("Date filter applied:", startDate, endDate);
+            
+            DashboardApp.activeFilters.dateRange = {
+                start: startDate ? new Date(startDate).toISOString() : null,
+                end: endDate ? new Date(endDate + 'T23:59:59').toISOString() : null
+            };
+            
+            DashboardApp.fetchReports();
+            DashboardApp.fetchStats();
+        });
     }
 };
 
@@ -281,25 +290,6 @@ DashboardApp.initializeFilters = function() {
             document.getElementById('date-end').value = '';
             
             // Refresh data
-            DashboardApp.fetchReports();
-            DashboardApp.fetchStats();
-        });
-    }
-    
-    // Initialize event listener for the date filter button
-    const dateFilterBtn = document.getElementById('date-filter-apply');
-    if (dateFilterBtn) {
-        dateFilterBtn.addEventListener('click', function() {
-            const startDate = document.getElementById('date-start').value;
-            const endDate = document.getElementById('date-end').value;
-            
-            console.log("Date filter applied:", startDate, endDate);
-            
-            DashboardApp.activeFilters.dateRange = {
-                start: startDate ? new Date(startDate).toISOString() : null,
-                end: endDate ? new Date(endDate + 'T23:59:59').toISOString() : null
-            };
-            
             DashboardApp.fetchReports();
             DashboardApp.fetchStats();
         });

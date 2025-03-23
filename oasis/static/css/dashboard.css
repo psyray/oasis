@@ -1114,7 +1114,7 @@ body {
     flex-wrap: wrap;
     gap: 5px;
     margin-top: 5px;
-    max-height: 110px;
+    max-height: 130px;
     overflow-y: auto;
     padding-right: 5px;
     align-content: flex-start;

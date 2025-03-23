@@ -1,12 +1,8 @@
 // API functions for fetching data
-DashboardApp.fetchReports = function() {
-    console.log("Fetching reports...");
-    DashboardApp.showLoading('reports-container');
-    
-    // Building filter parameters
+DashboardApp.buildFilterParams = function() {
+    // Create and return URLSearchParams object with active filters
     const params = new URLSearchParams();
     
-    // CORRECTION: Vérifier que les filtres sont correctement appliqués
     if (DashboardApp.activeFilters.models && DashboardApp.activeFilters.models.length > 0) {
         params.append('model', DashboardApp.activeFilters.models.join(','));
     }
@@ -28,7 +24,16 @@ DashboardApp.fetchReports = function() {
         }
     }
     
-    // Pour le débogage
+    return params;
+};
+
+DashboardApp.fetchReports = function() {
+    console.log("Fetching reports...");
+    DashboardApp.showLoading('reports-container');
+    
+    // Use the utility function to build parameters
+    const params = DashboardApp.buildFilterParams();
+    
     console.log("Filter params:", params.toString());
     
     // Fetch reports
@@ -40,8 +45,6 @@ DashboardApp.fetchReports = function() {
             return response.json();
         })
         .then(data => {
-            // Correction: vérifier la structure des données retournées
-            // et traiter en conséquence
             const reports = Array.isArray(data) ? data : (data.reports || []);
             console.log("Reports fetched:", reports.length);
             
@@ -62,32 +65,9 @@ DashboardApp.fetchStats = function() {
     console.log("Fetching stats...");
     DashboardApp.showLoading('stats-container');
     
-    // Building filter parameters
-    const params = new URLSearchParams();
+    // Use the utility function to build parameters
+    const params = DashboardApp.buildFilterParams();
     
-    // CORRECTION: Vérifier que les filtres sont correctement appliqués
-    if (DashboardApp.activeFilters.models && DashboardApp.activeFilters.models.length > 0) {
-        params.append('model', DashboardApp.activeFilters.models.join(','));
-    }
-    
-    if (DashboardApp.activeFilters.formats && DashboardApp.activeFilters.formats.length > 0) {
-        params.append('format', DashboardApp.activeFilters.formats.join(','));
-    }
-    
-    if (DashboardApp.activeFilters.vulnerabilities && DashboardApp.activeFilters.vulnerabilities.length > 0) {
-        params.append('vulnerability', DashboardApp.activeFilters.vulnerabilities.join(','));
-    }
-    
-    if (DashboardApp.activeFilters.dateRange) {
-        if (DashboardApp.activeFilters.dateRange.start) {
-            params.append('start_date', DashboardApp.activeFilters.dateRange.start);
-        }
-        if (DashboardApp.activeFilters.dateRange.end) {
-            params.append('end_date', DashboardApp.activeFilters.dateRange.end);
-        }
-    }
-    
-    // Pour le débogage
     console.log("Stats filter params:", params.toString());
     
     // Fetch stats

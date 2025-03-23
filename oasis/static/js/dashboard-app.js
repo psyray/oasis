@@ -151,6 +151,11 @@ const DashboardApp = {
             this.initializeModalEvents();
         }
         
+        // Setup mobile navigation
+        if (this.setupMobileNavigation) {
+            this.setupMobileNavigation();
+        }
+        
         // Setup event listeners
         this.setupEventListeners();
         
@@ -174,24 +179,6 @@ const DashboardApp = {
     // Setup global event listeners
     setupEventListeners: function() {
         console.log("Setting up event listeners...");
-        
-        // Date filter button
-        const dateFilterBtn = document.getElementById('date-filter-apply');
-        if (dateFilterBtn) {
-            const self = this;
-            dateFilterBtn.addEventListener('click', function() {
-                const startDate = document.getElementById('date-start').value;
-                const endDate = document.getElementById('date-end').value;
-                
-                self.activeFilters.dateRange = {
-                    start: startDate ? new Date(startDate).toISOString() : null,
-                    end: endDate ? new Date(endDate + 'T23:59:59').toISOString() : null
-                };
-                
-                self.fetchReports();
-                self.fetchStats();
-            });
-        }
         
         // Clear filters button
         const clearFiltersBtn = document.getElementById('filter-clear');
