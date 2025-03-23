@@ -15,7 +15,7 @@
     <div class="main-container">
         <button id="toggle-filters" class="toggle-filters-btn">
             <span class="filter-icon">🔍</span>
-            <span class="filter-text">Filtres</span>
+            <span class="filter-text">Filters</span>
         </button>
         
         <aside class="sidebar">
@@ -29,13 +29,6 @@
             <div class="filter-section">
                 <h2 class="filter-title">Filter by vulnerability</h2>
                 <div class="filter-options" id="vulnerability-filters">
-                    <div class="loading"><div class="loading-spinner"></div></div>
-                </div>
-            </div>
-            
-            <div class="filter-section">
-                <h2 class="filter-title">Filter by format</h2>
-                <div class="filter-options" id="format-filters">
                     <div class="loading"><div class="loading-spinner"></div></div>
                 </div>
             </div>
@@ -71,32 +64,35 @@
                 <div id="view-tree-vuln" class="view-tab">Tree by vulnerability</div>
             </div>
              -->
-            <div id="reports-filters">
+            <!-- <div id="reports-filters">
                 <div class="loading"><div class="loading-spinner"></div></div>
-            </div>
+            </div> -->
             <div id="reports-container">
                 <div class="loading"><div class="loading-spinner"></div></div>
             </div>
         </main>
     </div>
     
-    <div id="report-modal" class="modal-overlay">
-        <div class="modal">
-            <div class="modal-header">
-                <h2 id="report-modal-title" class="modal-title">Report preview</h2>
-                <button class="modal-close" onclick="closeReportModal()">&times;</button>
-            </div>
-            <div id="report-modal-content" class="modal-body">
-                <div class="loading"><div class="loading-spinner"></div></div>
-            </div>
-            <div class="modal-footer">
-                <div id="download-options" class="download-format-options"></div>
-                <button class="btn btn-secondary" onclick="closeReportModal()">Close</button>
+    <div id="report-modal" class="modal">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="report-modal-title">Report</h2>
+                    <button type="button" class="close" onclick="closeReportModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="report-modal-content"></div>
+                </div>
+                <div class="modal-footer">
+                    <div id="download-options"></div>
+                    <button class="btn btn-secondary" onclick="closeReportModal()">Close</button>
+                </div>
             </div>
         </div>
     </div>
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+    <!-- Include only the main app file - it will load the other modules -->
+    <script src="{{ url_for('static', filename='js/dashboard-app.js') }}"></script>
 {% endblock %} 

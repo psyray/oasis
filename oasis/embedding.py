@@ -648,14 +648,14 @@ class EmbeddingManager:
         """
         # Define regex patterns for different languages
         patterns = {
-            # Python - fonctions et méthodes
+            # Python - functions and methods
             'py': r'def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(|async\s+def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(',
 
-            # JavaScript/TypeScript - diverses formes de fonctions
+            # JavaScript/TypeScript - various forms of functions
             'js': r'function\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(|([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*function\s*\(|([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*function\s*\(|([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*\(.*?\)\s*=>|async\s+function\s+([a-zA-Z_][a-zA-Z0-9_]*)|([a-zA-Z_][a-zA-Z0-9_]*)\s*\(.*?\)\s*:\s*\w+',
             'ts': r'function\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(|([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*function\s*\(|([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*function\s*\(|([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*\(.*?\)\s*=>|async\s+function\s+([a-zA-Z_][a-zA-Z0-9_]*)|([a-zA-Z_][a-zA-Z0-9_]*)\s*\(.*?\)\s*:\s*\w+',
 
-            # Java et langages similaires
+            # Java and similar languages
             'java': r'(?:public|private|protected)?\s+(?:static)?\s+(?:final)?\s+(?:\w+(?:<.*?>)?)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(.*?\)\s*(?:throws\s+\w+(?:\s*,\s*\w+)*)?\s*{',
             'c': r'(?:\w+\s+)+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(.*?\)\s*{',
             'cpp': r'(?:\w+\s+)+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(.*?\)(?:\s*const)?\s*(?:noexcept)?\s*{|([a-zA-Z_][a-zA-Z0-9_]*)\s*::\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(',

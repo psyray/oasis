@@ -383,3 +383,43 @@ def generate_timestamp(for_file: bool = False) -> str:
         return datetime.now().strftime("%Y%m%d_%H%M%S")
     else:
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def parse_iso_date(date_string):
+    """
+    Parse ISO format date string with error handling
+    Returns datetime object with UTC timezone or None if parsing fails
+    """
+    if not date_string:
+        return None
+        
+    try:
+        # Handle 'Z' UTC indicator in ISO format
+        if date_string.endswith('Z'):
+            date_string = date_string.replace('Z', '+00:00')
+            
+        # Parse ISO format date string
+        return datetime.fromisoformat(date_string)
+    except (ValueError, TypeError) as e:
+        print(f"Error parsing date '{date_string}': {e}")
+        return None
+        
+def parse_report_date(date_string):
+    """
+    Parse report date string with error handling
+    Returns datetime object with UTC timezone or None if parsing fails
+    """
+    if not date_string:
+        return None
+        
+    try:
+        # Parse date in format used by reports
+        dt = datetime.strptime(date_string, '%Y-%m-%d %H:%M:%S')
+        # Add UTC timezone if not present
+        if dt.tzinfo is None:
+            from datetime import timezone
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError) as e:
+        print(f"Error parsing report date '{date_string}': {e}")
+        return None
+
