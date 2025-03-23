@@ -97,8 +97,8 @@ DashboardApp.populateFilters = function() {
     // Re-add event listeners
     document.querySelectorAll('.filter-checkbox').forEach(checkbox => {
         checkbox.addEventListener('change', function() {
-            const type = this.dataset.type;
-            const value = this.dataset.value;
+            const {type} = this.dataset;
+            const {value} = this.dataset;
             const isChecked = this.checked;
             
             // Map filter type to the corresponding property in activeFilters using object lookup
@@ -177,8 +177,8 @@ DashboardApp.updateFilterCounts = function() {
     };
     
     document.querySelectorAll('.filter-checkbox').forEach(checkbox => {
-        const type = checkbox.dataset.type;
-        const value = checkbox.dataset.value;
+        const {type} = checkbox.dataset;
+        const {value} = checkbox.dataset;
         checkedFilters[type][value] = checkbox.checked;
     });
     
@@ -232,8 +232,8 @@ DashboardApp.initializeFilters = function() {
     // Re-add event listeners for filter checkboxes
     document.querySelectorAll('.filter-checkbox').forEach(checkbox => {
         checkbox.addEventListener('change', function() {
-            const type = this.dataset.type;
-            const value = this.dataset.value;
+            const {type} = this.dataset;
+            const {value} = this.dataset;
             const isChecked = this.checked;
             
             // Map filter type to the corresponding property in activeFilters using object lookup
