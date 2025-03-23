@@ -50,7 +50,7 @@ DashboardApp.filterByModel = function(model) {
     // Reset date inputs
     const startDateInput = document.getElementById('date-start');
     const endDateInput = document.getElementById('date-end');
-    if (startDateInput) startDateInput.value = '';
+    if (startDateInput) {
     if (endDateInput) endDateInput.value = '';
     
     // Fetch new data

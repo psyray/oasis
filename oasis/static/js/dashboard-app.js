@@ -214,8 +214,8 @@ const DashboardApp = {
                 // Reset date fields
                 const dateStart = document.getElementById('date-start');
                 const dateEnd = document.getElementById('date-end');
-                if (dateStart) dateStart.value = '';
-                if (dateEnd) dateEnd.value = '';
+                if (dateStart) {
+                if (dateEnd) {
                 
                 // Refresh data
                 self.fetchReports();
