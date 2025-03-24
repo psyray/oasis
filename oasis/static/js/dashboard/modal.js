@@ -271,7 +271,7 @@ DashboardApp.setupModalResize = function() {
         DashboardApp.currentResizeObserver = new ResizeObserver(entries => {
             for (let entry of entries) {
                 // Adjust content layout if needed based on width
-                const width = entry.contentRect.width;
+                const {width} = entry.contentRect;
                 
                 // Add/remove responsive classes based on width
                 if (width < 768) {

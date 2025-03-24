@@ -202,7 +202,11 @@ const DashboardApp = {
                 const dateStart = document.getElementById('date-start');
                 const dateEnd = document.getElementById('date-end');
                 if (dateStart) {
+                    dateStart.value = '';
+                }
                 if (dateEnd) {
+                    dateEnd.value = '';
+                }
                 
                 // Refresh data
                 self.fetchReports();

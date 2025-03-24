@@ -76,25 +76,25 @@
 
 ### Minimum Requirements
 - **CPU**: 4+ cores (Intel i5/AMD Ryzen 5 or better)
-- **RAM**: 16GB minimum, 32GB recommended
-- **Storage**: 100GB free space for models (more for caching large codebases)
+- **RAM**: 16 GB minimum, 32 GB recommended
+- **Storage**: 100 GB+ free space for models (more for caching large codebases)
 - **GPU**: Not required for basic usage (will use CPU but really slow)
 
 ### Recommended Setup
 - **CPU**: 8+ cores (Intel i7/i9 or AMD Ryzen 7/9)
-- **RAM**: 32GB-64GB for large codebases
-- **GPU**: NVIDIA with 8GB+ VRAM (RTX 3060 or better)
-- **Storage**: SSD with 100GB+ free space
+- **RAM**: 32 GB-64 GB for large codebases
+- **GPU**: NVIDIA with 8 GB+ VRAM (RTX 3060 or better)
+- **Storage**: SSD with 100 GB+ free space
 
 ### Scaling Guidelines
-- **Small Projects** (< 10,000 LOC): Minimum requirements sufficient
-- **Medium Projects** (10,000-100,000 LOC): 8-core CPU, 32GB RAM recommended
-- **Large Projects** (> 100,000 LOC): High-end CPU, 64GB RAM, dedicated GPU essential
+- **Small Projects** (< 10,000 Lines of Code (LOC)): Minimum requirements sufficient
+- **Medium Projects** (10,000-100,000  Lines of Code (LOC)): 8-core CPU, 32 GB+ RAM recommended
+- **Large Projects** (> 100,000 Lines of Code (LOC)): High-end CPU, 64 GB+ RAM, dedicated GPU essential
 
 ### GPU Recommendations by Model Size
-- **4-8B parameter models**: 8GB VRAM minimum
-- **12-20B parameter models**: 16GB VRAM recommended
-- **30B+ parameter models**: 24GB+ VRAM (RTX 3090/4090/A5000 or better)
+- **4-8B parameter models**: 8 GB VRAM minimum
+- **12-20B parameter models**: 16 GB VRAM recommended
+- **30B+ parameter models**: 24 GB+ VRAM (RTX 3090/4090/A5000 or better)
 
 ### Network Requirements
 - Stable internet connection for model downloads
@@ -236,20 +236,27 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:lates -t 0.7
 
 ## 💡 Getting the Most out of OASIS
 
-### Optimizing Two-Phase Scanning
-- **Choose complementary models**: Use a lightweight model (4-7B parameters) for initial scanning and a powerful model (>20B parameters) for deep analysis
-- **Efficient workflow**: Specify with `-sm gemma:4b -m gemma:27b` to balance speed and accuracy
-- **Resource optimization**: The two-phase approach reduces GPU memory usage by using the appropriate model for each task
-- **Batch processing**: For large codebases, run initial scans during off-hours and deep analysis when needed
-
 ### Model Selection Strategy
-- For initial scanning: Choose models optimized for speed (gemma3:4b, llama3.2:3b)
-- For deep analysis: Select models with strong reasoning capabilities (Gemma3:27b, deepseek-r1:32b, qwen2.5-coder:32b)
-- For specialized code: Use code-specific models like codestral, codellama, mistral-nemo ... for best results
 
-### Specific Model Selection Examples
+OASIS uses a two-phase scanning approach that leverages different models for optimal results:
 
-Here are specific examples for selecting models based on your security analysis needs:
+#### Model Selection by Purpose
+- **Initial Scanning Models** (4-7B parameters):
+  - Optimized for speed: `gemma3:4b`, `llama3.2:3b`, `phi3:mini`
+  - Used for quick pattern matching and identifying potentially suspicious code segments
+  - Resource-efficient for scanning large codebases
+
+- **Deep Analysis Models** (>20B parameters):
+  - Optimized for thorough analysis: `gemma3:27b`, `deepseek-r1:32b`, `qwen2.5-coder:32b`, `mistral-nemo`, `mixtral:instruct`
+  - Used only for code sections flagged as suspicious in the initial scan
+  - Provides detailed vulnerability assessment
+
+- **Specialized Code Models**:
+  - Code-specific models: `codellama`, `codestral`, `starcoder`, `phind-codellama`
+  - Best for specific languages and frameworks
+  - `codellama` for general code, `codestral` for Python/C++, `starcoder/phind-codellama` for web technologies
+
+#### Example Model Combinations
 
 ```bash
 # For quick analysis of a small project
@@ -265,99 +272,38 @@ oasis -i ./backend -sm phi3:mini -m deepseek-r1:32b,qwen2.5-coder:32b -v rce,inp
 oasis -i ./critical-service -sm gemma3:7b -m mixtral:instruct -v all --adaptive -t 0.6
 ```
 
-Choose models based on the following criteria:
-- **Speed vs. Accuracy**: Smaller models (3B-7B) for initial scanning, larger models (>20B) for deep analysis
-- **Code Language Specialty**: Use codellama for general code, codestral for Python/C++, and starcoder/phind-codellama for web technologies
-- **Analysis Depth**: For critical applications, use stronger models like mistral-nemo, deepseek-r1, or qwen2.5-coder with the --adaptive flag
+### Scanning Workflows: Standard vs Adaptive
 
-### For the best results with OASIS:
+OASIS offers two different analysis approaches, each with distinct advantages:
 
-1. **Choose the right models**:
-   - Use smaller models (4-7B parameters) for initial scanning
-   - Use larger models (>20B parameters) for deep analysis
-   - For code-specific vulnerabilities, prefer code-specific models like CodeLlama
+#### Standard Two-Phase Workflow
 
-2. **Optimize your workflow**:
-   - For large codebases, start with a higher threshold (0.7-0.8) to focus on high-probability issues
-   - Use the standard mode for faster scans, adaptive mode for more thorough analysis
-   - Utilize caching effectively by only clearing when necessary
-
-3. **Target your analysis**:
-   - Specify relevant vulnerability types for your project
-   - Filter by file extensions to focus on specific technologies
-   - Use the audit mode to understand vulnerability distribution before full analysis
-
-4. **Leverage the reports**:
-   - View HTML reports for the best interactive experience
-   - Use the web interface for team collaboration
-   - Export PDF reports for documentation and sharing
-
-
-## 🔎 Scanning Workflows: Standard vs Adaptive
-
-### Standard Two-Phase Workflow
-
-The standard workflow uses a sequential approach divided into two distinct phases:
+This workflow uses a sequential approach with two distinct phases:
 
 1. **Initial Scanning Phase**:
-   - Uses a lightweight model (e.g., 4-7B parameters)
+   - Uses a lightweight model specified by `-sm`
    - Scans entire codebase to identify potentially suspicious chunks
-   - Applies fast pattern matching to filter code segments
    - Creates a map of suspicious sections for deep analysis
 
 2. **Deep Analysis Phase**:
-   - Uses a more powerful model (e.g., 20B+ parameters)
-   - Only analyzes chunks flagged as suspicious in phase 1
-   - Performs detailed vulnerability assessment
+   - Uses more powerful model(s) specified by `-m`
+   - Analyzes only chunks flagged as suspicious in phase 1
    - Generates comprehensive analysis reports
 
-**Advantages**:
-- More efficient resource utilization
-- Faster for large codebases
-- Clear separation between scanning and analysis
-- Predictable resource requirements
-- Better caching opportunities
+**Best for**: Large codebases with uniform risk profiles, predictable resource planning
 
-**Disadvantages**:
-- May miss context-dependent vulnerabilities
-- Fixed analysis depth regardless of risk level
-- Two discrete phases can miss interrelated issues
-- Requires manual tuning of similarity threshold
-
-### Adaptive Multi-Level Workflow
+#### Adaptive Multi-Level Workflow
 
 The adaptive workflow employs a dynamic approach that adjusts analysis depth based on risk assessment:
 
 1. **Level 1**: Static pattern-based analysis (fastest)
-   - Quick regex/pattern matching to identify obvious issues
+2. **Level 2**: Lightweight model scan for initial screening
+3. **Level 3**: Medium-depth context analysis with risk scoring
+4. **Level 4**: Deep analysis only for high-risk chunks
 
-2. **Level 2**: Lightweight model scan
-   - Uses small models for initial screening
-   - Filters sections for deeper analysis
+**Best for**: Critical systems with varied risk profiles, complex codebases requiring nuanced analysis
 
-3. **Level 3**: Medium-depth context analysis
-   - Examines context-sensitive code sections
-   - Assigns risk scores to chunks
-
-4. **Level 4**: Deep analysis
-   - Only high-risk chunks receive the most thorough analysis
-   - Uses powerful models only where truly needed
-
-**Advantages**:
-- More intelligent resource allocation
-- Better at finding context-dependent vulnerabilities
-- Adjusts analysis depth based on risk level
-- More thorough for critical code sections
-- Superior for complex codebases with varied risk profiles
-
-**Disadvantages**:
-- Higher computational overhead for risk assessment
-- More complex caching strategy
-- Less predictable resource utilization
-- Longer total analysis time for small projects
-- Requires more sophisticated prompt engineering
-
-### Comparison Table
+#### Comparison Table
 
 | Aspect | Standard Two-Phase | Adaptive Multi-Level |
 |--------|-------------------|----------------------|
@@ -366,9 +312,31 @@ The adaptive workflow employs a dynamic approach that adjusts analysis depth bas
 | **Detection Accuracy** | Good for obvious vulnerabilities | Better for subtle, context-dependent issues |
 | **False Positives** | More common | Reduced through context analysis |
 | **Resource Allocation** | Fixed per phase | Dynamically adjusted by risk |
-| **Best For** | Large codebases with uniform risk | Critical systems with varied risk profiles |
-| **Caching Efficiency** | High | Moderate |
-| **Configuration** | Simpler | More parameters to tune |
+| **Command Flag** | Default | Use `--adaptive` `-ad` |
+
+### Optimization Tips
+
+For the best results with OASIS:
+
+1. **Caching Strategy**:
+   - Leverage the dual-layer caching system for repeated scans
+   - Only clear embedding cache (`-cce`) when changing embedding models or after major code changes
+   - Clear scan cache (`-ccs`) when upgrading to better models or after fixing vulnerabilities
+
+2. **Workflow Optimization**:
+   - Start with higher thresholds (0.7-0.8) for large codebases to focus on high-probability issues
+   - Use `--audit` mode to understand vulnerability distribution before full analysis
+   - Specify relevant vulnerability types (`-v`) and file extensions (`-x`) to target your analysis
+
+3. **Resource Management**:
+   - For large projects, run initial scans during off-hours
+   - Balance CPU/GPU usage by choosing appropriate model sizes
+   - Use model combinations that maximize speed and accuracy based on your hardware
+
+4. **Report Utilization**:
+   - View HTML reports for the best interactive experience
+   - Use the web interface (`--web`) for team collaboration
+   - Export PDF reports for documentation and sharing
 
 ## 🛡️ Supported Vulnerability Types
 

@@ -51,7 +51,11 @@ DashboardApp.filterByModel = function(model) {
     const startDateInput = document.getElementById('date-start');
     const endDateInput = document.getElementById('date-end');
     if (startDateInput) {
-    if (endDateInput) endDateInput.value = '';
+        startDateInput.value = '';
+    }
+    if (endDateInput) {
+        endDateInput.value = '';
+    }
     
     // Fetch new data
     DashboardApp.fetchReports();

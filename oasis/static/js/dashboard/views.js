@@ -263,10 +263,18 @@ DashboardApp.renderListViewWithTemplate = function() {
     
     // Sort vulnerability types - Ensure Executive Summary and Audit Report come first
     const sortedVulns = Object.keys(vulnGroups).sort((a, b) => {
-            if (a === 'Executive Summary') return -1;
-            if (b === 'Executive Summary') return 1;
-            if (a === 'Audit Report') return -1;
-            if (b === 'Audit Report') return 1;
+        if (a === 'Executive Summary') {
+            return -1;
+        }
+        if (b === 'Executive Summary') {
+            return 1;
+        }
+        if (a === 'Audit Report') {
+            return -1;
+        }
+        if (b === 'Audit Report') {
+            return 1;
+        }
         return a.localeCompare(b);
     });
     
