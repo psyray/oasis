@@ -1,6 +1,6 @@
 // Utility functions for the dashboard
 DashboardApp.groupReportsByModelAndVuln = function(reports) {
-    console.log("Grouping reports by model and vulnerability");
+    DashboardApp.debug("Grouping reports by model and vulnerability");
     return reports.map(report => {
         // Extraction of important properties
         const { model, vulnerability_type, path, date, format, stats, alternative_formats, date_visible } = report;
@@ -81,4 +81,4 @@ DashboardApp.getVulnerabilityEmoji = function(vulnerability) {
     return '🔒 ';
 };
 
-console.log("Utils module loaded"); 
+DashboardApp.debug("Utils module loaded"); 

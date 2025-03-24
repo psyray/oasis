@@ -1,6 +1,6 @@
 // User interaction functions
 DashboardApp.toggleTreeSection = function(header) {
-    console.log("Toggling tree section");
+    DashboardApp.debug("Toggling tree section");
     const section = header.parentElement;
     const content = section.querySelector('.tree-content');
     const toggle = header.querySelector('.tree-toggle');
@@ -15,7 +15,7 @@ DashboardApp.toggleTreeSection = function(header) {
 };
 
 DashboardApp.toggleTreeNode = function(header) {
-    console.log("Toggling tree node");
+    DashboardApp.debug("Toggling tree node");
     const item = header.parentElement;
     const content = item.querySelector('.tree-dates-list');
     
@@ -27,7 +27,7 @@ DashboardApp.toggleTreeNode = function(header) {
 };
 
 DashboardApp.filterByModel = function(model) {
-    console.log("Filtering by model:", model);
+    DashboardApp.debug("Filtering by model:", model);
     
     // Reset all filters
     DashboardApp.activeFilters = {
@@ -63,7 +63,7 @@ DashboardApp.filterByModel = function(model) {
 };
 
 DashboardApp.filterDatesByModel = function(modelElement) {
-    console.log("Filtering dates by model");
+    DashboardApp.debug("Filtering dates by model");
     const modelName = modelElement.dataset.model;
     const card = modelElement.closest('.report-card');
     
@@ -86,19 +86,19 @@ DashboardApp.filterDatesByModel = function(modelElement) {
     
     if (!titleElement) {
         console.error("Cannot find title element in card");
-        console.log("Card structure:", card.innerHTML);
+        DashboardApp.debug("Card structure:", card.innerHTML);
         return;
     }
     
     const {vulnType} = titleElement.dataset;
-    console.log("Found vulnerability type:", vulnType);
+    DashboardApp.debug("Found vulnerability type:", vulnType);
     
     // Update dates for this model and vulnerability
     DashboardApp.updateDatesForModel(card, modelName, vulnType);
 };
 
 DashboardApp.updateDatesForModel = function(card, modelName, vulnType) {
-    console.log("Updating dates for model:", modelName, "vulnerability:", vulnType);
+    DashboardApp.debug("Updating dates for model:", modelName, "vulnerability:", vulnType);
     
     // Show loading in the dates container
     const datesContainer = card.querySelector('.dates-list');
@@ -106,7 +106,7 @@ DashboardApp.updateDatesForModel = function(card, modelName, vulnType) {
         datesContainer.innerHTML = '<div class="loading"><div class="loading-spinner"></div></div>';
     } else {
         console.error("Cannot find dates container in card");
-        console.log("Card structure:", card.innerHTML);
+        DashboardApp.debug("Card structure:", card.innerHTML);
         return;
     }
     
@@ -171,7 +171,7 @@ DashboardApp.updateDatesForModel = function(card, modelName, vulnType) {
 };
 
 DashboardApp.updateDatesForVulnerability = function(vulnElement, vulnType) {
-    console.log("Updating dates for vulnerability:", vulnType);
+    DashboardApp.debug("Updating dates for vulnerability:", vulnType);
     
     // Get the containing section
     const section = vulnElement.closest('.tree-section');
@@ -250,4 +250,4 @@ DashboardApp.updateDatesForVulnerability = function(vulnElement, vulnType) {
         });
 };
 
-console.log("Interactions module loaded"); 
+DashboardApp.debug("Interactions module loaded"); 

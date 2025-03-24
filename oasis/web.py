@@ -114,7 +114,8 @@ class WebServer:
             
             return render_template('dashboard.html', 
                                    model_emojis=MODEL_EMOJIS,
-                                   vuln_emojis=VULN_EMOJIS)
+                                   vuln_emojis=VULN_EMOJIS,
+                                   debug=self.debug)
             
         @app.route('/api/reports')
         @login_required

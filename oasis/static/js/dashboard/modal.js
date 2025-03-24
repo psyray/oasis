@@ -14,11 +14,11 @@ DashboardApp.ensureModalStyles = function() {
     
     // Add to document
     document.head.appendChild(style);
-    console.log("Modal styles added dynamically");
+    DashboardApp.debug("Modal styles added dynamically");
 };
 
 DashboardApp.openReport = function(path, format) {
-    console.log("Opening report:", path, format);
+    DashboardApp.debug("Opening report:", path, format);
     if (!path) {
         console.error("No path provided for report");
         return;
@@ -209,7 +209,7 @@ DashboardApp.downloadReportFile = function(path, format) {
 
 // Function to close the modal
 DashboardApp.closeReportModal = function() {
-    console.log("Closing report modal");
+    DashboardApp.debug("Closing report modal");
     // Get the modal
     const modal = document.getElementById('report-modal');
     
@@ -252,7 +252,7 @@ DashboardApp.convertMarkdownToHtml = function(markdown) {
 };
 
 DashboardApp.setupModalResize = function() {
-    console.log("Setting up modal resize observer");
+    DashboardApp.debug("Setting up modal resize observer");
     // Clean up any existing observer
     if (DashboardApp.currentResizeObserver) {
         DashboardApp.currentResizeObserver.disconnect();
@@ -289,7 +289,7 @@ DashboardApp.setupModalResize = function() {
 
 // Initializing modal related event listeners
 DashboardApp.initializeModalEvents = function() {
-    console.log("Initializing modal events");
+    DashboardApp.debug("Initializing modal events");
     
     // Add event listeners to close buttons in the modal
     const closeButtons = document.querySelectorAll('#report-modal .close');
@@ -309,4 +309,4 @@ DashboardApp.initializeModalEvents = function() {
     }
 };
 
-console.log("Modal module loaded"); 
+DashboardApp.debug("Modal module loaded"); 

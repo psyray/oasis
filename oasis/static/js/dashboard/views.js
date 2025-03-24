@@ -1,7 +1,7 @@
 // View rendering functions
 DashboardApp.renderCurrentView = function() {
-    console.log("Rendering current view...");
-    console.log("Reports data:", DashboardApp.reportData.length);
+    DashboardApp.debug("Rendering current view...");
+    DashboardApp.debug("Reports data:", DashboardApp.reportData.length);
     
     // This function renders the current view based on the view mode
     switch (DashboardApp.currentViewMode) {
@@ -28,7 +28,7 @@ DashboardApp.renderCurrentView = function() {
 };
 
 DashboardApp.renderTreeView = function(groupBy) {
-    console.log("Rendering tree view...");
+    DashboardApp.debug("Rendering tree view...");
     const container = document.getElementById('reports-container');
     
     if (!container) {
@@ -216,7 +216,7 @@ DashboardApp.renderTreeView = function(groupBy) {
 };
 
 DashboardApp.renderListView = function() {
-    console.log("Rendering list view...");
+    DashboardApp.debug("Rendering list view...");
     const container = document.getElementById('reports-container');
     
     if (!container) {
@@ -247,7 +247,7 @@ DashboardApp.renderListView = function() {
 };
 
 DashboardApp.renderListViewWithTemplate = function() {
-    console.log("Rendering list view with template...");
+    DashboardApp.debug("Rendering list view with template...");
     const container = document.getElementById('reports-container');
     
     // Group by vulnerability type
@@ -382,7 +382,7 @@ DashboardApp.renderListViewWithTemplate = function() {
 };
 
 DashboardApp.renderStats = function() {
-    console.log("Rendering stats...");
+    DashboardApp.debug("Rendering stats...");
     const statsContainer = document.getElementById('stats-container');
     
     if (!statsContainer) {
@@ -438,7 +438,7 @@ DashboardApp.renderStats = function() {
 };
 
 DashboardApp.switchView = function(viewMode) {
-    console.log("Switching view to:", viewMode);
+    DashboardApp.debug("Switching view to:", viewMode);
     // Update active tab
     document.querySelectorAll('.view-tab').forEach(tab => {
         tab.classList.remove('active');
@@ -454,4 +454,4 @@ DashboardApp.switchView = function(viewMode) {
     DashboardApp.renderCurrentView();
 };
 
-console.log("Views module loaded"); 
+DashboardApp.debug("Views module loaded"); 

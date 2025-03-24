@@ -15,6 +15,14 @@ const DashboardApp = {
     currentReportPath: '',
     currentReportFormat: '',
     currentResizeObserver: null,
+    debugMode: false, // Initialize debug flag
+    
+    // Debug logging function that only logs when debug mode is active
+    debug: function(message, ...args) {
+        if (this.debugMode) {
+            console.log(message, ...args);
+        }
+    },
     
     // loading utilities used by multiple modules
     showLoading: function(containerId) {
@@ -30,7 +38,11 @@ const DashboardApp = {
     
     // Initialize the application
     init: function() {
-        console.log("Initializing DashboardApp...");
+        // Check for debug mode from server (data attribute on the body)
+        const debugModeAttr = document.body.getAttribute('data-debug-mode');
+        this.debugMode = debugModeAttr === 'true' || debugModeAttr === '1';
+        
+        this.debug("Initializing DashboardApp in " + (this.debugMode ? "DEBUG" : "PRODUCTION") + " mode...");
         
         // Define global functions immediately to avoid duplication
         this.defineGlobalFunctions();
@@ -38,7 +50,7 @@ const DashboardApp = {
         // Load all modules in the correct order
         this.loadModules()
             .then(() => {
-                console.log("All modules loaded successfully");
+                this.debug("All modules loaded successfully");
                 this.startApplication();
             })
             .catch(error => {
@@ -49,7 +61,7 @@ const DashboardApp = {
     
     // Define global functions once to avoid duplication
     defineGlobalFunctions: function() {
-        console.log("Defining global functions");
+        this.debug("Defining global functions");
         
         // Global handlers for HTML onclick events - no need to redefine all of them
         // Only those used in the HTML as onclick attributes
@@ -135,7 +147,7 @@ const DashboardApp = {
     
     // Start the application after modules are loaded
     startApplication: function() {
-        console.log("Starting application...");
+        DashboardApp.debug("Starting application...");
         
         // Load card template
         this.loadCardTemplate();
@@ -165,7 +177,7 @@ const DashboardApp = {
             .then(response => response.text())
             .then(template => {
                 this.cardTemplate = template;
-                console.log("Card template loaded");
+                DashboardApp.debug("Card template loaded");
             })
             .catch(error => {
                 console.error("Error loading card template:", error);
@@ -174,7 +186,7 @@ const DashboardApp = {
     
     // Setup global event listeners
     setupEventListeners: function() {
-        console.log("Setting up event listeners...");
+        DashboardApp.debug("Setting up event listeners...");
         
         // Clear filters button
         const clearFiltersBtn = document.getElementById('filter-clear');
