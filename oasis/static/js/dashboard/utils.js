@@ -1,6 +1,6 @@
 // Utility functions for the dashboard
 DashboardApp.groupReportsByModelAndVuln = function(reports) {
-    console.log("Grouping reports by model and vulnerability");
+    DashboardApp.debug("Grouping reports by model and vulnerability");
     return reports.map(report => {
         // Extraction of important properties
         const { model, vulnerability_type, path, date, format, stats, alternative_formats, date_visible } = report;
@@ -19,7 +19,7 @@ DashboardApp.groupReportsByModelAndVuln = function(reports) {
     });
 };
 
-DashboardApp.formatDisplayName = function(name, type) {
+DashboardApp.formatDisplayName = function(name, type, emoji = true) {
     if (!name) {
         return 'Unknown';
     }
@@ -30,12 +30,20 @@ DashboardApp.formatDisplayName = function(name, type) {
     
     let formattedName = name;
     if (type === 'model') {
-        formattedName = DashboardApp.getModelEmoji(name) + ' ' + name;
+        if (emoji) {
+            formattedName = DashboardApp.getModelEmoji(name) + ' ' + name;
+        } else {
+            formattedName = name;
+        }
     }
 
     if (type === 'vulnerability') {
-        const lowered_name = name.toLowerCase().replace(/ /g, '_');
-        formattedName = DashboardApp.getVulnerabilityEmoji(lowered_name) + ' ' + name;
+        if (emoji) {
+            const lowered_name = name.toLowerCase().replace(/ /g, '_');
+            formattedName = DashboardApp.getVulnerabilityEmoji(lowered_name) + ' ' + name;
+        } else {
+            formattedName = name;
+        }
     }
     
     // For vulnerability types and models
@@ -73,4 +81,4 @@ DashboardApp.getVulnerabilityEmoji = function(vulnerability) {
     return '🔒 ';
 };
 
-console.log("Utils module loaded"); 
+DashboardApp.debug("Utils module loaded"); 

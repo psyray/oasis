@@ -1,6 +1,6 @@
 // Filter management functions
 DashboardApp.renderFilters = function() {
-    console.log("Rendering filters...");
+    DashboardApp.debug("Rendering filters...");
     const modelFiltersContainer = document.getElementById('model-filters-section');
     const vulnFiltersContainer = document.getElementById('vulnerability-filters-section');
     const formatFiltersContainer = document.getElementById('format-filters-section');
@@ -30,7 +30,7 @@ DashboardApp.renderFilters = function() {
 };
 
 DashboardApp.populateFilters = function() {
-    console.log("Populating filters...");
+    DashboardApp.debug("Populating filters...");
     // Populate model filters
     const modelFiltersContainer = document.getElementById('model-filters');
     let modelFiltersHtml = '';
@@ -153,7 +153,7 @@ DashboardApp.populateFilters = function() {
             const startDate = document.getElementById('date-start').value;
             const endDate = document.getElementById('date-end').value;
             
-            console.log("Date filter applied:", startDate, endDate);
+            DashboardApp.debug("Date filter applied:", startDate, endDate);
             
             DashboardApp.activeFilters.dateRange = {
                 start: startDate ? new Date(startDate).toISOString() : null,
@@ -167,7 +167,7 @@ DashboardApp.populateFilters = function() {
 };
 
 DashboardApp.updateFilterCounts = function() {
-    console.log("Updating filter counts...");
+    DashboardApp.debug("Updating filter counts...");
     // Save the current state of filters
     const checkedFilters = {
         model: {},
@@ -224,7 +224,7 @@ DashboardApp.updateFilterCounts = function() {
 };
 
 DashboardApp.initializeFilters = function() {
-    console.log("Initializing filters...");
+    DashboardApp.debug("Initializing filters...");
     this.renderFilters();
     
     // Re-add event listeners for filter checkboxes
@@ -259,7 +259,7 @@ DashboardApp.initializeFilters = function() {
             }
             
             // Pour le débogage
-            console.log("Updated filters:", DashboardApp.activeFilters);
+            DashboardApp.debug("Updated filters:", DashboardApp.activeFilters);
             
             // Refresh reports and stats with new filters
             DashboardApp.fetchReports();
@@ -294,7 +294,7 @@ DashboardApp.initializeFilters = function() {
 };
 
 DashboardApp.clearFilters = function() {
-    console.log("Clearing filters...");
+    DashboardApp.debug("Clearing filters...");
     // Uncheck all checkboxes
     document.querySelectorAll('.filter-checkbox').forEach(checkbox => {
         checkbox.checked = false;
@@ -314,12 +314,12 @@ DashboardApp.clearFilters = function() {
 
 // Function to set up mobile navigation
 DashboardApp.setupMobileNavigation = function() {
-    console.log("Setting up mobile navigation...");
+    DashboardApp.debug("Setting up mobile navigation...");
     const toggleFiltersBtn = document.getElementById('toggle-filters');
     const sidebar = document.querySelector('.sidebar');
     
     if (!toggleFiltersBtn || !sidebar) {
-        console.log("Toggle button or sidebar not found");
+        DashboardApp.debug("Toggle button or sidebar not found");
         return;
     }
     
@@ -363,4 +363,4 @@ DashboardApp.setupMobileNavigation = function() {
     });
 };
 
-console.log("Filters module loaded"); 
+DashboardApp.debug("Filters module loaded"); 

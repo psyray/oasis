@@ -13,7 +13,7 @@
     <link rel="manifest" href="{{ url_for('static', filename='img/favicon/site.webmanifest') }}" />
     {% block head_extra %}{% endblock %}
 </head>
-<body class="{% block body_class %}{% endblock %}">
+<body class="{% block body_class %}{% endblock %}" data-debug-mode="{{ debug|default('false')|lower }}">
     {% include "header.html" %}
     
     {% block content %}{% endblock %}
