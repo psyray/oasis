@@ -189,13 +189,17 @@ DashboardApp.openReport = function(path, format) {
         
         // Create the buttons with the correct paths
         let downloadHtml = '';
-        const formats = ['📝 MD', '🌐 HTML', '📄 PDF'];
+        const formats = {
+            '📝': 'MD',
+            '🌐': 'HTML',
+            '📄': 'PDF'
+        };
         
-        formats.forEach(fmt => {
+        Object.keys(formats).forEach(fmt => {
             // Replace the format in the path
-            const formattedPath = basePath.replace(`/${currentFormat}/`, `/${fmt}/`) + `.${fmt}`;
+            const formattedPath = basePath.replace(`/${currentFormat}/`, `/${formats[fmt].toLowerCase()}/`) + `.${formats[fmt].toLowerCase()}`;
             downloadHtml += `<button class="btn btn-format" onclick="downloadReportFile('${formattedPath}', '${fmt}')">
-                           ${fmt.toUpperCase()}</button>`;
+                           ${fmt} ${formats[fmt]}</button>`;
         });
         
         downloadOptions.innerHTML = downloadHtml;
