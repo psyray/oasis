@@ -16,7 +16,7 @@ const DashboardApp = {
     currentReportFormat: '',
     currentResizeObserver: null,
     
-    // Utilitaires de chargement utilisés par plusieurs modules
+    // loading utilities used by multiple modules
     showLoading: function(containerId) {
         const container = document.getElementById(containerId);
         if (container) {
@@ -25,7 +25,7 @@ const DashboardApp = {
     },
     
     hideLoading: function(containerId) {
-        // Le contenu sera remplacé par les fonctions de rendu
+        // The content will be replaced by the rendering functions
     },
     
     // Initialize the application
@@ -51,8 +51,8 @@ const DashboardApp = {
     defineGlobalFunctions: function() {
         console.log("Defining global functions");
         
-        // Global handlers for HTML onclick events - pas besoin de tous les redéfinir
-        // Seulement ceux qui sont utilisés dans le HTML comme attributs onclick
+        // Global handlers for HTML onclick events - no need to redefine all of them
+        // Only those used in the HTML as onclick attributes
         window.openReport = function(path, format) {
             if (DashboardApp.openReport) {
                 DashboardApp.openReport(path, format);
@@ -85,7 +85,6 @@ const DashboardApp = {
             }
         };
         
-        // Ajouter les autres fonctions globales au besoin
     },
     
     // Load all required modules
@@ -158,9 +157,6 @@ const DashboardApp = {
         
         // Setup event listeners
         this.setupEventListeners();
-        
-        // NOTE: Removed duplicate global function definitions
-        // They are now defined once in defineGlobalFunctions()
     },
     
     // Load card template
@@ -221,50 +217,11 @@ const DashboardApp = {
                 (e.target.innerText.includes('Reload') || 
                  e.target.href?.includes('get_stats'))) {
                 
-                e.preventDefault();
                 self.refreshDashboard();
+                e.preventDefault();
             }
         });
     },
-    
-    // CORRECTION: Ajout de la fonction refreshDashboard qui était manquante
-    refreshDashboard: function() {
-        console.log("Refreshing dashboard...");
-        
-        // Show loading indicators
-        this.showLoading('stats-container');
-        this.showLoading('reports-container');
-        
-        // Fetch fresh data
-        Promise.all([
-            fetch('/api/stats?force=1').then(response => response.json()),
-            fetch('/api/reports').then(response => response.json())
-        ])
-        .then(([statsData, reportsData]) => {
-            // Update the state
-            this.stats = statsData;
-            this.reportData = this.groupReportsByModelAndVuln(reportsData);
-            
-            // Render the updated data
-            this.renderStats();
-            this.renderCurrentView();
-            
-            // Update filters if necessary
-            if (!this.filtersPopulated) {
-                this.populateFilters();
-                this.filtersPopulated = true;
-            } else {
-                this.updateFilterCounts();
-            }
-            
-            console.log('Dashboard refreshed successfully');
-        })
-        .catch(error => {
-            console.error('Error refreshing dashboard:', error);
-            document.getElementById('stats-container').innerHTML = 
-                '<div class="error-message">Error refreshing dashboard. Please try again later.</div>';
-        });
-    }
 };
 
 // Initialize the application when DOM is ready

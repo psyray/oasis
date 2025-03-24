@@ -8,7 +8,7 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 from functools import wraps
 
 
-from .config import VULNERABILITY_MAPPING, MODEL_EMOJIS
+from .config import VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS
 from .report import Report
 from .tools import parse_iso_date, parse_report_date
 
@@ -113,7 +113,8 @@ class WebServer:
             """Main dashboard page"""
             
             return render_template('dashboard.html', 
-                                   model_emojis=MODEL_EMOJIS)
+                                   model_emojis=MODEL_EMOJIS,
+                                   vuln_emojis=VULN_EMOJIS)
             
         @app.route('/api/reports')
         @login_required
@@ -141,9 +142,6 @@ class WebServer:
         @app.route('/api/stats')
         @login_required
         def get_stats():
-            # Return aggregated statistics about all reports
-            force_param = request.args.get('force', '0')
-            
             # Check if there are any filter parameters
             model_filter = request.args.get('model', '')
             format_filter = request.args.get('format', '')
@@ -445,7 +443,7 @@ class WebServer:
             return 'Audit Report'
 
         vulnerability_patterns = {
-            vulnerability: VULNERABILITY_MAPPING[vulnerability]['name']
+            VULNERABILITY_MAPPING[vulnerability]['name'].lower().replace(' ', '_'): VULNERABILITY_MAPPING[vulnerability]['name']
             for vulnerability in VULNERABILITY_MAPPING
         }
 

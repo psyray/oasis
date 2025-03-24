@@ -189,7 +189,7 @@ DashboardApp.openReport = function(path, format) {
         
         // Create the buttons with the correct paths
         let downloadHtml = '';
-        const formats = ['md', 'html', 'pdf'];
+        const formats = ['📝 MD', '🌐 HTML', '📄 PDF'];
         
         formats.forEach(fmt => {
             // Replace the format in the path

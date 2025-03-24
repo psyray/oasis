@@ -8,7 +8,7 @@ DashboardApp.renderFilters = function() {
     
     if (modelFiltersContainer) {
         modelFiltersContainer.innerHTML = `
-            <div class="filter-title">Filter by model</div>
+            <div class="filter-title">🤖 Filter by model</div>
             <div class="filter-options" id="model-filters"></div>
             <div style="margin-top: 10px;" id="active-models-list"></div>
         `;
@@ -16,14 +16,14 @@ DashboardApp.renderFilters = function() {
     
     if (vulnFiltersContainer) {
         vulnFiltersContainer.innerHTML = `
-            <div class="filter-title">Filter by vulnerability</div>
+            <div class="filter-title">🛡️ Filter by vulnerability</div>
             <div class="filter-options" id="vulnerability-filters"></div>
         `;
     }
     
     if (dateFiltersContainer) {
         dateFiltersContainer.innerHTML = `
-            <div class="filter-title">Filter by date range</div>
+            <div class="filter-title">📅 Filter by date range</div>
             <div id="date-filters"></div>
         `;
     }
@@ -144,7 +144,7 @@ DashboardApp.populateFilters = function() {
                     <label for="date-end">End:</label>
                     <input type="date" id="date-end" class="date-input">
                 </div>
-                <button id="date-filter-apply" class="btn btn-primary btn-sm">Apply</button>
+                <button id="date-filter-apply" class="btn btn-primary">🔍 Apply</button>
             </div>
         `;
         

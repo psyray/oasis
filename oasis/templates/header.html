@@ -7,8 +7,8 @@
     </div>
     {% if session.get('logged_in') %}
     <div class="header-actions">
-        <a href="{{ url_for('get_stats') }}" class="header-link">Reload</a>
-        <a href="{{ url_for('logout') }}" class="header-link">Logout</a>
+        <a href="{{ url_for('get_stats') }}" class="header-link">🔄 Reload</a>
+        <a href="{{ url_for('logout') }}" class="header-link">🔑 Logout</a>
     </div>
     {% endif %}
 </header> 

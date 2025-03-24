@@ -28,8 +28,18 @@ DashboardApp.formatDisplayName = function(name, type) {
         return name.toUpperCase();
     }
     
+    let formattedName = name;
+    if (type === 'model') {
+        formattedName = DashboardApp.getModelEmoji(name) + ' ' + name;
+    }
+
+    if (type === 'vulnerability') {
+        const lowered_name = name.toLowerCase().replace(/ /g, '_');
+        formattedName = DashboardApp.getVulnerabilityEmoji(lowered_name) + ' ' + name;
+    }
+    
     // For vulnerability types and models
-    return name
+    return formattedName
         .replace(/_/g, ' ')
         .split(' ')
         .map(word => word.charAt(0).toUpperCase() + word.slice(1))
@@ -37,43 +47,8 @@ DashboardApp.formatDisplayName = function(name, type) {
 };
 
 DashboardApp.getModelEmoji = function(model) {
-    // Map model names to their corresponding emojis
-    const emojiMap = {
-        'gpt4': '🔷',
-        'gpt4o': '🔶',
-        'gpt35': '🔹',
-        'gpt35turbo': '🔹',
-        'gpt4_turbo': '🔷',
-        'gpt4-turbo': '🔷',
-        'claude': '🟣',
-        'claude2': '🟣',
-        'claude_instant': '🟡',
-        'claude_instant_v1': '🟡',
-        'claude3': '🟪',
-        'claude_3': '🟪',
-        'claude3_opus': '🟪',
-        'claude3_sonnet': '🟣',
-        'claude3_haiku': '🟡',
-        'gemini': '🟢',
-        'gemini_pro': '🟢',
-        'llama2': '🟠',
-        'llama2_70b': '🟠',
-        'llama2_13b': '🟠',
-        'llama2_7b': '🟠',
-        'llama3': '🟠',
-        'mistral': '❄️',
-        'mistral_7b': '❄️',
-        'mixtral': '🌀',
-        'mixtral_8x7b': '🌀'
-    };
-    
-    // Try direct match first
-    if (emojiMap[model]) {
-        return emojiMap[model] + ' ';
-    }
-    
     // Try to match by prefix
-    for (const [key, emoji] of Object.entries(emojiMap)) {
+    for (const [key, emoji] of Object.entries(modelEmojis)) {
         // Check if model starts with key or key starts with model
         if (model.toLowerCase().startsWith(key.toLowerCase()) || 
             key.toLowerCase().startsWith(model.toLowerCase())) {
@@ -83,6 +58,19 @@ DashboardApp.getModelEmoji = function(model) {
     
     // Default emoji if no match found
     return '🤖 ';
+};
+
+DashboardApp.getVulnerabilityEmoji = function(vulnerability) {
+    // Try to match by prefix
+    for (const [key, emoji] of Object.entries(vulnEmojis)) {
+        if (vulnerability.toLowerCase().startsWith(key.toLowerCase()) || 
+            key.toLowerCase().startsWith(vulnerability.toLowerCase())) {
+            return emoji + ' ';
+        }
+    }
+    
+    // Default emoji if no match found
+    return '🔒 ';
 };
 
 console.log("Utils module loaded"); 

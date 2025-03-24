@@ -61,12 +61,17 @@ DashboardApp.fetchReports = function() {
         });
 };
 
-DashboardApp.fetchStats = function() {
+DashboardApp.fetchStats = function(forceRefresh = false) {
     console.log("Fetching stats...");
     DashboardApp.showLoading('stats-container');
     
     // Use the utility function to build parameters
     const params = DashboardApp.buildFilterParams();
+    
+    // Add force parameter if requested
+    if (forceRefresh) {
+        params.append('force', '1');
+    }
     
     console.log("Stats filter params:", params.toString());
     
@@ -101,8 +106,39 @@ DashboardApp.fetchStats = function() {
 
 DashboardApp.refreshDashboard = function() {
     console.log("Refreshing dashboard...");
-    DashboardApp.fetchReports();
-    DashboardApp.fetchStats();
+    
+    // Call fetchReports and fetchStats with force=true
+    // Use Promise.all to run them in parallel
+    Promise.all([
+        new Promise(resolve => {
+            // Modify fetchStats to call resolve when done
+            const originalRenderStats = DashboardApp.renderStats;
+            DashboardApp.renderStats = function() {
+                originalRenderStats.call(DashboardApp);
+                resolve();
+                // Restore original function
+                DashboardApp.renderStats = originalRenderStats;
+            };
+            DashboardApp.fetchStats(true); // true = force refresh
+        }),
+        new Promise(resolve => {
+            // Modify renderCurrentView to call resolve when done
+            const originalRenderView = DashboardApp.renderCurrentView;
+            DashboardApp.renderCurrentView = function() {
+                originalRenderView.call(DashboardApp);
+                resolve();
+                // Restore original function
+                DashboardApp.renderCurrentView = originalRenderView;
+            };
+            DashboardApp.fetchReports();
+        })
+    ])
+    .then(() => {
+        console.log('Dashboard refreshed successfully');
+    })
+    .catch(error => {
+        console.error('Error refreshing dashboard:', error);
+    });
 };
 
 console.log("API module loaded"); 

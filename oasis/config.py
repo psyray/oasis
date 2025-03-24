@@ -184,6 +184,76 @@ MODEL_EMOJIS = {
     "default": "🤖 "
 }
 
+VULN_EMOJIS = {
+    # Injection vulnerabilities
+    "sql_injection": "💉 ",
+    "remote_code_execution": "🔥 ",
+    "cross-site_scripting_(xss)": "🔀 ",
+    "xml_external_entity_injection": "📄 ",
+    "server-side_request_forgery": "🔄 ",
+    "command_injection": "⌨️ ",
+    "code_injection": "📝 ",
+    
+    # Authentication and Authorization
+    "authentication_issues": "🔑 ",
+    "cross-site_request_forgery": "↔️ ",
+    "insecure_direct_object_reference": "🔢 ",
+    "session_management_issues": "🍪 ",
+    "auth_bypass": "🔓 ",
+    "missing_access_control": "🚫 ",
+    "privilege_escalation": "🔝 ",
+    
+    # Data Security
+    "sensitive_data_exposure": "🕵️ ",
+    "hardcoded_secrets": "🔐 ",
+    "sensitive_data_logging": "📝 ",
+    "information_disclosure": "📢 ",
+    
+    # File System
+    "path_traversal": "📂 ",
+    "lfi": "📁 ",
+    "rfi": "📡 ",
+    
+    # Configuration
+    "security_misconfiguration": "⚙️ ",
+    "outdated_component": "⌛ ",
+    "open_redirect": "↪️ ",
+    
+    # Input Validation
+    "insufficient_input_validation": "⚠️ ",
+    "crlf": "↩️ ",
+    
+    # Cryptographic
+    "insecure_cryptographic_usage": "🔒 ",
+    "weak_crypto": "🔒 ",
+    "cert_validation": "📜 ",
+    "insecure_random": "🎲 ",
+    
+    # Deserialization
+    "insecure_deserialization": "📦 ",
+    "unsafe_yaml": "📋 ",
+    "pickle_issues": "🥒 ",
+    
+    # Performance and DoS
+    "dos": "💥 ",
+    "race_condition": "🏁 ",
+    "buffer_overflow": "📊 ",
+    "integer_overflow": "🔢 ",
+    "memory_leak": "💧 ",
+    
+    # Other
+    "mitm": "🕸️ ",
+    "business_logic": "💼 ",
+    "weak_credentials": "🔏 ", 
+    
+    # Risk Categories
+    "high_risk": "🚨 ",
+    "medium_risk": "⚠️ ",
+    "low_risk": "📌 ",
+    "info": "ℹ️ ",
+    "unclassified": "❓ "
+}
+
 # Vulnerability mappings
 VULNERABILITY_MAPPING = {
     'sqli': {

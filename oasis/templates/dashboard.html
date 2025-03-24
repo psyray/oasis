@@ -8,6 +8,7 @@
 <script>
     // Pre-loading model emojis from Python
     const modelEmojis = {{ model_emojis|tojson|safe }};
+    const vulnEmojis = {{ vuln_emojis|tojson|safe }};
 </script>
 {% endblock %}
 
@@ -20,21 +21,21 @@
         
         <aside class="sidebar">
             <div class="filter-section">
-                <h2 class="filter-title">Filter by model</h2>
+                <h2 class="filter-title">🤖 Filter by model</h2>
                 <div class="filter-options" id="model-filters">
                     <div class="loading"><div class="loading-spinner"></div></div>
                 </div>
             </div>
             
             <div class="filter-section">
-                <h2 class="filter-title">Filter by vulnerability</h2>
+                <h2 class="filter-title">🛡️ Filter by vulnerability</h2>
                 <div class="filter-options" id="vulnerability-filters">
                     <div class="loading"><div class="loading-spinner"></div></div>
                 </div>
             </div>
             
             <div class="filter-section">
-                <h2 class="filter-title">Filter by date</h2>
+                <h2 class="filter-title">📅 Filter by date</h2>
                 <div class="filter-options" id="date-filters">
                     <div class="date-filter-inputs">
                         <div class="date-input-group">
@@ -45,12 +46,12 @@
                             <label for="date-end">End:</label>
                             <input type="date" id="date-end" class="date-input">
                         </div>
-                        <button id="date-filter-apply" class="btn btn-primary btn-sm">Apply</button>
+                        <button id="date-filter-apply" class="btn btn-primary">🔍 Apply</button>
                     </div>
                 </div>
             </div>
             
-            <button id="filter-clear" class="btn btn-secondary" style="width: 100%;">Clear all filters</button>
+            <button id="filter-clear" class="btn btn-secondary" style="width: 100%;">🧹 Clear all filters</button>
         </aside>
         
         <main class="content">

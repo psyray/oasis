@@ -77,12 +77,11 @@ DashboardApp.renderTreeView = function(groupBy) {
     sortedKeys.forEach(key => {
         const reportsInGroup = grouped[key];
         const formattedKey = DashboardApp.formatDisplayName(key, groupBy === 'model' ? 'model' : 'vulnerability');
-        const emoji = groupBy === 'model' ? DashboardApp.getModelEmoji(key) : '';
         
         html += `
             <div class="tree-section">
                 <div class="tree-header" onclick="toggleTreeSection(this)">
-                    <span class="tree-toggle">▼</span> ${emoji}${formattedKey} (${reportsInGroup.length})
+                    <span class="tree-toggle">▼</span> ${formattedKey} (${reportsInGroup.length})
                     </div>
                 <div class="tree-content">
         `;
@@ -104,12 +103,11 @@ DashboardApp.renderTreeView = function(groupBy) {
             sortedModels.forEach(model => {
                 const reportsForModel = modelGroups[model];
                 const formattedModel = DashboardApp.formatDisplayName(model, 'model');
-                const modelEmoji = DashboardApp.getModelEmoji(model);
                 
                 html += `
                     <div class="tree-item">
                         <div class="tree-item-header">
-                            <div class="tree-item-title">${modelEmoji}${formattedModel}</div>
+                            <div class="tree-item-title">${formattedModel}</div>
                         </div>
                         <div class="tree-dates-list">
                 `;
@@ -321,13 +319,12 @@ DashboardApp.renderListViewWithTemplate = function() {
         let modelsHTML = '';
         models.forEach(model => {
             const formattedModel = DashboardApp.formatDisplayName(model, 'model');
-            const modelEmoji = DashboardApp.getModelEmoji(model);
             
             modelsHTML += `
                 <span class="model-tag clickable" 
                     onclick="filterDatesByModel(this)" 
                     data-model="${model}">
-                    ${modelEmoji}${formattedModel}
+                    ${formattedModel}
                 </span>
             `;
         });
@@ -355,13 +352,13 @@ DashboardApp.renderListViewWithTemplate = function() {
         // Generate format buttons HTML
         let formatButtons = '';
         if (pdfPath) {
-          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${pdfPath}', 'pdf')">PDF</button>`;
+          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${pdfPath}', 'pdf')">📄 PDF</button>`;
         }
         if (mdPath) {
-          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${mdPath}', 'md')">MD</button>`;
+          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${mdPath}', 'md')">📝 MD</button>`;
         }
         if (htmlPath) {
-          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${htmlPath}', 'html')">HTML</button>`;
+          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${htmlPath}', 'html')">🌐 HTML</button>`;
         }
             
         // Use the template and replace placeholders
@@ -405,22 +402,22 @@ DashboardApp.renderStats = function() {
     statsContainer.innerHTML = `
         <div class="dashboard-cards">
             <div class="card">
-                <div class="card-title">Reports</div>
+                <div class="card-title">📊 Reports</div>
                 <div class="card-value">${DashboardApp.stats.total_reports || 0}</div>
                 <div class="card-label">Reports generated</div>
             </div>
             <div class="card">
-                <div class="card-title">Models</div>
+                <div class="card-title">🤖 Models</div>
                 <div class="card-value">${Object.keys(DashboardApp.stats.models || {}).length}</div>
                 <div class="card-label">AI models used</div>
             </div>
             <div class="card">
-                <div class="card-title">Vulnerability types</div>
+                <div class="card-title">🛡️ Vulnerability types</div>
                 <div class="card-value">${Object.keys(DashboardApp.stats.vulnerabilities || {}).length}</div>
                 <div class="card-label">Vulnerabilities analyzed</div>
             </div>
             <div class="card">
-                <div class="card-title">Risk summary</div>
+                <div class="card-title">📈 Risk summary</div>
                 <div class="risk-indicator">
                     <div class="risk-bar">
                         <div class="risk-high" style="width: ${highPct}%"></div>
@@ -429,9 +426,9 @@ DashboardApp.renderStats = function() {
                     </div>
                 </div>
                 <div style="display: flex; justify-content: space-between; margin-top: 5px;">
-                    <span class="badge badge-high">${DashboardApp.stats.risk_summary.high || 0} High</span>
-                    <span class="badge badge-medium">${DashboardApp.stats.risk_summary.medium || 0} Medium</span>
-                    <span class="badge badge-low">${DashboardApp.stats.risk_summary.low || 0} Low</span>
+                    <span class="badge badge-high">🚨 ${DashboardApp.stats.risk_summary.high || 0} High</span>
+                    <span class="badge badge-medium">⚠️ ${DashboardApp.stats.risk_summary.medium || 0} Medium</span>
+                    <span class="badge badge-low">📌 ${DashboardApp.stats.risk_summary.low || 0} Low</span>
                 </div>
             </div>
         </div>
