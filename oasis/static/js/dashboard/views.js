@@ -121,11 +121,17 @@ DashboardApp.renderTreeView = function(groupBy) {
                     const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
                     const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
                     
+                    const langFlag = report.language ? 
+                        `<span class="language-flag ${report.language}" title="${DashboardApp.getLanguageName(report.language)}">
+                            ${DashboardApp.getLanguageEmoji(report.language)}
+                        </span>` : '';
+                    
                     html += `
                         <span class="date-tag clickable" 
                             onclick="openReport('${report.path}', '${report.format}')" 
                             data-model="${model}" 
                             data-vulnerability="${report.vulnerability_type}">
+                            ${langFlag}
                             <div class="date-main">${formattedDate}</div>
                             <div class="date-time">${formattedTime}</div>
                         </span>
@@ -187,11 +193,18 @@ DashboardApp.renderTreeView = function(groupBy) {
                     const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
                     const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
                     
+                    // Add language flag
+                    const langFlag = report.language ? 
+                        `<span class="language-flag ${report.language}" title="${DashboardApp.getLanguageName(report.language)}">
+                            ${DashboardApp.getLanguageEmoji(report.language)}
+                        </span>` : '';
+                    
                     html += `
                         <span class="date-tag clickable" 
                             onclick="openReport('${report.path}', '${report.format}')" 
                             data-model="${report.model}" 
                             data-vulnerability="${vuln}">
+                            ${langFlag}
                             <div class="date-main">${formattedDate}</div>
                             <div class="date-time">${formattedTime}</div>
                         </span>
@@ -339,10 +352,17 @@ DashboardApp.renderListViewWithTemplate = function() {
                 const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
                 const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
                 
+                // Add language flag
+                const langFlag = report.language ? 
+                    `<span class="language-flag ${report.language}" title="${DashboardApp.getLanguageName(report.language)}">
+                        ${DashboardApp.getLanguageEmoji(report.language)}
+                    </span>` : '';
+                
                 datesHTML += `
                     <span class="date-tag clickable" 
                         onclick="openReport('${report.path}', '${report.format}')" 
                         data-model="${report.model}">
+                        ${langFlag}
                         <div class="date-main">${formattedDate}</div>
                         <div class="date-time">${formattedTime}</div>
                     </span>
@@ -454,4 +474,38 @@ DashboardApp.switchView = function(viewMode) {
     DashboardApp.renderCurrentView();
 };
 
-DashboardApp.debug("Views module loaded"); 
+DashboardApp.debug("Views module loaded");
+
+// Fonction pour récupérer le nom complet de la langue
+DashboardApp.getLanguageName = function(langCode) {
+    const languages = {
+        'en': 'English',
+        'fr': 'Français',
+        'es': 'Español',
+        'de': 'Deutsch',
+        'it': 'Italiano',
+        'pt': 'Português',
+        'ru': 'Русский',
+        'zh': '中文',
+        'ja': '日本語',
+        // Ajouter d'autres langues au besoin
+    };
+    return languages[langCode] || langCode;
+};
+
+// Fonction pour récupérer l'emoji du drapeau
+DashboardApp.getLanguageEmoji = function(langCode) {
+    const flags = {
+        'en': '🇬🇧',
+        'fr': '🇫🇷',
+        'es': '🇪🇸',
+        'de': '🇩🇪',
+        'it': '🇮🇹',
+        'pt': '🇵🇹',
+        'ru': '🇷🇺',
+        'zh': '🇨🇳',
+        'ja': '🇯🇵',
+        // Ajouter d'autres drapeaux au besoin
+    };
+    return flags[langCode] || '🌐';
+}; 

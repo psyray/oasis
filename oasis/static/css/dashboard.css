@@ -1719,3 +1719,16 @@ h1 {
 body.modal-open {
     overflow: hidden;
 }
+
+/* Style pour les drapeaux de langue */
+.language-flag {
+    display: inline-block;
+    margin-right: 5px;
+    font-size: 14px;
+}
+
+.date-tag {
+    display: flex;
+    align-items: center;
+    /* ... other existing styles ... */
+}

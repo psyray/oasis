@@ -54,6 +54,8 @@ class OasisScanner:
                             help=f'Output format [pdf, html, md] (default: {DEFAULT_ARGS["OUTPUT_FORMAT"]})')
         io_group.add_argument('-x', '--extensions', type=str,
                             help='Comma-separated list of file extensions to analyze (e.g., "py,js,java")')
+        io_group.add_argument('-lg', '--lang', dest='language', type=str, default='en',
+                            help='Language for reports (default: en)')
         
         # Analysis Configuration
         analysis_group = parser.add_argument_group('Analysis Configuration')
@@ -265,8 +267,12 @@ class OasisScanner:
         elif init_result is False:
             return 1  # Error exit code for validation failures
 
-        # Initialize report
-        self.report = Report(self.args.input_path, self.args.output_format)
+        # Initialize report with language settings
+        self.report = Report(
+            self.args.input_path, 
+            self.args.output_format,
+            language=getattr(self.args, 'language', 'en')
+        )
 
         # Initialize Ollama and check connection
         if not self.args.web:

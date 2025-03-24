@@ -3,7 +3,7 @@ DashboardApp.groupReportsByModelAndVuln = function(reports) {
     DashboardApp.debug("Grouping reports by model and vulnerability");
     return reports.map(report => {
         // Extraction of important properties
-        const { model, vulnerability_type, path, date, format, stats, alternative_formats, date_visible } = report;
+        const { model, vulnerability_type, path, date, format, stats, alternative_formats, date_visible, language } = report;
         
         // Construction of a simplified report
         return {
@@ -12,6 +12,7 @@ DashboardApp.groupReportsByModelAndVuln = function(reports) {
             path,
             date,
             format,
+            language,
             date_visible: date_visible !== undefined ? date_visible : true,
             stats: stats || { high_risk: 0, medium_risk: 0, low_risk: 0, total: 0 },
             alternative_formats: alternative_formats || {}

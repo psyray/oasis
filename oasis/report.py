@@ -5,9 +5,10 @@ from markdown.extensions import Extension
 from markdown.preprocessors import Preprocessor
 from weasyprint import HTML
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 import logging
 from jinja2 import Environment, FileSystemLoader
+import json
 
 # Import from configuration
 from .config import REPORT
@@ -24,7 +25,8 @@ class Report:
         output_format: List of output formats to generate
     """
     
-    def __init__(self, input_path: str | Path, output_format: List[str], models: List[str] = None, current_model: str = None):
+    def __init__(self, input_path: str | Path, output_format: List[str], models: List[str] = None, 
+                 current_model: str = None, language: str = 'en'):
         """
         Initialize the report generator
         
@@ -33,6 +35,7 @@ class Report:
             output_format: List of output formats to generate
             models: List of models to generate reports for
             current_model: Current model being used
+            language: Language code for reports (default: en)
         """
         if models is None:
             models = []
@@ -43,6 +46,7 @@ class Report:
         self.report_dirs = {}
         self.models = models
         self.current_model = current_model
+        self.language = language
 
         # Configure the Jinja2 environment
         template_dir = Path(__file__).parent / 'templates'
@@ -93,6 +97,11 @@ class Report:
                 for model_dir in models_dir:
                     self.report_dirs[model_dir][fmt] = base_dir / model_dir / fmt
                     self.ensure_directory(self.report_dirs[model_dir][fmt])
+                    
+                    # Create language.txt file in the report directory
+                    lang_file = self.report_dirs[model_dir][fmt].parent / 'language.txt'
+                    with open(lang_file, 'w', encoding='utf-8') as f:
+                        f.write(self.language)
 
         return self.report_dirs
     
@@ -197,6 +206,11 @@ class Report:
         """
         logger.debug("--------------------------------")
         logger.debug(f"Generating {report_type} report for {', '.join(self.output_format)}, please wait...")
+
+        # Translate the report content if necessary
+        if self.language != 'en':
+            logger.debug(f"Translating {report_type} report to {self.language}")
+            report_content = self.translate_content(report_content, self.language)
 
         # Write markdown
         self.write_markdown(output_files['md'], report_content)
@@ -336,7 +350,7 @@ class Report:
         output_files = self.filter_output_files("_executive_summary")
 
         # Start building the executive summary
-        report = self.create_header("Security Analysis Executive Summary", model_name)
+        report = self.create_header("Executive Summary", model_name)
         
         report.extend([
             "\n## Overview",
@@ -653,6 +667,77 @@ class Report:
         self.output_dir_name = f"{input_name}_{timestamp}"
         
         return base_reports_dir / self.output_dir_name
+
+    def translate_content(self, content, target_language='en'):
+        """
+        Translate the report content using the current LLM model
+        
+        Args:
+            content: Content to translate
+            target_language: Target language code
+            
+        Returns:
+            Translated content
+        """
+        if target_language == 'en':
+            # No translation needed for English
+            return content
+        
+        from .ollama_manager import OllamaManager
+        
+        # Get an Ollama client using the current model
+        client = OllamaManager().get_client()
+        
+        if not client or not self.current_model:
+            logger.warning("Cannot translate content: No Ollama client or model available")
+            return content
+        
+        try:
+            # Check if content is a list of strings or a single string
+            is_list = isinstance(content, list)
+            text_to_translate = '\n'.join(content) if is_list else content
+            
+            # Skip translation if text is very short
+            if len(text_to_translate) < 10:
+                return content
+            
+            # Create a translation prompt
+            translation_prompt = f"""Translate the following text to {target_language}. 
+            Preserve all markdown formatting and HTML tags exactly.
+            Keep any code blocks rounded by ``` or simple `, code snippets, file paths, and all technical terms untranslated.
+            Only translate the natural language text.
+
+            CRITICAL INSTRUCTION: You must ONLY translate the natural language text.
+            DO NOT mention, describe, or analyze ANY other type of text.
+            DO NOT emit any other text than the translated text.
+            
+            TEXT TO TRANSLATE:
+            ```
+            {text_to_translate}
+            ```"""
+            
+            logger.debug(f"Translating content to {target_language} using {self.current_model}")
+            
+            # Make the API call
+            response = client.chat(
+                model=self.current_model,
+                messages=[{'role': 'user', 'content': translation_prompt}],
+                options={"timeout": 60000}  # 60 seconds timeout
+            )
+            
+            translated_text = response['message']['content']
+            
+            # Clean up the response - remove markdown code block markers if present
+            translated_text = translated_text.replace("```", "").strip()
+            
+            # Return in the same format as input
+            if is_list:
+                return translated_text.split('\n')
+            return translated_text
+            
+        except Exception as e:
+            logger.exception(f"Error translating content: {str(e)}")
+            return content
 
 class PageBreakExtension(Extension):
     """

@@ -77,6 +77,8 @@ class SecurityAnalyzer:
             analysis_type = AnalysisType.ADAPTIVE if self.analyze_by_function else AnalysisType.STANDARD
             self.cache_manager.clear_scan_cache(analysis_type)
         
+        self.language = getattr(args, 'language', 'en')
+
     def _get_vulnerability_details(self, vulnerability: Union[str, Dict]) -> Tuple[str, str, list, str, str]:
         """
         Extract vulnerability details from dict or return empty strings if invalid.

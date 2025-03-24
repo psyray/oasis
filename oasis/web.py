@@ -332,6 +332,14 @@ class WebServer:
         # Find alternative formats available (including timestamp)
         alternative_formats = self._find_alternative_formats(model_dir, report_file.stem, timestamp_dir)
         
+        # Add language information if available
+        lang_file = report_file.parent.parent / 'language.txt'
+        if lang_file.exists():
+            with open(lang_file, 'r', encoding='utf-8') as f:
+                language = f.read().strip()
+        else:
+            language = 'en'
+        
         return {
             "model": model_name,
             "format": fmt,
@@ -341,7 +349,8 @@ class WebServer:
             "stats": stats,
             "alternative_formats": alternative_formats,
             "date": report_date,
-            "timestamp_dir": timestamp_dir
+            "timestamp_dir": timestamp_dir,
+            "language": language
         }
         
     def _calculate_global_statistics(self, reports):
