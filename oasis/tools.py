@@ -1,5 +1,7 @@
+from datetime import datetime
 import logging
 from pathlib import Path
+import re
 import numpy as np
 from typing import List, Dict
 from weasyprint.logger import LOGGER as weasyprint_logger
@@ -40,50 +42,56 @@ class EmojiFormatter(logging.Formatter):
         return any(start <= code <= end for start, end in emoji_ranges)  
 
     def determine_icon(self, record) -> str:  
-        if not (isinstance(record.msg, str) and not self.has_emoji_prefix(record.msg.strip())):  
+        # Early returns for non-string messages or messages with emoji prefixes
+        if not isinstance(record.msg, str) or self.has_emoji_prefix(record.msg.strip()):  
             return ''
+            
         msg_lower = record.msg.lower()
-        if record.levelno == logging.DEBUG:  
+        
+        # Level-based icons
+        if record.levelno == logging.DEBUG:
             return '🪲  '
-        if record.levelno == logging.INFO:  
-            # Prioritize model emojis  
-            for model_name, emoji in MODEL_EMOJIS.items():  
-                if model_name.lower() in msg_lower:  
-                    return ''  
-            if any(word in msg_lower for word in KEYWORD_LISTS['INSTALL_WORDS']):  
-                return '📥 '  
-            elif any(word in msg_lower for word in KEYWORD_LISTS['ANALYSIS_WORDS']):  
-                return '🔎 '  
-            elif any(word in msg_lower for word in KEYWORD_LISTS['GENERATION_WORDS']):  
-                return '⚙️  '  
-            elif any(word in msg_lower for word in KEYWORD_LISTS['REPORT_WORDS']):  
-                return '📄 '  
-            elif any(word in msg_lower for word in KEYWORD_LISTS['MODEL_WORDS']):  
-                return '🤖 '  
-            elif any(word in msg_lower for word in KEYWORD_LISTS['CACHE_WORDS']):  
-                return '💾 '  
-            elif any(word in msg_lower for word in KEYWORD_LISTS['SAVE_WORDS']):  
-                return '💾 '  
-            elif any(word in msg_lower for word in KEYWORD_LISTS['LOAD_WORDS']):  
-                return '📂 '  
-            elif any(word in msg_lower for word in KEYWORD_LISTS['STOPPED_WORDS']):  
-                return '🛑 '  
-            elif any(word in msg_lower for word in KEYWORD_LISTS['DELETE_WORDS']):  
-                return '🗑️ '  
-            elif any(word in msg_lower for word in KEYWORD_LISTS['SUCCESS_WORDS']):  
-                return '✅ '  
-            elif any(word in msg_lower for word in KEYWORD_LISTS['STATISTICS_WORDS']):  
-                return '📊 '  
-            elif any(word in msg_lower for word in KEYWORD_LISTS['TOP_WORDS']):  
-                return '🏆 '  
-            elif any(word in msg_lower for word in KEYWORD_LISTS['VULNERABILITY_WORDS']):  
-                return '🚨 '  
-            return ''  # Default for INFO level  
-        if record.levelno == logging.WARNING:  
+        if record.levelno == logging.WARNING:
             return '⚠️  '
-        if record.levelno == logging.ERROR:  
-            return '💥 ' if any(word in record.msg.lower() for word in KEYWORD_LISTS['FAIL_WORDS']) else '❌ '
-        return '🚨 ' if record.levelno == logging.CRITICAL else ''  
+        if record.levelno == logging.ERROR:
+            return '💥 ' if any(word in msg_lower for word in KEYWORD_LISTS['FAIL_WORDS']) else '❌ '
+        if record.levelno == logging.CRITICAL:
+            return '🚨 '
+            
+        # INFO level processing - check for model names first
+        if record.levelno == logging.INFO:
+            # Check for model names first
+            for model_name in MODEL_EMOJIS:
+                if model_name.lower() in msg_lower:
+                    return ''
+                    
+            # Map keyword categories to icons
+            keyword_to_icon = {
+                'INSTALL_WORDS': '📥 ',
+                'START_WORDS': '🚀 ',
+                'FINISH_WORDS': '🏁 ',
+                'STOPPED_WORDS': '🛑 ',
+                'DELETE_WORDS': '🗑️ ',
+                'SUCCESS_WORDS': '✅ ',
+                'GENERATION_WORDS': '⚙️  ',
+                'REPORT_WORDS': '📄 ',
+                'MODEL_WORDS': '🤖 ',
+                'CACHE_WORDS': '💾 ',
+                'SAVE_WORDS': '💾 ',
+                'LOAD_WORDS': '📂 ',
+                'STATISTICS_WORDS': '📊 ',
+                'TOP_WORDS': '🏆 ',
+                'VULNERABILITY_WORDS': '🚨 ',
+                'ANALYSIS_WORDS': '🔎 ',
+            }
+            
+            # Check each category and return the first matching icon
+            for category, icon in keyword_to_icon.items():
+                if any(word in msg_lower for word in KEYWORD_LISTS[category]):
+                    return icon
+                    
+        # Default: no icon
+        return ''
 
     def format(self, record):  
         if hasattr(record, 'emoji') and not record.emoji:  
@@ -270,19 +278,16 @@ def parse_input(input_path: str | Path) -> List[Path]:
 
     return files_to_analyze
 
-def sanitize_name(name: str) -> str:
+def sanitize_name(string: str) -> str:
     """
-    Sanitize name for directory creation
+    Sanitize string for file name creation
 
     Args:
-        name: Original name (e.g. 'whiterabbitneo_latest')
-    Returns:
-        Sanitized name (e.g. 'whiterabbitneo_latest')
+        string: Original string to be sanitized for file naming
     """
     # Get the last part after the last slash (if any)
-    base_name = name.split('/')[-1]
-    # Replace any remaining special characters
-    return base_name.replace(':', '_')
+    base_name = string.split('/')[-1]
+    return re.sub(r'[^a-zA-Z0-9]', '_', base_name)
 
 def display_logo():
     """
@@ -369,3 +374,52 @@ def get_vulnerability_mapping() -> Dict[str, Dict[str, any]]:
         Vulnerability mapping
     """
     return VULNERABILITY_MAPPING
+
+def generate_timestamp(for_file: bool = False) -> str:
+    """
+    Generate a timestamp in the format YYYY-MM-DD HH:MM:SS
+    """
+    if for_file:
+        return datetime.now().strftime("%Y%m%d_%H%M%S")
+    else:
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def parse_iso_date(date_string):
+    """
+    Parse ISO format date string with error handling
+    Returns datetime object with UTC timezone or None if parsing fails
+    """
+    if not date_string:
+        return None
+        
+    try:
+        # Handle 'Z' UTC indicator in ISO format
+        if date_string.endswith('Z'):
+            date_string = date_string.replace('Z', '+00:00')
+            
+        # Parse ISO format date string
+        return datetime.fromisoformat(date_string)
+    except (ValueError, TypeError) as e:
+        print(f"Error parsing date '{date_string}': {e}")
+        return None
+        
+def parse_report_date(date_string):
+    """
+    Parse report date string with error handling
+    Returns datetime object with UTC timezone or None if parsing fails
+    """
+    if not date_string:
+        return None
+        
+    try:
+        # Parse date in format used by reports
+        dt = datetime.strptime(date_string, '%Y-%m-%d %H:%M:%S')
+        # Add UTC timezone if not present
+        if dt.tzinfo is None:
+            from datetime import timezone
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError) as e:
+        print(f"Error parsing report date '{date_string}': {e}")
+        return None
+

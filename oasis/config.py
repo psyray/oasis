@@ -3,15 +3,27 @@ Configuration constants for OASIS
 """
 from typing import Set
 
+# Analysis version (used for cache compatibility)
+# This constant must be incremented manually ONLY when the analysis behavior changes in a way that would make cached results obsolete.
+#
+# The rule would be simple: the analysis version must be incremented when changes are made to:
+# The prompt generation (_build_analysis_prompt)
+# The result interpretation logic
+# The chunking logic
+# The prompt extensions (VULNERABILITY_PROMPT_EXTENSION)
+ANALYSIS_VERSION = "1.0"
+
 # Default args values
 DEFAULT_ARGS = {
     'THRESHOLD': 0.5,
     'CHUNK_SIZE': 'auto-detected',
     'VULNS': 'all',
     'OUTPUT_FORMAT': 'all',
-    'ANALYSIS_TYPE': 'file',
+    'ANALYSIS_TYPE': 'standard',
+    'EMBEDDING_ANALYSIS_TYPE': 'file',
     'CACHE_DAYS': 7,
     'EMBED_MODEL': 'nomic-embed-text:latest',
+    'SCAN_MODEL': None,  # If None, same as main model
 }
 
 
@@ -88,8 +100,9 @@ SUPPORTED_EXTENSIONS: Set[str] = {
     'gitignore', 'gitattributes', 'gitmodules'
 } 
 
-# Maximum chunk size for embedding text
+# Chunk configuration
 MAX_CHUNK_SIZE = 2048
+CHUNK_ANALYZE_TIMEOUT = 120
 EMBEDDING_THRESHOLDS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
 # Ollama API endpoint
@@ -119,6 +132,11 @@ DEFAULT_MODELS = [
 # Keywords lists for logging emojis
 KEYWORD_LISTS = {
     'INSTALL_WORDS': ['installing', 'download', 'pulling', 'fetching'],
+    'START_WORDS': ['starting', 'beginning', 'beginning', 'starting'],
+    'FINISH_WORDS': ['finished', 'completed', 'done', 'finished'],
+    'SUCCESS_WORDS': ['success', 'done'],
+    'FAIL_WORDS': ['failed', 'error', 'crash', 'exception'],
+    'STOPPED_WORDS': ['interrupted', 'stopped'],
     'ANALYSIS_WORDS': ['analyzing', 'analysis', 'scanning', 'checking', 'inspecting', 'examining', 'found', 'querying'],
     'GENERATION_WORDS': ['generating', 'creating', 'building', 'processing'],
     'REPORT_WORDS': ['report'],
@@ -127,9 +145,6 @@ KEYWORD_LISTS = {
     'SAVE_WORDS': ['saved', 'written', 'exported'],
     'LOAD_WORDS': ['loading', 'reading', 'importing', 'loaded'],
     'DELETE_WORDS': ['deleting', 'removing', 'deleted'],
-    'SUCCESS_WORDS': ['success', 'completed', 'finished', 'done'],
-    'FAIL_WORDS': ['failed', 'error', 'crash', 'exception'],
-    'STOPPED_WORDS': ['interrupted', 'stopped'],
     'STATISTICS_WORDS': ['statistics'],
     'TOP_WORDS': ['top', 'highest', 'most', 'better'],
     'VULNERABILITY_WORDS': ['vulnerability', 'vulnerabilities']
@@ -165,7 +180,78 @@ MODEL_EMOJIS = {
     "openhermes": "🌟 ",
     "solar": "☀️ ",
     "neural-chat": "🧠💬 ",
-    "nous": "👥 "
+    "nous": "👥 ",
+    "default": "🤖 "
+}
+
+VULN_EMOJIS = {
+    # Injection vulnerabilities
+    "sql_injection": "💉 ",
+    "remote_code_execution": "🔥 ",
+    "cross-site_scripting_(xss)": "🔀 ",
+    "xml_external_entity_injection": "📄 ",
+    "server-side_request_forgery": "🔄 ",
+    "command_injection": "⌨️ ",
+    "code_injection": "📝 ",
+    
+    # Authentication and Authorization
+    "authentication_issues": "🔑 ",
+    "cross-site_request_forgery": "↔️ ",
+    "insecure_direct_object_reference": "🔢 ",
+    "session_management_issues": "🍪 ",
+    "auth_bypass": "🔓 ",
+    "missing_access_control": "🚫 ",
+    "privilege_escalation": "🔝 ",
+    
+    # Data Security
+    "sensitive_data_exposure": "🕵️ ",
+    "hardcoded_secrets": "🔐 ",
+    "sensitive_data_logging": "📝 ",
+    "information_disclosure": "📢 ",
+    
+    # File System
+    "path_traversal": "📂 ",
+    "lfi": "📁 ",
+    "rfi": "📡 ",
+    
+    # Configuration
+    "security_misconfiguration": "⚙️ ",
+    "outdated_component": "⌛ ",
+    "open_redirect": "↪️ ",
+    
+    # Input Validation
+    "insufficient_input_validation": "⚠️ ",
+    "crlf": "↩️ ",
+    
+    # Cryptographic
+    "insecure_cryptographic_usage": "🔒 ",
+    "weak_crypto": "🔒 ",
+    "cert_validation": "📜 ",
+    "insecure_random": "🎲 ",
+    
+    # Deserialization
+    "insecure_deserialization": "📦 ",
+    "unsafe_yaml": "📋 ",
+    "pickle_issues": "🥒 ",
+    
+    # Performance and DoS
+    "dos": "💥 ",
+    "race_condition": "🏁 ",
+    "buffer_overflow": "📊 ",
+    "integer_overflow": "🔢 ",
+    "memory_leak": "💧 ",
+    
+    # Other
+    "mitm": "🕸️ ",
+    "business_logic": "💼 ",
+    "weak_credentials": "🔏 ", 
+    
+    # Risk Categories
+    "high_risk": "🚨 ",
+    "medium_risk": "⚠️ ",
+    "low_risk": "📌 ",
+    "info": "ℹ️ ",
+    "unclassified": "❓ "
 }
 
 # Vulnerability mappings
@@ -183,7 +269,18 @@ VULNERABILITY_MAPPING = {
             'execute raw SQL',
             'format string in SQL',
             'SQL query string interpolation',
-            'unsafe database.execute'
+            'unsafe database.execute',
+            'LIKE operator with user input',
+            'ORDER BY with unsanitized input',
+            'MySQL query concatenation',
+            'PostgreSQL dynamic query',
+            'SQLite direct parameter',
+            'UNION injection vulnerability',
+            'database.query with variable',
+            'SQL WHERE clause with input',
+            'executeQuery with variable',
+            'createStatement().execute',
+            'executeSql with template'
         ],
         'impact': 'Can lead to data theft, data loss, authentication bypass, or complete system compromise',
         'mitigation': 'Use parameterized queries or prepared statements, apply input validation, and use ORMs correctly'
@@ -202,7 +299,19 @@ VULNERABILITY_MAPPING = {
             'bypass content sanitization',
             'script injection vulnerability',
             'missing HTML encoding',
-            'dangerouslySetInnerHTML'
+            'dangerouslySetInnerHTML',
+            'template literals with user data',
+            'attribute injection vulnerability',
+            'data-* attribute with user input',
+            'event handler assignment',
+            'href with javascript: protocol',
+            'DOM manipulation with createElement',
+            'React props sanitization missing',
+            'Vue v-html directive with data',
+            'Angular [innerHTML] binding',
+            'svg onload attribute',
+            'CSS expression with user input',
+            'postMessage without origin check'
         ],
         'impact': 'Can lead to session hijacking, credential theft, or delivery of malware to users',
         'mitigation': 'Apply context-aware output encoding, use Content-Security-Policy, validate and sanitize all inputs'
@@ -226,7 +335,19 @@ VULNERABILITY_MAPPING = {
             "format string vulnerability",
             "input whitelist missing",
             "untrusted data handling",
-            "user input without validation"
+            "user input without validation",
+            "integer overflow vulnerability",
+            "type confusion vulnerability",
+            "unchecked array bounds",
+            "memory corruption risk",
+            "lack of input length checks",
+            "improper input canonicalization",
+            "regex without timeout",
+            "client-side validation only",
+            "header injection vulnerability",
+            "content-type validation missing",
+            "file upload filtering bypass",
+            "numeric input without bounds check"
         ],
         'impact': 'Can lead to various attacks including injections, buffer overflows, and logical flaws',
         'mitigation': 'Implement strict input validation, use type checking, and sanitize all user inputs'
@@ -251,7 +372,20 @@ VULNERABILITY_MAPPING = {
             "credentials in config files",
             "insufficient access controls",
             "sensitive data caching",
-            "insecure data storage"
+            "insecure data storage",
+            "PCI data mishandling",
+            "health information exposure",
+            "social security numbers unprotected",
+            "email addresses unsecured",
+            "financial data in plaintext",
+            "credentials in URL parameters",
+            "debug information disclosure",
+            "internal IP disclosure",
+            "server version exposure",
+            "technology stack disclosure",
+            "database connection string exposure",
+            "sensitive data in error messages",
+            "sensitive data in HTML comments"
         ],
         'impact': 'Exposure of confidential information, credentials, or personal data leading to unauthorized access',
         'mitigation': 'Encrypt sensitive data, use secure storage solutions, and avoid hardcoding secrets'
@@ -276,7 +410,20 @@ VULNERABILITY_MAPPING = {
             "persistent session without verification",
             "client-side session storage",
             "missing SameSite attribute",
-            "cross-domain cookie sharing"
+            "cross-domain cookie sharing",
+            "CSRF token missing",
+            "insecure JWT handling",
+            "JWT without expiration",
+            "JWT signature validation missing",
+            "session reuse vulnerability",
+            "lack of session regeneration",
+            "concurrent session control missing",
+            "session token in logs",
+            "insecure cookie attributes",
+            "cookie without path restriction",
+            "OAuth state parameter missing",
+            "cookie prefixing missing",
+            "session token in referrer header"
         ],
         'impact': 'Account takeover, session hijacking, and unauthorized access to user accounts',
         'mitigation': 'Implement secure session handling, use proper timeout settings, and protect session tokens'
@@ -303,7 +450,21 @@ VULNERABILITY_MAPPING = {
             "insecure TLS configuration",
             "dangerous HTTP headers",
             "default error pages",
-            "information disclosure in responses"
+            "information disclosure in responses",
+            "HTTP header misconfiguration",
+            "X-Frame-Options missing",
+            "Content-Security-Policy missing",
+            "missing X-Content-Type-Options",
+            "insecure deserialization settings",
+            "missing rate limiting",
+            "HSTS not implemented",
+            "unnecessary HTTP methods enabled",
+            "open cloud storage buckets",
+            "insecure file permissions",
+            "database exposed to internet",
+            "unauthenticated API endpoints",
+            "CORS wildcard origin",
+            "weak password policy configuration"
         ],
         'impact': 'Information disclosure, unauthorized access, or system compromise through exposed functionality',
         'mitigation': 'Use secure configuration templates, disable unnecessary features, and implement proper security headers'
@@ -318,13 +479,26 @@ VULNERABILITY_MAPPING = {
             "credit card logging",
             "token logging",
             "unsafe error logging",
-            "debug logging in production"
+            "debug logging in production",
+            "authentication data in logs",
+            "session identifiers logged",
+            "biometric data logging",
+            "health information logged",
+            "authorization tokens in logs",
+            "secret keys in log output",
+            "API keys in debug logs",
+            "query parameters logged",
+            "financial data in logs",
+            "unmasked credentials in traces",
+            "personal addresses logged",
+            "log files with excessive permissions",
+            "log data without anonymization"
         ],
         'impact': 'Disclosure of sensitive user data, credentials, or security tokens via log files',
         'mitigation': 'Filter sensitive data from logs, use proper log levels, and implement secure logging practices'
     },
     'crypto': {
-        'name': "Insecure Cryptographic Function Usage",
+        'name': "Insecure Cryptographic Usage",
         'description': 'Use of weak or deprecated cryptographic algorithms or practices',
         'patterns': [
             "weak encryption",
@@ -335,7 +509,22 @@ VULNERABILITY_MAPPING = {
             "ECB mode encryption",
             "static initialization vector",
             "hardcoded encryption key",
-            "insufficient key size"
+            "insufficient key size",
+            "broken cipher implementation",
+            "predictable random generator",
+            "insufficient entropy",
+            "math.random for cryptography",
+            "cryptographic key reuse",
+            "non-cryptographic PRNG",
+            "CBC without MAC",
+            "missing key rotation",
+            "RC4 cipher usage",
+            "DES or 3DES usage",
+            "RSA with weak padding",
+            "incorrect certificate validation",
+            "custom cryptographic algorithms",
+            "use of broken cryptographic libraries",
+            "hardcoded salt values"
         ],
         'impact': 'Data compromise through cryptographic attacks, leading to confidentiality breaches',
         'mitigation': 'Use modern encryption standards, secure key management, and proper cryptographic implementations'
@@ -355,7 +544,21 @@ VULNERABILITY_MAPPING = {
             'shell command injection',
             'dynamic code evaluation',
             'unsafe reflection',
-            'unsafe use of Runtime.exec'
+            'unsafe use of Runtime.exec',
+            'popen in python',
+            'ProcessBuilder in Java',
+            'unsafe pickle loading',
+            'yaml.load without safe flag',
+            'json.loads with custom decoder',
+            'unserialize in PHP',
+            'eval in JavaScript',
+            'Function constructor with input',
+            'new Function with variable',
+            'Groovy script execution',
+            'template expression evaluation',
+            'JSP expression injection',
+            'code interpolation in string',
+            'RCE through SSTI'
         ],
         'impact': 'Complete system compromise, data theft, or service disruption',
         'mitigation': 'Avoid dangerous functions, use allowlists for commands, validate and sanitize all inputs'
@@ -374,7 +577,21 @@ VULNERABILITY_MAPPING = {
             'fetch with user-provided URL',
             'unsafe URL redirection',
             'axios.get with variable',
-            'curl functions with parameters'
+            'curl functions with parameters',
+            'http.get with user input',
+            'urllib request with variable',
+            'requests.post with dynamic URL',
+            'guzzle client with user URL',
+            'java URL connection with variable',
+            'open redirect to internal hosts',
+            'no URL schema validation',
+            'IP address filtering bypass',
+            'DNS rebinding vulnerability',
+            'localhost access through SSRF',
+            'cloud metadata API access',
+            'internal service discovery',
+            'webhook callback without validation',
+            'file:// protocol allowed'
         ],
         'impact': 'Access to internal services, data theft, or system compromise via internal network',
         'mitigation': 'Validate and sanitize URLs, use allowlists, block private IPs and local hostnames'
@@ -392,7 +609,21 @@ VULNERABILITY_MAPPING = {
             'external entity resolution enabled',
             'XXE vulnerability',
             'unsafe DOM parser',
-            'XML libraries with dangerous defaults'
+            'XML libraries with dangerous defaults',
+            'libxml2 without noent',
+            'XMLReader with external entities',
+            'XmlDocument with DTD processing',
+            'insecure XML deserialization',
+            'XML with custom entity handling',
+            'JAXP without secure processing',
+            'untrusted DOCX/XLSX processing',
+            'SVG with embedded XXE',
+            'RSS/Atom feed parsing vulnerability',
+            'XML without schema validation',
+            'XSLT processing with external entities',
+            'XPath evaluation with untrusted XML',
+            'XML bomb vulnerability',
+            'XML parser with custom resolvers'
         ],
         'impact': 'File disclosure, SSRF, denial of service, or data theft',
         'mitigation': 'Disable DTDs and external entities in XML parsers, validate and sanitize inputs'
@@ -411,7 +642,20 @@ VULNERABILITY_MAPPING = {
             'path manipulation risk',
             'file include vulnerability',
             'dot-dot-slash in paths',
-            'missing filepath sanitization'
+            'missing filepath sanitization',
+            'relative path navigation',
+            'zip slip vulnerability',
+            'path.join with user input',
+            'file.readFile with dynamic path',
+            'filesystem access without validation',
+            'pathname not canonicalized',
+            'archive extraction vulnerability',
+            'symlink following risk',
+            'file download with arbitrary path',
+            'file.read without basedir check',
+            'directory traversal with encoded slash',
+            'file upload path manipulation',
+            'path normalization bypass'
         ],
         'impact': 'Unauthorized access to sensitive files, configuration data, or credentials',
         'mitigation': 'Validate file paths, use allowlists, avoid using user input in file operations'
@@ -430,7 +674,21 @@ VULNERABILITY_MAPPING = {
             'object level authorization missing',
             'unsafe parameter handling',
             'insufficient permission checking',
-            'horizontal privilege escalation risk'
+            'horizontal privilege escalation risk',
+            'account enumeration vulnerability',
+            'numeric identifier manipulation',
+            'UUID predictability issue',
+            'missing row-level security',
+            'incremental reference exploitation',
+            'API endpoint without ownership check',
+            'user data access without verification',
+            'mass assignment vulnerability',
+            'blind IDOR vulnerability',
+            'parameter tampering vulnerability',
+            'access control matrix missing',
+            'insufficient object property filtering',
+            'user impersonation through reference',
+            'cross-tenant data access'
         ],
         'impact': 'Unauthorized access to data, privilege escalation, or data theft',
         'mitigation': 'Implement proper access controls, use indirect references, validate user authorization'
@@ -450,7 +708,21 @@ VULNERABILITY_MAPPING = {
             'connection string with credentials',
             'JWT secret in code',
             'database password hardcoded',
-            'encryption key in source'
+            'encryption key in source',
+            'AWS access key hardcoded',
+            'Azure connection string in code',
+            'Google API key in source',
+            'Firebase credentials embedded',
+            'SSH private key in repository',
+            'certificate private key in code',
+            'auth token hardcoded',
+            'cryptographic seed hardcoded',
+            'sensitive data in client-side code',
+            'access token in JavaScript',
+            'plaintext secrets in comments',
+            'hardcoded test credentials',
+            'sensitive values in configuration',
+            'admin password default'
         ],
         'impact': 'Credential exposure leading to unauthorized access or account compromise',
         'mitigation': 'Use environment variables or secure vaults, avoid hardcoding any secrets'
@@ -469,7 +741,22 @@ VULNERABILITY_MAPPING = {
             'session fixation vulnerability',
             'insecure remember me function',
             'inadequate brute force protection',
-            'default or weak credentials'
+            'default or weak credentials',
+            'password check timing attack',
+            'lack of account lockout mechanism',
+            'insecure password recovery',
+            'missing CAPTCHA protection',
+            'plain text password storage',
+            'credential stuffing vulnerability',
+            'password reuse vulnerability',
+            'authorization header exposure',
+            'OAuth redirect URI validation',
+            'JWT without signature verification',
+            'missing identity federation security',
+            'insecure authentication protocol',
+            'passwordless authentication risks',
+            'knowledge-based authentication weakness',
+            'shared account vulnerability'
         ],
         'impact': 'Account compromise, privilege escalation, or unauthorized access',
         'mitigation': 'Implement strong password policies, use MFA, secure session handling'
@@ -488,7 +775,21 @@ VULNERABILITY_MAPPING = {
             'session handling vulnerability',
             'missing anti-forgery token',
             'insecure cross-domain requests',
-            'automatic actions without validation'
+            'automatic actions without validation',
+            'CSRF token validation missing',
+            'CSRF token leakage',
+            'improper token binding to session',
+            'token reuse vulnerability',
+            'lack of double submit cookie',
+            'GET request with state change',
+            'failure to check referer header',
+            'CORS misconfiguration for CSRF',
+            'XHR without same-origin policy',
+            'JSON request without CSRF protection',
+            'cross-subdomain CSRF',
+            'CORS preflight bypass',
+            'CSRF via SVG or image upload',
+            'browser cookie handling vulnerability'
         ],
         'impact': 'Unauthorized actions performed on behalf of authenticated users',
         'mitigation': 'Use CSRF tokens, SameSite cookies, and verify request origins'
@@ -562,7 +863,7 @@ Code embeddings are advanced representations that convert your code into numeric
 <div class="page-break"></div>
 
 ## How to Use This Report
-- **Start with high scores**: Focus first on findings above your threshold (default 0.4)
+- **Start with high scores**: Focus first on findings above your threshold (default 0.5)
 - **Adjust threshold** with `--threshold` flag (higher for fewer false positives, lower for more coverage)
 - **Compare code vs patterns**: Verify matches against the vulnerability descriptions
 - **Use distribution insights**: The threshold analysis shows how vulnerabilities cluster
