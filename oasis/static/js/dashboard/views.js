@@ -280,7 +280,8 @@ DashboardApp.renderListViewWithTemplate = function() {
     
     sortedVulns.forEach(vuln => {
         const reportsForVuln = vulnGroups[vuln];
-        const formattedVuln = DashboardApp.formatDisplayName(vuln, 'vulnerability');
+        const formattedVulnEmoji = DashboardApp.formatDisplayName(vuln, 'vulnerability');
+        const formattedVuln = DashboardApp.formatDisplayName(vuln, 'vulnerability', false);
         
         // Group models for this vulnerability
         const models = [...new Set(reportsForVuln.map(report => report.model))];
@@ -363,6 +364,7 @@ DashboardApp.renderListViewWithTemplate = function() {
             
         // Use the template and replace placeholders
         let cardHTML = DashboardApp.cardTemplate
+            .replace('${formattedVulnTypeEmoji}', formattedVulnEmoji)
             .replace('${formattedVulnType}', formattedVuln)
             .replace('${modelsHTML}', modelsHTML)
             .replace('${datesHTML}', datesHTML)

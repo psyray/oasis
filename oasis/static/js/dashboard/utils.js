@@ -19,7 +19,7 @@ DashboardApp.groupReportsByModelAndVuln = function(reports) {
     });
 };
 
-DashboardApp.formatDisplayName = function(name, type) {
+DashboardApp.formatDisplayName = function(name, type, emoji = true) {
     if (!name) {
         return 'Unknown';
     }
@@ -30,12 +30,20 @@ DashboardApp.formatDisplayName = function(name, type) {
     
     let formattedName = name;
     if (type === 'model') {
-        formattedName = DashboardApp.getModelEmoji(name) + ' ' + name;
+        if (emoji) {
+            formattedName = DashboardApp.getModelEmoji(name) + ' ' + name;
+        } else {
+            formattedName = name;
+        }
     }
 
     if (type === 'vulnerability') {
-        const lowered_name = name.toLowerCase().replace(/ /g, '_');
-        formattedName = DashboardApp.getVulnerabilityEmoji(lowered_name) + ' ' + name;
+        if (emoji) {
+            const lowered_name = name.toLowerCase().replace(/ /g, '_');
+            formattedName = DashboardApp.getVulnerabilityEmoji(lowered_name) + ' ' + name;
+        } else {
+            formattedName = name;
+        }
     }
     
     // For vulnerability types and models

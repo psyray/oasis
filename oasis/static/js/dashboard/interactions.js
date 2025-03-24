@@ -81,17 +81,16 @@ DashboardApp.filterDatesByModel = function(modelElement) {
         }
     });
     
-    // Get vulnerability type from the card - correction du sélecteur
-    // Essayer d'abord avec .report-title, puis avec .card-title si le premier échoue
-    const titleElement = card.querySelector('.report-title') || card.querySelector('.card-title');
+    // Get vulnerability type from the card
+    const titleElement = card.querySelector('.report-title[data-vuln-type]');
     
     if (!titleElement) {
         console.error("Cannot find title element in card");
-        console.log("Card structure:", card.innerHTML); // Log pour debug
+        console.log("Card structure:", card.innerHTML);
         return;
     }
     
-    const vulnType = titleElement.textContent.trim();
+    const {vulnType} = titleElement.dataset;
     console.log("Found vulnerability type:", vulnType);
     
     // Update dates for this model and vulnerability
@@ -107,7 +106,7 @@ DashboardApp.updateDatesForModel = function(card, modelName, vulnType) {
         datesContainer.innerHTML = '<div class="loading"><div class="loading-spinner"></div></div>';
     } else {
         console.error("Cannot find dates container in card");
-        console.log("Card structure:", card.innerHTML); // Log pour debug
+        console.log("Card structure:", card.innerHTML);
         return;
     }
     
@@ -131,9 +130,9 @@ DashboardApp.updateDatesForModel = function(card, modelName, vulnType) {
                             const formattedDate = dateObj.toLocaleDateString();
                             const formattedTime = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                         
-                            // S'assurer que path et format sont définis
+                            // Get path and format
                             const path = dateInfo.path || '';
-                            const format = dateInfo.format || 'md'; // par défaut à md
+                            const format = dateInfo.format || 'md';
                             
                             datesHtml += `
                                 <span class="date-tag clickable" 
@@ -144,7 +143,7 @@ DashboardApp.updateDatesForModel = function(card, modelName, vulnType) {
                                 </span>
                             `;
                         } else {
-                            // Fallback si pas de date
+                            // Fallback
                             const path = dateInfo.path || '';
                             const format = dateInfo.format || 'md';
                             
@@ -222,7 +221,7 @@ DashboardApp.updateDatesForVulnerability = function(vulnElement, vulnType) {
                                 </span>
                             `;
                         } else {
-                            // Fallback si pas de date
+                            // Fallback
                             const modelName = dateInfo.model || 'Unknown';
                             const path = dateInfo.path || '';
                             const format = dateInfo.format || 'md';
