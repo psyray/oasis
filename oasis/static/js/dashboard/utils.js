@@ -107,7 +107,8 @@ DashboardApp.generateDateTagHTML = function(report) {
         .replace('${languageEmoji}',  DashboardApp.getLanguageInfo(report.language).emoji)
         .replace('${path}', report.path)
         .replace('${model}', report.model)
-        .replace('${format}', report.format);
+        .replace('${modelEmoji}', DashboardApp.getModelEmoji(report.model))
+        .replace('${format}', report.format || 'md');
 };
 
 DashboardApp.debug("Utils module loaded"); 
