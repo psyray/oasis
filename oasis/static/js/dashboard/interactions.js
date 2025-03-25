@@ -124,37 +124,10 @@ DashboardApp.updateDatesForModel = function(card, modelName, vulnType) {
                 if (data.dates && data.dates.length > 0) {
                     let datesHtml = '';
                     data.dates.forEach(dateInfo => {
-                        // Formatting the date and time
-                        if (dateInfo.date) {
-                            const dateObj = new Date(dateInfo.date);
-                            const formattedDate = dateObj.toLocaleDateString();
-                            const formattedTime = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                        
-                            // Get path and format
-                            const path = dateInfo.path || '';
-                            const format = dateInfo.format || 'md';
-                            
-                            datesHtml += `
-                                <span class="date-tag clickable" 
-                                    onclick="DashboardApp.openReport('${path}', '${format}')" 
-                                    data-model="${modelName}">
-                                    <div class="date-main">${formattedDate}</div>
-                                    <div class="date-time">${formattedTime}</div>
-                                </span>
-                            `;
-                        } else {
-                            // Fallback
-                            const path = dateInfo.path || '';
-                            const format = dateInfo.format || 'md';
-                            
-                            datesHtml += `
-                                <span class="date-tag clickable" 
-                                    onclick="DashboardApp.openReport('${path}', '${format}')" 
-                                    data-model="${modelName}">
-                                    <div class="date-main">No date</div>
-                                </span>
-                            `;
-                        }
+                        datesHtml += DashboardApp.generateDateTagHTML({
+                            ...dateInfo,
+                            model: modelName
+                        });
                     });
                     datesContainer.innerHTML = datesHtml;
                 } else {
@@ -201,40 +174,10 @@ DashboardApp.updateDatesForVulnerability = function(vulnElement, vulnType) {
                 if (data.dates && data.dates.length > 0) {
                     let datesHtml = '';
                     data.dates.forEach(dateInfo => {
-                        // Formatting the date and time
-                        if (dateInfo.date) {
-                            const dateObj = new Date(dateInfo.date);
-                            const formattedDate = dateObj.toLocaleDateString();
-                            const formattedTime = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                        
-                            const modelName = dateInfo.model || 'Unknown';
-                            const path = dateInfo.path || '';
-                            const format = dateInfo.format || 'md'; // par défaut à md
-                            
-                            datesHtml += `
-                                <span class="date-tag clickable" 
-                                    onclick="DashboardApp.openReport('${path}', '${format}')" 
-                                    data-model="${modelName}">
-                                    <div class="date-label">${modelName}:</div>
-                                    <div class="date-main">${formattedDate}</div>
-                                    <div class="date-time">${formattedTime}</div>
-                                </span>
-                            `;
-                        } else {
-                            // Fallback
-                            const modelName = dateInfo.model || 'Unknown';
-                            const path = dateInfo.path || '';
-                            const format = dateInfo.format || 'md';
-                            
-                            datesHtml += `
-                                <span class="date-tag clickable" 
-                                    onclick="DashboardApp.openReport('${path}', '${format}')" 
-                                    data-model="${modelName}">
-                                    <div class="date-label">${modelName}:</div>
-                                    <div class="date-main">No date</div>
-                                </span>
-                            `;
-                        }
+                        datesHtml += DashboardApp.generateDateTagHTML({
+                            ...dateInfo,
+                            vulnerability_type: vulnType
+                        });
                     });
                     datesContainer.innerHTML = datesHtml;
                 } else {
