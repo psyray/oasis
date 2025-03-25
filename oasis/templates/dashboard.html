@@ -9,6 +9,7 @@
     // Pre-loading model emojis from Python
     const modelEmojis = {{ model_emojis|tojson|safe }};
     const vulnEmojis = {{ vuln_emojis|tojson|safe }};
+    const reportLanguages = {{ languages|tojson|safe }};
 </script>
 {% endblock %}
 

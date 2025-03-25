@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 import re
 import secrets
@@ -8,7 +8,7 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 from functools import wraps
 
 
-from .config import VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS
+from .config import VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS, LANGUAGES
 from .report import Report
 from .tools import parse_iso_date, parse_report_date
 
@@ -115,6 +115,7 @@ class WebServer:
             return render_template('dashboard.html', 
                                    model_emojis=MODEL_EMOJIS,
                                    vuln_emojis=VULN_EMOJIS,
+                                   languages=LANGUAGES,
                                    debug=self.debug)
             
         @app.route('/api/reports')

@@ -114,31 +114,40 @@ DashboardApp.refreshDashboard = function() {
     // Fetch fresh data
     Promise.all([
         fetch('/api/stats?force=1').then(response => response.json()),
-        fetch('/api/reports').then(response => response.json())
     ])
-    .then(([statsData, reportsData]) => {
-        // Update the state
-        this.stats = statsData;
-        this.reportData = this.groupReportsByModelAndVuln(reportsData);
-        
-        // Render the updated data
-        this.renderStats();
-        this.renderCurrentView();
-        
-        // Update filters if necessary
-        if (!this.filtersPopulated) {
-            this.populateFilters();
-            this.filtersPopulated = true;
-        } else {
-            this.updateFilterCounts();
-        }
-        
-        DashboardApp.debug('Dashboard refreshed successfully');
+    .then(([statsData]) => {
+        Promise.all([
+            fetch('/api/reports').then(response => response.json())
+        ])
+        .then(([reportsData]) => {
+            // Update the state
+            this.stats = statsData;
+            this.reportData = this.groupReportsByModelAndVuln(reportsData);
+            
+            // Render the updated data
+            this.renderStats();
+            this.renderCurrentView();
+            
+            // Update filters if necessary
+            if (!this.filtersPopulated) {
+                this.populateFilters();
+                this.filtersPopulated = true;
+            } else {
+                this.updateFilterCounts();
+            }
+            
+            DashboardApp.debug('Dashboard refreshed successfully');
+        })
+        .catch(error => {
+            console.error('Error refreshing reports:', error);
+            document.getElementById('stats-container').innerHTML = 
+                '<div class="error-message">Error refreshing reports. Please try again later.</div>';
+        });
     })
     .catch(error => {
-        console.error('Error refreshing dashboard:', error);
+        console.error('Error refreshing stats:', error);
         document.getElementById('stats-container').innerHTML = 
-            '<div class="error-message">Error refreshing dashboard. Please try again later.</div>';
+            '<div class="error-message">Error refreshing stats. Please try again later.</div>';
     });
 };
 

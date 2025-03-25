@@ -150,6 +150,46 @@ KEYWORD_LISTS = {
     'VULNERABILITY_WORDS': ['vulnerability', 'vulnerabilities']
 }
 
+
+LANGUAGES = {
+    'en': {
+        'name': 'English',
+        'emoji': '🇬🇧'
+        },
+    'fr': {
+        'name': 'Français',
+        'emoji': '🇫🇷'
+    },
+    'es': {
+        'name': 'Español',
+        'emoji': '🇪🇸'
+    },
+    'de': {
+        'name': 'Deutsch',
+        'emoji': '🇩🇪'
+    },
+    'it': {
+        'name': 'Italiano',
+        'emoji': '🇮🇹'
+    },
+    'pt': {
+        'name': 'Português',
+        'emoji': '🇵🇹'
+    },
+    'ru': {
+        'name': 'Русский',
+        'emoji': '🇷🇺'
+    },
+    'zh': {
+        'name': '中文',
+        'emoji': '🇨🇳'
+    },
+    'ja': {
+        'name': '日本語',
+        'emoji': '🇯🇵'
+    }
+}
+
 # Model emojis mapping
 MODEL_EMOJIS = {
     # General models

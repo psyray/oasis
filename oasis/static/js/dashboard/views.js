@@ -403,37 +403,3 @@ DashboardApp.switchView = function(viewMode) {
 };
 
 DashboardApp.debug("Views module loaded");
-
-// Fonction pour récupérer le nom complet de la langue
-DashboardApp.getLanguageName = function(langCode) {
-    const languages = {
-        'en': 'English',
-        'fr': 'Français',
-        'es': 'Español',
-        'de': 'Deutsch',
-        'it': 'Italiano',
-        'pt': 'Português',
-        'ru': 'Русский',
-        'zh': '中文',
-        'ja': '日本語',
-        // Ajouter d'autres langues au besoin
-    };
-    return languages[langCode] || langCode;
-};
-
-// Fonction pour récupérer l'emoji du drapeau
-DashboardApp.getLanguageEmoji = function(langCode) {
-    const flags = {
-        'en': '🇬🇧',
-        'fr': '🇫🇷',
-        'es': '🇪🇸',
-        'de': '🇩🇪',
-        'it': '🇮🇹',
-        'pt': '🇵🇹',
-        'ru': '🇷🇺',
-        'zh': '🇨🇳',
-        'ja': '🇯🇵',
-        // Ajouter d'autres drapeaux au besoin
-    };
-    return flags[langCode] || '🌐';
-}; 

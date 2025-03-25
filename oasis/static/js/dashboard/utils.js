@@ -81,6 +81,10 @@ DashboardApp.getVulnerabilityEmoji = function(vulnerability) {
     return '🔒 ';
 };
 
+DashboardApp.getLanguageInfo = function(language) {
+    return reportLanguages[language];
+};
+
 DashboardApp.checkTemplatesLoaded = function() {
     if (!DashboardApp.templates.dateTag || !DashboardApp.templates.dashboardCard) {
         throw new Error("Templates not loaded yet");
@@ -99,7 +103,8 @@ DashboardApp.generateDateTagHTML = function(report) {
         .replace('${formattedTime}', formattedTime)
         .replace('${vulnerabilityType}', report.vulnerability_type)
         .replace('${language}', report.language)
-        .replace('${languageEmoji}',  DashboardApp.getLanguageEmoji(report.language))
+        .replace('${languageName}',  DashboardApp.getLanguageInfo(report.language).name)
+        .replace('${languageEmoji}',  DashboardApp.getLanguageInfo(report.language).emoji)
         .replace('${path}', report.path)
         .replace('${model}', report.model)
         .replace('${format}', report.format);
