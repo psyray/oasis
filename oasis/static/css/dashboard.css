@@ -686,6 +686,8 @@ body {
     flex-wrap: wrap;
     gap: 5px;
     margin-bottom: 8px;
+    max-height: 250px;
+    overflow-y: auto;
 }
 
 .model-tag {
@@ -1114,7 +1116,7 @@ body {
     flex-wrap: wrap;
     gap: 5px;
     margin-top: 5px;
-    max-height: 130px;
+    max-height: 315px;
     overflow-y: auto;
     padding-right: 5px;
     align-content: flex-start;

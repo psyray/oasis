@@ -249,7 +249,7 @@ DashboardApp.renderListViewWithTemplate = function() {
         const models = [...new Set(reportsForVuln.map(report => report.model))];
         
         // Get report statistics
-        const totalFindings = reportsForVuln.reduce((sum, r) => sum + (r.stats?.total || 0), 0);
+        const totalFindings = reportsForVuln.reduce((sum, r) => sum + (r.stats?.total_findings || 0), 0);
         const highRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.high_risk || 0), 0);
         const mediumRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.medium_risk || 0), 0);
         const lowRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.low_risk || 0), 0);

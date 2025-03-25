@@ -320,6 +320,7 @@ class WebServer:
             "formats": {},
             "dates": {},
             "risk_summary": {
+                "total_findings": 0,
                 "high": sum(report.get("stats", {}).get("high_risk", 0) for report in reports if report["format"] == "md"),
                 "medium": sum(report.get("stats", {}).get("medium_risk", 0) for report in reports if report["format"] == "md"),
                 "low": sum(report.get("stats", {}).get("low_risk", 0) for report in reports if report["format"] == "md")
@@ -335,32 +336,7 @@ class WebServer:
         """Update statistics based on a single report"""
         # Count only markdown files for accurate statistics
         if report["format"] == "md":
-            stats["total_reports"] += 1
-            
-            # statistics by model
-            model = report["model"]
-            if model not in stats["models"]:
-                stats["models"][model] = 0
-            stats["models"][model] += 1
-            
-            # statistics by vulnerability type
-            vuln_type = report["vulnerability_type"]
-            if vuln_type not in stats["vulnerabilities"]:
-                stats["vulnerabilities"][vuln_type] = 0
-            stats["vulnerabilities"][vuln_type] += 1
-            
-            # statistics by date (only day)
-            if report["date"]:
-                date_only = report["date"].split()[0]  # extract only the date part
-                if date_only not in stats["dates"]:
-                    stats["dates"][date_only] = 0
-                stats["dates"][date_only] += 1
-        
-        # count all available formats
-        fmt = report["format"]
-        if fmt not in stats["formats"]:
-            stats["formats"][fmt] = 0
-        stats["formats"][fmt] += 1
+            self._get_report_statistics(stats, report)
 
     def _desanitize_name(self, sanitized_name):
         """Convert sanitized name back to display name"""
@@ -539,10 +515,10 @@ class WebServer:
         force_refresh = request.args.get('force', '0') == '1'
         if force_refresh or not self.report_data:
             self.collect_report_data()
-        
+
         # Use filtered reports if provided, otherwise use all reports
         reports_to_analyze = filtered_reports if filtered_reports is not None else self.report_data
-        
+
         # Initialize statistics structure
         stats = {
             "total_reports": 0,
@@ -551,49 +527,41 @@ class WebServer:
             "formats": {},
             "dates": {},
             "risk_summary": {
+                "total_findings": 0,
                 "high": 0,
                 "medium": 0,
                 "low": 0
             }
         }
-        
+
         # Calculate statistics based on the provided reports
         for report in reports_to_analyze:
             # Count only markdown files for accurate statistics
             if report["format"] == "md":
-                stats["total_reports"] += 1
-                
-                # statistics by model
-                model = report["model"]
-                if model not in stats["models"]:
-                    stats["models"][model] = 0
-                stats["models"][model] += 1
-                
-                # statistics by vulnerability type
-                vuln_type = report["vulnerability_type"]
-                if vuln_type not in stats["vulnerabilities"]:
-                    stats["vulnerabilities"][vuln_type] = 0
-                stats["vulnerabilities"][vuln_type] += 1
-                
-                # statistics by date (only day)
-                if report["date"]:
-                    date_only = report["date"].split()[0]  # extract only the date part
-                    if date_only not in stats["dates"]:
-                        stats["dates"][date_only] = 0
-                    stats["dates"][date_only] += 1
-                
-                # Add risk summary if available
-                if "stats" in report and report["stats"]:
-                    stats["risk_summary"]["high"] += report["stats"].get("high_risk", 0)
-                    stats["risk_summary"]["medium"] += report["stats"].get("medium_risk", 0)
-                    stats["risk_summary"]["low"] += report["stats"].get("low_risk", 0)
-            
-            # count all available formats
-            fmt = report["format"]
-            if fmt not in stats["formats"]:
-                stats["formats"][fmt] = 0
-            stats["formats"][fmt] += 1
-        
+                stats = self._get_report_statistics(stats, report)
+
         # Return the calculated statistics
         return stats
-        
+
+    def _get_report_statistics(self, stats, report):
+        stats["total_reports"] += 1
+        self._get_stats_from_report(report, "model", stats, "models")
+        self._get_stats_from_report(
+            report, "vulnerability_type", stats, "vulnerabilities"
+        )
+
+        # Add risk summary if available
+        if "stats" in report and report["stats"]:
+            stats["risk_summary"]["total_findings"] += report["stats"].get("total_findings", 0)
+            stats["risk_summary"]["high"] += report["stats"].get("high_risk", 0)
+            stats["risk_summary"]["medium"] += report["stats"].get("medium_risk", 0)
+            stats["risk_summary"]["low"] += report["stats"].get("low_risk", 0)
+
+        return stats
+    
+    def _get_stats_from_report(self, report, arg1, stats, arg3):
+        model = report[arg1]
+        if model not in stats[arg3]:
+            stats[arg3][model] = 0
+        stats[arg3][model] += 1
+

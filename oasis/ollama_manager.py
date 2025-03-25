@@ -504,11 +504,16 @@ class OllamaManager:
 
         # If models are provided as a comma-separated list, return them
         if hasattr(args, 'models') and args.models:
-            main_models = [model.strip() for model in args.models.split(',')]
+            # Handle 'all' case
+            if args.models.strip().lower() == 'all':
+                logger.info(f"Selected all {len(available_models)} models")
+                main_models = available_models
+            else:
+                main_models = [model.strip() for model in args.models.split(',')]
 
         # If a scan model is provided, return it
         if hasattr(args, 'scan_model') and args.scan_model:
-            scan_model = args.scan_model
+            scan_model = [args.scan_model]
 
         if scan_model and main_models:
             return {'scan_model': scan_model, 'main_models': main_models}
@@ -535,7 +540,7 @@ class OllamaManager:
                 main_models = None
 
         if scan_model and main_models:
-            return {'scan_model': scan_model[0], 'main_models': main_models}
+            return {'scan_model': scan_model, 'main_models': main_models}
 
         return None
 

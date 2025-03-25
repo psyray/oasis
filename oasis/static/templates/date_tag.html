@@ -1,9 +1,11 @@
-<span class="date-tag clickable" 
+<span class="date-tag clickable" title="${modelName} - ${language}" 
     onclick="openReport('${path}', '${format}')" 
     data-model="${model}"
     data-vulnerability="${vulnerabilityType}">
-    ${modelEmoji}
-        <span class="language-flag ${language}" title="${languageName}">
+        <span>
+            ${modelEmoji}
+        </span>
+        <span class="language-flag" title="${languageName}">
             ${languageEmoji}
         </span>
     <div class="date-main">${formattedDate}</div>

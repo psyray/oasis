@@ -58,8 +58,8 @@ DashboardApp.getModelEmoji = function(model) {
     // Try to match by prefix
     for (const [key, emoji] of Object.entries(modelEmojis)) {
         // Check if model starts with key or key starts with model
-        if (model.toLowerCase().startsWith(key.toLowerCase()) || 
-            key.toLowerCase().startsWith(model.toLowerCase())) {
+        if (model.toLowerCase().includes(key.toLowerCase()) || 
+            key.toLowerCase().includes(model.toLowerCase())) {
             return emoji + ' ';
         }
     }
@@ -106,9 +106,9 @@ DashboardApp.generateDateTagHTML = function(report) {
         .replace('${languageName}',  DashboardApp.getLanguageInfo(report.language).name)
         .replace('${languageEmoji}',  DashboardApp.getLanguageInfo(report.language).emoji)
         .replace('${path}', report.path)
-        .replace('${model}', report.model)
+        .replace('${modelName}', report.model)
         .replace('${modelEmoji}', DashboardApp.getModelEmoji(report.model))
-        .replace('${format}', report.format || 'md');
+        .replace('${format}', report.format === undefined || report.format === null || report.format === '' ? 'md' : report.format);
 };
 
 DashboardApp.debug("Utils module loaded"); 

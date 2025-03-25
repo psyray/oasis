@@ -10,7 +10,7 @@ import logging
 from jinja2 import Environment, FileSystemLoader
 
 # Import from configuration
-from .config import REPORT
+from .config import REPORT, LANGUAGES
 
 # Import from other modules
 from .tools import extract_clean_path, logger, sanitize_name, generate_timestamp
@@ -45,7 +45,9 @@ class Report:
         self.report_dirs = {}
         self.models = models
         self.current_model = current_model
-        self.language = language
+        self.language_code = language
+        self.language = LANGUAGES[self.language_code]
+
 
         # Configure the Jinja2 environment
         template_dir = Path(__file__).parent / 'templates'
@@ -100,7 +102,7 @@ class Report:
                     # Create language.txt file in the report directory
                     lang_file = self.report_dirs[model_dir][fmt].parent / 'language.txt'
                     with open(lang_file, 'w', encoding='utf-8') as f:
-                        f.write(self.language)
+                        f.write(self.language_code)
 
         return self.report_dirs
     

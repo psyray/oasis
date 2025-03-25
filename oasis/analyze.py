@@ -6,7 +6,7 @@ from multiprocessing import Pool, cpu_count
 import re
 
 # Import from configuration
-from .config import CHUNK_ANALYZE_TIMEOUT, MODEL_EMOJIS, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS, MAX_CHUNK_SIZE, DEFAULT_ARGS
+from .config import CHUNK_ANALYZE_TIMEOUT, LANGUAGES, MODEL_EMOJIS, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS, MAX_CHUNK_SIZE, DEFAULT_ARGS
 
 # Import from other modules
 from .ollama_manager import OllamaManager
@@ -77,7 +77,8 @@ class SecurityAnalyzer:
             analysis_type = AnalysisType.ADAPTIVE if self.analyze_by_function else AnalysisType.STANDARD
             self.cache_manager.clear_scan_cache(analysis_type)
         
-        self.language = getattr(args, 'language', 'en')
+        self.language_code = getattr(args, 'language', 'en')
+        self.language = LANGUAGES[self.language_code]
 
     def _get_vulnerability_details(self, vulnerability: Union[str, Dict]) -> Tuple[str, str, list, str, str]:
         """
@@ -124,9 +125,10 @@ class SecurityAnalyzer:
         
         # Get common format requirements
         common_prompt = _get_common_prompt(vuln_name)
-        
+
         # Build the complete prompt with clear sections and strict instructions
-        return f"""You are a cybersecurityy expert specialized in {vuln_name} vulnerabilities ONLY. 
+        return f"""{self.get_language_instruction()}
+You are a cybersecurity expert specialized in {vuln_name} vulnerabilities ONLY. 
 
 CRITICAL INSTRUCTION: You must ONLY analyze the code for {vuln_name} vulnerabilities.
 DO NOT mention, describe, or analyze ANY other type of vulnerability.
@@ -147,6 +149,12 @@ Analyze this code segment ({i + 1}/{total_chunks}) for {vuln_name} vulnerabiliti
 
 {VULNERABILITY_PROMPT_EXTENSION}
 """
+
+    def get_language_instruction(self) -> str:
+        """
+        Get the language instruction for the LLM analysis.
+        """
+        return f"You MUST write your response in {self.language['english_name']}. " if self.language_code != 'en' else ""
 
     def _analyze_code_chunk(self, prompt: str, file_path: str = None, chunk_text: str = None, 
                            vuln_name: str = None, mode: AnalysisMode = AnalysisMode.DEEP,
@@ -1426,7 +1434,8 @@ DO NOT include any other text in your response.
         with tqdm(total=len(high_risk_chunks), desc="Deep analysis of high-risk chunks", leave=False) as pbar:
             for chunk_idx, chunk_text in high_risk_chunks:
                 # Build comprehensive analysis prompt
-                prompt = f"""You are a cybersecurity expert specialized in {vuln_name} vulnerabilities ONLY.
+                prompt = f"""{self.get_language_instruction()}
+You are a cybersecurity expert specialized in {vuln_name} vulnerabilities ONLY.
 
 VULNERABILITY DETAILS:
 - Name: {vuln_name}
@@ -2266,19 +2275,20 @@ FORMAT REQUIREMENTS:
 - When providing the ASCII flowchart, make sure to do the following:
   1. Begin with a header "## Execution Path"
   2. Use a properly formatted code block with triple backticks (```) at the beginning AND end
-  3. Do not add any other content inside the code block besides the ASCII diagram
-  4. Format the ASCII diagram like this:
-  ```
-  Entry Point: /api/endpoint
-       |
-       v
-  [process_data]
-       |
-       v
-  [validate_input]
-       |
-       v
-  [parse_user_data] <-- Vulnerable Function
-  ```
-  5. After the closing triple backticks, continue with the next section
+  3. The opening and closing triple backticks must be on a new line with no space in front of them and no space behind them.
+  4. Do not add any other content inside the code block besides the ASCII diagram
+  5. Format the ASCII diagram EXACTLY like this and replace every step with the actual workflow of the vulnerability:
+```
+    Entry Point: /api/endpoint
+        |
+        v
+    [process_data]
+        |
+        v
+    [validate_input]
+        |
+        v
+    [parse_user_data] <-- Vulnerable Function
+```
+  6. After the closing triple backticks, continue with the next section
 """
