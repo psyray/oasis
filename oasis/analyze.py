@@ -414,7 +414,7 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
                 vuln_scan_pbar.update(1)
                 
                 if main_pbar:
-                    main_pbar.update(0.5)
+                    main_pbar.update(1)
 
         return {
             'suspicious_data': all_suspicious_data,
@@ -519,7 +519,7 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
                 # Update progress bars
                 deep_vuln_pbar.update(1)
                 if main_pbar:
-                    main_pbar.update(0.5)
+                    main_pbar.update(1)
 
         return all_results
     
