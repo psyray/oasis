@@ -120,50 +120,18 @@ class WebServer:
         @app.route('/api/reports')
         @login_required
         def get_reports():
-            # Get filter parameters
-            model_filter = request.args.get('model', '')
-            format_filter = request.args.get('format', '')
-            vuln_filter = request.args.get('vulnerability', '')
-            start_date = request.args.get('start_date', None)
-            end_date = request.args.get('end_date', None)
-            # New parameter to show only MD reports for dates (default to True)
-            md_dates_only = request.args.get('md_dates_only', '1') == '1'
-            
+           
             # Filter reports based on parameters
-            filtered_data = self.filter_reports(
-                model_filter, 
-                format_filter, 
-                vuln_filter, 
-                start_date, 
-                end_date, 
-                md_dates_only=md_dates_only
-            )
+            filtered_data = self.filter_reports()
             return jsonify(filtered_data)
             
         @app.route('/api/stats')
         @login_required
         def get_stats():
-            # Check if there are any filter parameters
-            model_filter = request.args.get('model', '')
-            format_filter = request.args.get('format', '')
-            vuln_filter = request.args.get('vulnerability', '')
-            start_date = request.args.get('start_date')
-            end_date = request.args.get('end_date')
-            
-            # If any filters are applied, get filtered reports first
-            if any([model_filter, format_filter, vuln_filter, start_date, end_date]):
-                filtered_reports = self.filter_reports(
-                    model_filter=model_filter,
-                    format_filter=format_filter,
-                    vuln_filter=vuln_filter,
-                    start_date=start_date,
-                    end_date=end_date
-                )
-                return jsonify(self.get_report_statistics(filtered_reports=filtered_reports))
-            else:
-                # No filters, get global statistics
-                return jsonify(self.get_report_statistics())
-
+            # Filter reports based on parameters
+            filtered_data = self.filter_reports()
+            return jsonify(self.get_report_statistics(filtered_reports=filtered_data))
+        
         @app.route('/reports/<path:filename>')
         @login_required
         def serve_report(filename):
@@ -228,27 +196,12 @@ class WebServer:
         @login_required
         def get_dates_by_model():
             """Get dates available for a specific model and vulnerability type"""
-            model = request.args.get('model', '')
-            vulnerability = request.args.get('vulnerability', '')
-            
-            if not model or not vulnerability:
-                return jsonify({'error': 'Model and vulnerability parameters are required'}), 400
-            
-            # Normalize vulnerability type for comparison
-            vulnerability = vulnerability.lower()
-            
-            # Filter reports by model and vulnerability
-            filtered_reports = []
-            for report in self.report_data:
-                report_vuln = report.get('vulnerability_type', '').lower()
-                report_model = report.get('model', '')
-                
-                if model == report_model and vulnerability in report_vuln:
-                    filtered_reports.append(report)
-            
+            # Filter reports based on parameters
+            filtered_data = self.filter_reports(mandatory_filters=['model', 'vulnerability'])
+
             # Extract dates from filtered reports
             dates = []
-            for report in filtered_reports:
+            for report in filtered_data:
                 if 'date' in report:
                     # Create a dictionary date_info from the date string
                     date_info = {'date': report['date']}
@@ -256,6 +209,10 @@ class WebServer:
                     # Add the path of the MD file if available
                     if report.get('alternative_formats', {}).get('md'):
                         date_info['path'] = report['alternative_formats']['md']
+
+                    # Add the language of the report if available
+                    if report.get('language'):  
+                        date_info['language'] = report['language']
                     
                     dates.append(date_info)
             
@@ -530,12 +487,25 @@ class WebServer:
                                
         return filtered_reports
 
-    def filter_reports(self, model_filter='', format_filter='', vuln_filter='', start_date=None, end_date=None, md_dates_only=True):
+    def filter_reports(self, mandatory_filters=None):
         """Filter reports based on criteria"""
         if not self.report_data:
             self.collect_report_data()
 
         filtered = self.report_data
+
+        # Check if there are any filter parameters
+        model_filter = request.args.get('model', '')
+        format_filter = request.args.get('format', 'md')
+        vuln_filter = request.args.get('vulnerability', '')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+
+        if mandatory_filters:
+            for filter in mandatory_filters:
+                if not request.args.get(filter):
+                    return jsonify({'error': f'{filter} parameter is required'}), 400
+
 
         # Apply model filter (common to both branches)
         if model_filter:
@@ -545,29 +515,14 @@ class WebServer:
         # Apply date filtering (common to both branches)
         filtered = self._apply_date_filter(filtered, start_date, end_date)
 
-        if md_dates_only and not format_filter:
-            # MD dates only branch - apply vulnerability filter
-            if vuln_filter:
-                vuln_filters = [v.lower() for v in vuln_filter.split(',')]
-                filtered = [r for r in filtered if any(v in r['vulnerability_type'].lower() for v in vuln_filters)]
+        # Standard branch - apply format and vulnerability filters
+        if format_filter:
+            format_filters = [f.lower() for f in format_filter.split(',')]
+            filtered = [r for r in filtered if r['format'].lower() in format_filters]
 
-            # For each report that isn't MD, mark date_visible=False
-            for report in filtered:
-                report['date_visible'] = report['format'] == 'md'
-
-        else:
-            # Standard branch - apply format and vulnerability filters
-            if format_filter:
-                format_filters = [f.lower() for f in format_filter.split(',')]
-                filtered = [r for r in filtered if r['format'].lower() in format_filters]
-
-            if vuln_filter:
-                vuln_filters = [v.lower() for v in vuln_filter.split(',')]
-                filtered = [r for r in filtered if any(v in r['vulnerability_type'].lower() for v in vuln_filters)]
-
-            # Mark all reports as visible in dates
-            for report in filtered:
-                report['date_visible'] = True
+        if vuln_filter:
+            vuln_filters = [v.lower() for v in vuln_filter.split(',')]
+            filtered = [r for r in filtered if any(v in r['vulnerability_type'].lower() for v in vuln_filters)]
 
         return filtered
 

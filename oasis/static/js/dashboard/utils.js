@@ -3,7 +3,7 @@ DashboardApp.groupReportsByModelAndVuln = function(reports) {
     DashboardApp.debug("Grouping reports by model and vulnerability");
     return reports.map(report => {
         // Extraction of important properties
-        const { model, vulnerability_type, path, date, format, stats, alternative_formats, date_visible, language } = report;
+        const { model, vulnerability_type, path, date, format, stats, alternative_formats, language } = report;
         
         // Construction of a simplified report
         return {
@@ -13,7 +13,6 @@ DashboardApp.groupReportsByModelAndVuln = function(reports) {
             date,
             format,
             language,
-            date_visible: date_visible !== undefined ? date_visible : true,
             stats: stats || { high_risk: 0, medium_risk: 0, low_risk: 0, total: 0 },
             alternative_formats: alternative_formats || {}
         };
@@ -80,6 +79,30 @@ DashboardApp.getVulnerabilityEmoji = function(vulnerability) {
     
     // Default emoji if no match found
     return '🔒 ';
+};
+
+DashboardApp.checkTemplatesLoaded = function() {
+    if (!DashboardApp.templates.dateTag || !DashboardApp.templates.dashboardCard) {
+        throw new Error("Templates not loaded yet");
+    }
+};
+
+DashboardApp.generateDateTagHTML = function(report) {
+    DashboardApp.checkTemplatesLoaded();
+    
+    const reportDate = report.date ? new Date(report.date) : null;
+    const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
+    const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    
+    return DashboardApp.templates.dateTag
+        .replace('${formattedDate}', formattedDate)
+        .replace('${formattedTime}', formattedTime)
+        .replace('${vulnerabilityType}', report.vulnerability_type)
+        .replace('${language}', report.language)
+        .replace('${languageEmoji}',  DashboardApp.getLanguageEmoji(report.language))
+        .replace('${path}', report.path)
+        .replace('${model}', report.model)
+        .replace('${format}', report.format);
 };
 
 DashboardApp.debug("Utils module loaded"); 

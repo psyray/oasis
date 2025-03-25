@@ -1,0 +1,10 @@
+<span class="date-tag clickable" 
+    onclick="openReport('${path}', '${format}')" 
+    data-model="${model}"
+    data-vulnerability="${vulnerabilityType}">
+        <span class="language-flag ${language}" title="${DashboardApp.getLanguageName(language)}">
+            ${languageEmoji}
+        </span>
+    <div class="date-main">${formattedDate}</div>
+    <div class="date-time">${formattedTime}</div>
+</span> 

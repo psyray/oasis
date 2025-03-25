@@ -117,25 +117,7 @@ DashboardApp.renderTreeView = function(groupBy) {
                 
                 // Add date entries
                 reportsForModel.forEach(report => {
-                    const reportDate = report.date ? new Date(report.date) : null;
-                    const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
-                    const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-                    
-                    const langFlag = report.language ? 
-                        `<span class="language-flag ${report.language}" title="${DashboardApp.getLanguageName(report.language)}">
-                            ${DashboardApp.getLanguageEmoji(report.language)}
-                        </span>` : '';
-                    
-                    html += `
-                        <span class="date-tag clickable" 
-                            onclick="openReport('${report.path}', '${report.format}')" 
-                            data-model="${model}" 
-                            data-vulnerability="${report.vulnerability_type}">
-                            ${langFlag}
-                            <div class="date-main">${formattedDate}</div>
-                            <div class="date-time">${formattedTime}</div>
-                        </span>
-                    `;
+                    html += DashboardApp.generateDateTagHTML(report);
                 });
                 
                 html += `
@@ -189,26 +171,7 @@ DashboardApp.renderTreeView = function(groupBy) {
                 
                 // Add date entries
                 reportsForVuln.forEach(report => {
-                    const reportDate = report.date ? new Date(report.date) : null;
-                    const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
-                    const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-                    
-                    // Add language flag
-                    const langFlag = report.language ? 
-                        `<span class="language-flag ${report.language}" title="${DashboardApp.getLanguageName(report.language)}">
-                            ${DashboardApp.getLanguageEmoji(report.language)}
-                        </span>` : '';
-                    
-                    html += `
-                        <span class="date-tag clickable" 
-                            onclick="openReport('${report.path}', '${report.format}')" 
-                            data-model="${report.model}" 
-                            data-vulnerability="${vuln}">
-                            ${langFlag}
-                            <div class="date-main">${formattedDate}</div>
-                            <div class="date-time">${formattedTime}</div>
-                        </span>
-                    `;
+                    html += DashboardApp.generateDateTagHTML(report);
                 });
                 
                 html += `
@@ -242,21 +205,7 @@ DashboardApp.renderListView = function() {
         return;
     }
     
-    // Load the template if it's not already loaded
-    if (!DashboardApp.cardTemplate) {
-        fetch('/static/templates/dashboard_card.html')
-            .then(response => response.text())
-            .then(template => {
-                DashboardApp.cardTemplate = template;
-                DashboardApp.renderListViewWithTemplate();
-            })
-            .catch(error => {
-                console.error('Error loading template:', error);
-                container.innerHTML = '<div class="error-message">Error loading template. Please refresh the page.</div>';
-            });
-    } else {
-        DashboardApp.renderListViewWithTemplate();
-    }
+    DashboardApp.renderListViewWithTemplate();
 };
 
 DashboardApp.renderListViewWithTemplate = function() {
@@ -346,28 +295,7 @@ DashboardApp.renderListViewWithTemplate = function() {
         // Generate dates HTML
         let datesHTML = '';
         reportsForVuln.sort((a, b) => new Date(b.date) - new Date(a.date)).forEach(report => {
-            // Only show dates for MD reports
-            if (report['date_visible']) {
-                const reportDate = report.date ? new Date(report.date) : null;
-                const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
-                const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-                
-                // Add language flag
-                const langFlag = report.language ? 
-                    `<span class="language-flag ${report.language}" title="${DashboardApp.getLanguageName(report.language)}">
-                        ${DashboardApp.getLanguageEmoji(report.language)}
-                    </span>` : '';
-                
-                datesHTML += `
-                    <span class="date-tag clickable" 
-                        onclick="openReport('${report.path}', '${report.format}')" 
-                        data-model="${report.model}">
-                        ${langFlag}
-                        <div class="date-main">${formattedDate}</div>
-                        <div class="date-time">${formattedTime}</div>
-                    </span>
-                `;
-            }
+            datesHTML += DashboardApp.generateDateTagHTML(report);
         });
             
         // Generate format buttons HTML
@@ -383,7 +311,7 @@ DashboardApp.renderListViewWithTemplate = function() {
         }
             
         // Use the template and replace placeholders
-        let cardHTML = DashboardApp.cardTemplate
+        let cardHTML = DashboardApp.templates.dashboardCard
             .replace('${formattedVulnTypeEmoji}', formattedVulnEmoji)
             .replace('${formattedVulnType}', formattedVuln)
             .replace('${modelsHTML}', modelsHTML)
