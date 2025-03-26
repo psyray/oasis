@@ -6,11 +6,11 @@ import time
 import traceback
 from typing import Union
 
-
 # Import from configuration
 from .config import MODEL_EMOJIS, REPORT, DEFAULT_ARGS
 
 # Import from other modules
+from .context_manager import TechnologyContextManager
 from .tools import generate_timestamp, setup_logging, logger, display_logo, get_vulnerability_mapping
 from .ollama_manager import OllamaManager
 from .embedding import EmbeddingManager
@@ -27,6 +27,7 @@ class OasisScanner:
         self.ollama_manager = None
         self.embedding_manager = None
         self.output_dir = None
+        self.security_analyzer = None
 
     def setup_argument_parser(self):
         """
@@ -59,6 +60,10 @@ class OasisScanner:
         analysis_group = parser.add_argument_group('Analysis Configuration')
         analysis_group.add_argument('-at', '--analyze-type', choices=['standard', 'deep'], default=DEFAULT_ARGS['ANALYSIS_TYPE'],
                                     help=f'Analyze type (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
+        analysis_group.add_argument('-l', '--language', type=str,
+                                    help='Specify the programming language for context-aware analysis (e.g., "php", "python")')
+        analysis_group.add_argument('-f', '--framework', type=str,
+                                    help='Specify the framework for additional context (e.g., "laravel", "django")')
         analysis_group.add_argument('-eat', '--embeddings-analyze-type', choices=['file', 'function'], default=DEFAULT_ARGS['ANALYSIS_TYPE'],
                                     help=f'Analyze code by entire file or by individual functions [EXPERIMENTAL] (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
         analysis_group.add_argument('-ad', '--adaptive', action='store_true', 
@@ -69,6 +74,10 @@ class OasisScanner:
                                     help=self.get_vulnerability_help())
         analysis_group.add_argument('-ch', '--chunk-size', type=int,
                                     help=f'Maximum size of text chunks for embedding (default: {DEFAULT_ARGS["CHUNK_SIZE"]})')
+        analysis_group.add_argument('-ml', '--max-languages', type=int, default=3,
+                                    help='Maximum number of languages to detect and analyze (default: 3)')
+        analysis_group.add_argument('-na', '--no-autodetect', action='store_true',
+                                    help='Disable automatic technology stack detection')
         
         # Model Selection
         model_group = parser.add_argument_group('Model Selection')
@@ -110,6 +119,8 @@ class OasisScanner:
         
         # Special Modes
         special_group = parser.add_argument_group('Special Modes')
+        special_group.add_argument('-td', '--tech-detect', action='store_true',
+                                help='Detect and display technology stack profile only')
         special_group.add_argument('-a', '--audit', action='store_true',
                                 help='Run embedding distribution analysis')
         special_group.add_argument('-ol', '--ollama-url', dest='ollama_url', type=str, 
@@ -156,11 +167,23 @@ class OasisScanner:
 
         logger.info(f"\nStarting security analysis at {generate_timestamp()}\n")
         start_time = time.time()
-        
+
         # Determine analysis type (adaptive or standard)
         adaptive = hasattr(self.args, 'adaptive') and self.args.adaptive
         analysis_type = "🧠 adaptive" if adaptive else "📋 standard"
         logger.info(f"Using {analysis_type} analysis mode")
+
+        # Detect or get technology stack
+        language, framework = self.context_manager.detect_technology_stack()
+        
+        if language:
+            # Initialize security analyzer with technology context
+            self.security_analyzer.set_technology_context(language, framework)
+            logger.info(
+                f"Analyzing {language} {f'with {framework}' if framework else ''} codebase"
+            )
+        else:
+            logger.info("Running analysis without specific technical context")
 
         # Process all main models one by one
         for i, main_model in enumerate(main_models):
@@ -168,22 +191,25 @@ class OasisScanner:
             logger.info(f"\n{'='*len(msg)}")
             logger.info(msg)
             logger.info(f"{'='*len(msg)}")
-            
+
             # Create analyzer with current main model and scan model
-            security_analyzer = SecurityAnalyzer(
+            self.security_analyzer = SecurityAnalyzer(
                 args=self.args,
                 llm_model=main_model,
                 embedding_manager=self.embedding_manager,
                 ollama_manager=self.ollama_manager,
                 scan_model=scan_model
             )
-            
+
+            if language:
+                self.security_analyzer.set_technology_context(language, framework)
+
             # Set the current model for report generation
             self.report.current_model = main_model
 
             # Process analysis with selected model
             try:
-                security_analyzer.process_analysis_with_model(
+                self.security_analyzer.process_analysis_with_model(
                     vulnerabilities, 
                     self.args, 
                     self.report
@@ -192,10 +218,10 @@ class OasisScanner:
                 logger.exception(f"Error during security analysis with {main_model}: {str(e)}")
                 # Continue with next model instead of failing completely
                 continue
-        
+
         # Report generation complete
         self.report.report_generated(report_type='Security', report_structure=True)
-        
+
         logger.info(f"\nAnalysis completed successfully at {generate_timestamp()}, duration: {time.time() - start_time:.2f} seconds")
 
         return True
@@ -268,23 +294,31 @@ class OasisScanner:
         # Initialize report
         self.report = Report(self.args.input_path, self.args.output_format)
 
-        # Initialize Ollama and check connection
-        if not self.args.web:
-            if not self._init_ollama(self.args.ollama_url):
-                return 1
-            # Initialize embedding manager and process input files
-            return self._execute_requested_mode() if self._init_processing() else 1
+        # Initialize context manager
+        self.tech_context = TechnologyContextManager(args=self.args)
+
+        # If tech-detect mode is enabled, only perform technology detection
+        if hasattr(self.args, 'tech_detect') and self.args.tech_detect:
+            self.tech_context.detect_and_display_tech_stack(self.args.input_path)
+            return
 
         # Serve reports via web interface
-        WebServer(
-            self.report, 
-            debug=self.args.debug,
-            web_expose=self.args.web_expose,
-            web_password=self.args.web_password,
-            web_port=self.args.web_port
-        ).run()
-        return 0  # Exit after serving the web interface
-            
+        if hasattr(self.args, 'web') and self.args.web:
+            WebServer(
+                self.report, 
+                debug=self.args.debug,
+                web_expose=self.args.web_expose,
+                web_password=self.args.web_password,
+                web_port=self.args.web_port
+            ).run()
+            return 0  # Exit after serving the web interface
+
+        # Initialize Ollama and check connection
+        if not self._init_ollama(self.args.ollama_url):
+            return 1
+        # Initialize embedding manager and process input files
+        return self._execute_requested_mode() if self._init_processing() else 1
+
     def _init_arguments(self, args) -> Union[bool, None]:
         """
         Initialize and validate arguments
@@ -324,6 +358,23 @@ class OasisScanner:
             return self._handle_argument_errors("--input/-i is required")
         # Now setup full logging with appropriate paths
         self._setup_logging()
+
+        # Initialize context manager early for extension handling
+        self.context_manager = TechnologyContextManager(args=self.args)
+
+        # Handle extensions based on language or auto-detection
+        if hasattr(self.args, 'language') and self.args.language:
+            # Use extensions for specified language
+            self.args.extensions = self.context_manager.get_language_extensions(self.args.language)
+            logger.info(f"Using file extensions for {self.args.language}: {', '.join(self.args.extensions)}")
+        elif hasattr(self.args, 'extensions') and self.args.extensions:
+            # User specified extensions - keep them
+            self.args.extensions = [ext.strip() for ext in self.args.extensions.split(',')]
+            logger.info(f"Using user-specified extensions: {', '.join(self.args.extensions)}")
+        else:
+            # No language or extensions specified - use all supported extensions
+            self.args.extensions = self.context_manager.get_language_extensions()
+            logger.info("Using all supported file extensions")
 
         # Process output format
         if self.args.output_format == 'all':

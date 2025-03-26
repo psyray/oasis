@@ -1,0 +1,38 @@
+name: Shell
+extensions:
+  - sh
+  - bash
+  - zsh
+  - ksh
+  - csh
+  - tcsh
+  - fish
+  - rc
+
+frameworks:
+  bash:
+    indicators:
+      - .bashrc
+      - .bash_profile
+    detection_patterns:
+      - '#!/bin/bash'
+      - 'source .bashrc'
+      - 'bash specific syntax'
+
+  zsh:
+    indicators:
+      - .zshrc
+      - .zprofile
+    detection_patterns:
+      - '#!/bin/zsh'
+      - 'source .zshrc'
+      - 'zsh specific features'
+
+  fish:
+    indicators:
+      - config.fish
+      - fish_variables
+    detection_patterns:
+      - '#!/usr/bin/fish'
+      - 'fish specific syntax'
+      - 'config.fish' 

@@ -1,0 +1,30 @@
+name: Java
+extensions:
+  - java
+  - jar
+  - war
+  - jsp
+  - jspx
+
+frameworks:
+  spring:
+    indicators:
+      - application.properties
+      - application.yml
+    detection_patterns:
+      - src/main/java/
+      - src/main/resources/
+  
+  hibernate:
+    indicators:
+      - hibernate.cfg.xml
+    detection_patterns:
+      - src/main/resources/hibernate.cfg.xml
+      - persistence.xml
+  
+  struts:
+    indicators:
+      - struts.xml
+    detection_patterns:
+      - src/main/resources/struts.xml
+      - web.xml 

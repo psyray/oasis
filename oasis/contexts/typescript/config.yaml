@@ -1,0 +1,62 @@
+name: TypeScript
+extensions:
+  - ts
+  - tsx
+  - d.ts
+  - mts
+  - cts
+
+frameworks:
+  angular:
+    indicators:
+      - angular.json
+      - tsconfig.json
+    detection_patterns:
+      - src/app/
+      - src/environments/
+      - e2e/
+  
+  react:
+    indicators:
+      - tsconfig.json
+      - package.json
+    detection_patterns:
+      - src/components/
+      - src/App.tsx
+      - public/index.html
+  
+  vue:
+    indicators:
+      - tsconfig.json
+      - vue.config.js
+    detection_patterns:
+      - src/components/
+      - src/App.vue
+      - src/shims-vue.d.ts
+  
+  nest:
+    indicators:
+      - nest-cli.json
+      - tsconfig.json
+    detection_patterns:
+      - src/main.ts
+      - src/app.module.ts
+      - test/
+  
+  next:
+    indicators:
+      - next.config.js
+      - tsconfig.json
+    detection_patterns:
+      - pages/
+      - public/
+      - styles/
+  
+  nuxt:
+    indicators:
+      - nuxt.config.ts
+      - tsconfig.json
+    detection_patterns:
+      - pages/
+      - components/
+      - layouts/ 

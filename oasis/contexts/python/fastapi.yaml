@@ -1,0 +1,232 @@
+ignore_patterns:
+  - '__pycache__/**'
+  - '.pytest_cache/**'
+  - 'venv/**'
+  - '.env'
+
+security_context: |
+  FastAPI specific security considerations:
+  - Dependency injection security
+  - Pydantic model validation
+  - OAuth2 implementation
+  - CORS middleware
+  - Request validation
+  - Response security
+
+vulnerability_patterns:
+  validation:
+    - "BaseModel"
+    - "validator"
+  auth:
+    - "OAuth2"
+    - "HTTPBearer"
+  injection:
+    - "Depends"
+    - "Request"
+  sqli:
+    score: 5
+    description: "SQL injection in FastAPI database operations"
+    patterns:
+      - "execute raw query"
+      - "raw SQL"
+      - "database.execute"
+      - "text()"
+      - "select query"
+      - "filter string"
+      - "SQLAlchemy raw"
+      - "direct query"
+
+  xss:
+    score: 6
+    description: "XSS through template rendering and responses"
+    patterns:
+      - "HTMLResponse"
+      - "Response content"
+      - "templates.TemplateResponse"
+      - "Jinja2Templates"
+      - "raw HTML"
+      - "template rendering"
+      - "HTML generation"
+      - "dynamic content"
+
+  input:
+    score: 5
+    description: "Input validation vulnerabilities (mitigated by Pydantic)"
+    patterns:
+      - "Request body"
+      - "Query params"
+      - "Path params"
+      - "Form data"
+      - "File upload"
+      - "Header validation"
+      - "Cookie parsing"
+      - "raw request data"
+
+  data:
+    score: 6
+    description: "Sensitive data exposure"
+    patterns:
+      - "config settings"
+      - "environment vars"
+      - "debug mode"
+      - "error details"
+      - "stack traces"
+      - "response data"
+      - "model exposure"
+      - "API documentation"
+
+  session:
+    score: 6
+    description: "Session management issues"
+    patterns:
+      - "JWT tokens"
+      - "session middleware"
+      - "cookie session"
+      - "token storage"
+      - "session handling"
+      - "auth session"
+      - "session security"
+      - "state management"
+
+  config:
+    score: 7
+    description: "Security misconfigurations"
+    patterns:
+      - "CORS settings"
+      - "middleware config"
+      - "app settings"
+      - "security headers"
+      - "debug settings"
+      - "environment config"
+      - "API settings"
+      - "server config"
+
+  logging:
+    score: 6
+    description: "Sensitive data logging"
+    patterns:
+      - "logger config"
+      - "error logging"
+      - "debug output"
+      - "request logging"
+      - "response logging"
+      - "sensitive data"
+      - "log handlers"
+      - "logging level"
+
+  crypto:
+    score: 5
+    description: "Cryptographic issues"
+    patterns:
+      - "password hashing"
+      - "token generation"
+      - "encryption"
+      - "random generation"
+      - "hash functions"
+      - "key management"
+      - "secure tokens"
+      - "cryptographic ops"
+
+  rce:
+    score: 6
+    description: "Remote code execution risks"
+    patterns:
+      - "eval usage"
+      - "exec function"
+      - "subprocess"
+      - "shell commands"
+      - "command execution"
+      - "code injection"
+      - "dynamic imports"
+      - "template injection"
+
+  ssrf:
+    score: 7
+    description: "SSRF vulnerabilities"
+    patterns:
+      - "httpx.get"
+      - "aiohttp client"
+      - "requests.get"
+      - "urllib usage"
+      - "HTTP client"
+      - "remote calls"
+      - "URL validation"
+      - "external requests"
+
+  xxe:
+    score: 5
+    description: "XXE in XML processing"
+    patterns:
+      - "XML parsing"
+      - "ElementTree"
+      - "lxml usage"
+      - "XML processing"
+      - "document parsing"
+      - "external entities"
+      - "DTD handling"
+      - "XML validation"
+
+  pathtra:
+    score: 6
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "FileResponse"
+      - "StaticFiles"
+      - "file operations"
+      - "path handling"
+      - "directory access"
+      - "file paths"
+      - "static files"
+      - "file serving"
+
+  idor:
+    score: 6
+    description: "IDOR vulnerabilities"
+    patterns:
+      - "path parameters"
+      - "direct references"
+      - "ID access"
+      - "resource fetch"
+      - "object access"
+      - "data retrieval"
+      - "user data"
+      - "record access"
+
+  secrets:
+    score: 6
+    description: "Hardcoded secrets"
+    patterns:
+      - "config values"
+      - "API keys"
+      - "credentials"
+      - "secret keys"
+      - "tokens"
+      - "passwords"
+      - "connection strings"
+      - "sensitive data"
+
+  auth:
+    score: 7
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "OAuth flows"
+      - "JWT handling"
+      - "token validation"
+      - "authentication"
+      - "security scopes"
+      - "permissions"
+      - "user validation"
+      - "access control"
+
+  csrf:
+    score: 5
+    description: "CSRF vulnerabilities"
+    patterns:
+      - "CSRF protection"
+      - "token validation"
+      - "form handling"
+      - "state changing"
+      - "request origin"
+      - "cross-site request"
+      - "secure forms"
+      - "request verification" 

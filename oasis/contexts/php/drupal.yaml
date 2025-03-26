@@ -1,0 +1,228 @@
+ignore_patterns:
+  - 'sites/*/files/**'
+  - 'sites/*/private/**'
+  - 'sites/*/settings*.php'
+  - 'vendor/**'
+
+security_context: |
+  Drupal specific security considerations:
+  - Form API security
+  - Database API security
+  - Access control system
+  - File system security
+  - Module security
+  - Theme security
+
+vulnerability_patterns:
+  sqli:
+    score: 5
+    description: "SQL injection through Drupal database API"
+    patterns:
+      - "db_query"
+      - "db_select"
+      - "EntityQuery"
+      - "Database::getConnection"
+      - "raw SQL usage"
+      - "dynamic queries"
+      - "condition array"
+      - "query builder"
+      - "database API"
+
+  xss:
+    score: 7
+    description: "XSS in Drupal themes and modules"
+    patterns:
+      - "check_plain"
+      - "Html::escape"
+      - "Xss::filter"
+      - "t() function"
+      - "SafeMarkup"
+      - "renderPlain"
+      - "raw markup"
+      - "twig autoescape"
+      - "filter_xss"
+      - "sanitize strings"
+
+  input:
+    score: 7
+    description: "Input validation vulnerabilities"
+    patterns:
+      - "FormState"
+      - "validate handlers"
+      - "request data"
+      - "form API"
+      - "sanitize filters"
+      - "input formats"
+      - "field validation"
+      - "entity validation"
+      - "request sanitization"
+
+  data:
+    score: 6
+    description: "Sensitive data exposure"
+    patterns:
+      - "settings.php"
+      - "services.yml"
+      - "private files"
+      - "configuration"
+      - "field data"
+      - "user data"
+      - "node access"
+      - "entity access"
+      - "debug output"
+
+  session:
+    score: 6
+    description: "Session management issues"
+    patterns:
+      - "session handling"
+      - "session API"
+      - "user session"
+      - "session manager"
+      - "session configuration"
+      - "session fixation"
+      - "session tokens"
+      - "persistent login"
+
+  config:
+    score: 7
+    description: "Security misconfigurations"
+    patterns:
+      - "settings.php"
+      - "services.yml"
+      - "development settings"
+      - "permissions"
+      - "site configuration"
+      - "module settings"
+      - "security settings"
+      - "access control"
+
+  logging:
+    score: 5
+    description: "Sensitive data logging"
+    patterns:
+      - "watchdog"
+      - "logger service"
+      - "dblog"
+      - "syslog"
+      - "error logging"
+      - "debug messages"
+      - "log entries"
+      - "logging config"
+
+  crypto:
+    score: 6
+    description: "Cryptographic issues"
+    patterns:
+      - "hash salt"
+      - "private key"
+      - "encryption profile"
+      - "password hashing"
+      - "key management"
+      - "hash functions"
+      - "random generation"
+      - "encryption service"
+
+  rce:
+    score: 6
+    description: "Remote code execution risks"
+    patterns:
+      - "php filter"
+      - "eval usage"
+      - "dynamic includes"
+      - "unsafe deserialization"
+      - "plugin execution"
+      - "module installation"
+      - "update system"
+      - "remote code"
+
+  ssrf:
+    score: 5
+    description: "SSRF vulnerabilities"
+    patterns:
+      - "http client"
+      - "remote stream"
+      - "feed aggregator"
+      - "external requests"
+      - "URL handling"
+      - "remote content"
+      - "webhook system"
+      - "HTTP requests"
+
+  xxe:
+    score: 5
+    description: "XXE in XML processing"
+    patterns:
+      - "feed import"
+      - "XML parsing"
+      - "content migration"
+      - "document import"
+      - "XML configuration"
+      - "external entities"
+      - "XML processing"
+      - "feed parsing"
+
+  pathtra:
+    score: 6
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "file system"
+      - "stream wrapper"
+      - "public files"
+      - "private files"
+      - "file download"
+      - "file access"
+      - "directory traversal"
+      - "file inclusion"
+
+  idor:
+    score: 5
+    description: "IDOR vulnerabilities"
+    patterns:
+      - "entity access"
+      - "node access"
+      - "user access"
+      - "field access"
+      - "entity reference"
+      - "access check"
+      - "permission check"
+      - "entity loading"
+
+  secrets:
+    score: 7
+    description: "Hardcoded secrets"
+    patterns:
+      - "database credentials"
+      - "API keys"
+      - "salt values"
+      - "encryption keys"
+      - "service tokens"
+      - "private keys"
+      - "configuration secrets"
+      - "connection strings"
+
+  auth:
+    score: 6
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "user authentication"
+      - "password reset"
+      - "user login"
+      - "session handling"
+      - "permission system"
+      - "role management"
+      - "access control"
+      - "user validation"
+
+  csrf:
+    score: 5
+    description: "CSRF vulnerabilities"
+    patterns:
+      - "form token"
+      - "form API"
+      - "CSRF token"
+      - "form validation"
+      - "state tokens"
+      - "request tokens"
+      - "form security"
+      - "ajax security" 

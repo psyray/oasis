@@ -1,0 +1,245 @@
+ignore_patterns:
+  - 'vendor/**'
+  - 'storage/framework/**'
+  - 'storage/logs/**'
+  - 'bootstrap/cache/**'
+  - '.env'
+  - '.env.*'
+
+security_context: |
+  Laravel specific security considerations:
+  - CSRF protection is built-in but needs proper middleware usage
+  - Mass assignment vulnerabilities can occur if $fillable/$guarded not properly set
+  - SQL injection prevention through Eloquent ORM and query builders
+  - XSS prevention using {{ }} vs {!! !!} blade syntax
+  - Authentication system with built-in protection against timing attacks
+  - File upload vulnerabilities in storage system if not properly validated
+
+vulnerability_patterns:
+  sqli:
+    score: 7
+    description: "High risk despite Eloquent ORM, through raw queries"
+    patterns:
+      - "DB::raw"
+      - "DB::select"
+      - "DB::statement"
+      - "whereRaw"
+      - "havingRaw"
+      - "orderByRaw"
+      - "selectRaw"
+      - "Model::hydrateRaw"
+
+  rce:
+    score: 8
+    description: "Very frequent in PHP through various functions"
+    patterns:
+      - "eval("
+      - "shell_exec"
+      - "system("
+      - "passthru"
+      - "exec("
+      - "popen"
+      - "proc_open"
+      - "unserialize"
+      - "create_function"
+      - "`command`"
+
+  xss:
+    score: 9
+    description: "Very common despite default protections"
+    patterns:
+      - "{!! !!}"
+      - "Html::raw"
+      - "raw()"
+      - "Blade::render"
+      - "@php"
+      - "->toHtml()"
+      - "v-html="
+      - "dangerouslySetInnerHTML"
+
+  csrf:
+    score: 5
+    description: "Less common due to automatic CSRF protection"
+    patterns:
+      - "@csrf"
+      - "VerifyCsrfToken"
+      - "$except"
+      - "csrf_token()"
+      - "csrf_field()"
+
+  session:
+    score: 7
+    description: "Session management vulnerabilities"
+    patterns:
+      - "Session::put"
+      - "session(["
+      - "$request->session()"
+      - "Auth::login"
+      - "remember_token"
+      - "Session::regenerate"
+
+  config:
+    score: 8
+    description: "Security misconfigurations in Laravel"
+    patterns:
+      - "config/"
+      - ".env"
+      - "APP_DEBUG"
+      - "APP_ENV"
+      - "config:cache"
+      - "php artisan"
+
+  input:
+    score: 7
+    description: "Input validation issues"
+    patterns:
+      - "$request->all()"
+      - "$request->input"
+      - "Request::get"
+      - "->validate()"
+      - "FormRequest"
+      - "$fillable"
+
+  pathtra:
+    score: 8
+    description: "Path traversal in file operations"
+    patterns:
+      - "Storage::get"
+      - "File::get"
+      - "include"
+      - "require"
+      - "readfile"
+      - "file_get_contents"
+      - "Storage::disk"
+
+  data:
+    score: 8
+    description: "Sensitive data exposure in Laravel"
+    patterns:
+      - "Model::create($request->all())"
+      - "->toArray()"
+      - "->toJson()"
+      - "var_dump"
+      - "print_r"
+      - "dd()"
+      - "dump()"
+      - "debug()"
+      - "Laravel log files"
+      - "exception details"
+      - ".env exposure"
+      - "API response data"
+
+  auth:
+    score: 7
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "Auth::attempt"
+      - "Auth::login"
+      - "Auth::loginUsingId"
+      - "remember_token"
+      - "password reset"
+      - "forgot password"
+      - "email verification"
+      - "Auth::viaRemember"
+      - "Auth::onceBasic"
+      - "middleware('auth')"
+
+  ssrf:
+    score: 6
+    description: "SSRF vulnerabilities in HTTP clients"
+    patterns:
+      - "Http::get"
+      - "Http::post"
+      - "file_get_contents"
+      - "curl_exec"
+      - "Guzzle"
+      - "fopen"
+      - "fsockopen"
+      - "pfsockopen"
+      - "stream_context_create"
+      - "HttpClient"
+
+  crypto:
+    score: 7
+    description: "Cryptographic issues in Laravel"
+    patterns:
+      - "Hash::make"
+      - "bcrypt"
+      - "Crypt::encrypt"
+      - "Crypt::decrypt"
+      - "Illuminate\\Support\\Facades\\Crypt"
+      - "openssl_encrypt"
+      - "openssl_decrypt"
+      - "random_bytes"
+      - "str_random"
+      - "Illuminate\\Support\\Str::random"
+
+  logging:
+    score: 7
+    description: "Logging vulnerabilities in Laravel"
+    patterns:
+      - "Log::"
+      - "logger()"
+      - "error_log"
+      - "debug()"
+      - "info()"
+      - "warning()"
+      - "critical()"
+      - "emergency()"
+
+  xxe:
+    score: 5
+    description: "XML parsing vulnerabilities in Laravel"
+    patterns:
+      - "SimpleXMLElement"
+      - "XML parsing"
+      - "DOMDocument"
+      - "loadXML"
+      - "simplexml_load"
+      - "parseXml"
+      - "xml_parse"
+      - "XmlParser"
+
+  idor:
+    score: 8
+    description: "IDOR vulnerabilities in Laravel routes and controllers"
+    patterns:
+      - "Route::get('{id}'"
+      - "findOrFail"
+      - "firstOrFail"
+      - "$request->route('id')"
+      - "Model::find"
+      - "where('user_id'"
+      - "whereId"
+      - "whereIn"
+
+  secrets:
+    score: 8
+    description: "Hardcoded secrets and sensitive data in Laravel applications"
+    patterns:
+      - ".env"
+      - "config/database.php"
+      - "config/mail.php"
+      - "config/services.php"
+      - "APP_KEY="
+      - "DB_PASSWORD"
+      - "MAIL_PASSWORD"
+      - "AWS_SECRET_ACCESS_KEY"
+      - "STRIPE_SECRET_KEY"
+      - "GOOGLE_CLIENT_SECRET"
+      - "MAIL_USERNAME"
+      - "REDIS_PASSWORD"
+      - "PUSHER_APP_SECRET"
+      - "JWT_SECRET"
+      - "ENCRYPTION_KEY"
+      - "API_SECRET"
+      - "TWILIO_AUTH_TOKEN"
+      - "config(['key' =>"
+      - "env('SECRET_"
+      - "storage/oauth-private.key"
+      - "storage/oauth-public.key"
+      - ".git/config"
+      - "composer.lock"
+      - "package-lock.json"
+      - "Homestead.yaml"
+      - "docker-compose.yml"
