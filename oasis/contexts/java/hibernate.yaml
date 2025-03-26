@@ -13,13 +13,193 @@ security_context: |
   - Entity validation
 
 vulnerability_patterns:
-  sql_injection:
-    - "createQuery("
-    - "createSQLQuery("
-    - "createNativeQuery("
-  data_exposure:
-    - "@OneToMany"
-    - "@ManyToMany"
-  validation:
-    - "@Valid"
-    - "Validator" 
+  sqli:
+    score: 8
+    description: "SQL Injection through HQL and native queries"
+    patterns:
+      - "createNativeQuery"
+      - "createSQLQuery"
+      - "setParameter"
+      - "createQuery(String"
+      - "Session.createQuery"
+      - "Query.setString"
+      - "criteriaQuery.where"
+      - "NativeQuery"
+
+  xss:
+    score: 3
+    description: "Less common in ORM layer but possible through entity fields"
+    patterns:
+      - "@Column(columnDefinition"
+      - "TypedQuery<String>"
+      - "toString()"
+      - "@Formula"
+      - "HibernateTemplate"
+
+  input:
+    score: 7
+    description: "Input validation issues in entity mapping"
+    patterns:
+      - "@Valid"
+      - "@Column"
+      - "@Type"
+      - "validator.validate"
+      - "PropertyValidator"
+      - "@Pattern"
+      - "@Size"
+      - "TypeValidator"
+
+  data:
+    score: 8
+    description: "Sensitive data exposure in entities and queries"
+    patterns:
+      - "@Entity"
+      - "@SecondaryTable"
+      - "@Transient"
+      - "FetchType.EAGER"
+      - "@JsonIgnore missing"
+      - "@OneToMany(fetch"
+      - "@ManyToMany"
+      - "LazyInitializationException"
+
+  session:
+    score: 6
+    description: "Hibernate session management issues"
+    patterns:
+      - "SessionFactory"
+      - "getCurrentSession"
+      - "openSession"
+      - "stateless session"
+      - "session.clear"
+      - "FlushMode"
+      - "session.merge"
+      - "DetachedCriteria"
+
+  config:
+    score: 7
+    description: "Hibernate configuration vulnerabilities"
+    patterns:
+      - "hibernate.cfg.xml"
+      - "persistence.xml"
+      - "hibernate.properties"
+      - "show_sql"
+      - "hbm2ddl.auto"
+      - "connection.pool_size"
+      - "hibernate.dialect"
+      - "hibernate.cache"
+
+  logging:
+    score: 5
+    description: "Sensitive data in Hibernate logs"
+    patterns:
+      - "show_sql=true"
+      - "format_sql"
+      - "use_sql_comments"
+      - "generate_statistics"
+      - "log4j.logger.org.hibernate"
+      - "StatisticsImpl"
+      - "LogicalConnectionImpl"
+
+  crypto:
+    score: 6
+    description: "Cryptographic issues in entity encryption"
+    patterns:
+      - "@ColumnTransformer"
+      - "AttributeConverter"
+      - "@Convert"
+      - "encryption strategy"
+      - "UserType encryption"
+      - "@TypeDef"
+      - "encrypted columns"
+
+  rce:
+    score: 4
+    description: "RCE through Hibernate features"
+    patterns:
+      - "@SQLDelete"
+      - "@SQLUpdate"
+      - "@SQLInsert"
+      - "callable statement"
+      - "stored procedure"
+      - "native function"
+      - "@Formula"
+
+  ssrf:
+    score: 3
+    description: "SSRF in Hibernate integrations"
+    patterns:
+      - "@org.hibernate.annotations.Type"
+      - "custom UserType"
+      - "URLType"
+      - "BlobType"
+      - "custom type resolver"
+
+  xxe:
+    score: 4
+    description: "XXE in Hibernate XML configuration"
+    patterns:
+      - "hbm.xml"
+      - "EntityResolver"
+      - "XMLConfigurationReader"
+      - "DocumentBuilderFactory"
+      - "SAXParserFactory"
+      - "mapping resource"
+
+  pathtra:
+    score: 4
+    description: "Path traversal in Hibernate file operations"
+    patterns:
+      - "@org.hibernate.annotations.Cache"
+      - "second-level cache"
+      - "ehcache.xml"
+      - "cache.provider_class"
+      - "BlobType"
+      - "FileType"
+
+  idor:
+    score: 7
+    description: "IDOR through entity relationships"
+    patterns:
+      - "@ManyToOne"
+      - "@OneToOne"
+      - "findById"
+      - "load()"
+      - "get()"
+      - "@JoinColumn"
+      - "byId()"
+      - "@Where"
+
+  secrets:
+    score: 6
+    description: "Secrets in Hibernate configuration"
+    patterns:
+      - "connection.username"
+      - "connection.password"
+      - "hibernate.connection.url"
+      - "javax.persistence.jdbc"
+      - "c3p0 properties"
+      - "connection provider"
+      - "hibernate.connection.encryption"
+      - "credentials provider"
+
+  auth:
+    score: 5
+    description: "Authentication issues in Hibernate security"
+    patterns:
+      - "@Filter"
+      - "@SQLRestriction"
+      - "enableFilter"
+      - "security mapping"
+      - "@PreAuthorize"
+      - "tenant identifier"
+      - "discriminator column"
+
+  csrf:
+    score: 2
+    description: "Rarely applicable to Hibernate directly"
+    patterns:
+      - "session token"
+      - "version column"
+      - "@Version"
+      - "optimistic locking"
+      - "LockMode" 

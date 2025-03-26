@@ -45,4 +45,15 @@ frameworks:
       - system/core/CodeIgniter.php
     detection_patterns:
       - application/config/
-      - system/core/ 
+      - system/core/
+  
+  joomla:
+    indicators:
+      - configuration.php
+      - libraries/joomla
+      - administrator/
+    detection_patterns:
+      - components/com_content
+      - administrator/components
+      - libraries/src/Version.php
+      - includes/defines.php 

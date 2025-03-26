@@ -13,12 +13,181 @@ security_context: |
   - Interceptor security
 
 vulnerability_patterns:
-  ognl_injection:
-    - "getText("
-    - "getProperty("
   xss:
-    - "<s:property"
-    - "value="
-  file_upload:
-    - "FileUploadInterceptor"
-    - "multipart/form-data" 
+    score: 7
+    description: "XSS vulnerabilities in Struts"
+    patterns:
+      - "<s:property"
+      - "value="
+  sqli:
+    score: 6
+    description: "SQL injection through Struts data access"
+    patterns:
+      - "SQL statement"
+      - "ActionForm getData"
+      - "DynaValidatorForm"
+      - "DataSource direct"
+      - "JDBC connection"
+      - "QueryAction"
+  input:
+    score: 8
+    description: "Input validation vulnerabilities in Struts forms"
+    patterns:
+      - "validate()"
+      - "ActionForm"
+      - "DynaActionForm"
+      - "getParameter"
+      - "multipart/form-data"
+      - "ValidatorForm"
+      - "ActionMapping"
+      - "<s:textfield"
+      - "validateXXX()"
+  data:
+    score: 7
+    description: "Sensitive data exposure in Struts actions"
+    patterns:
+      - "ActionForward"
+      - "session.getAttribute"
+      - "request.getAttribute"
+      - "ActionContext.getContext"
+      - "ValueStack"
+      - "OGNL expression"
+      - "chain.do"
+      - "ActionError"
+  session:
+    score: 7
+    description: "Session management issues in Struts"
+    patterns:
+      - "SessionAware"
+      - "getSession()"
+      - "session.put"
+      - "session.get"
+      - "SessionMap"
+      - "ApplicationMap"
+      - "RequestMap"
+      - "GlobalSession"
+  config:
+    score: 8
+    description: "Security misconfigurations in Struts"
+    patterns:
+      - "struts.xml"
+      - "struts.properties"
+      - "web.xml"
+      - "validation.xml"
+      - "tiles-def.xml"
+      - "struts-config.xml"
+      - "constant name="
+      - "devMode = true"
+  logging:
+    score: 6
+    description: "Logging vulnerabilities in Struts"
+    patterns:
+      - "commons-logging"
+      - "log4j.properties"
+      - "debugging enabled"
+      - "printStackTrace"
+      - "System.out"
+      - "System.err"
+      - "logging.properties"
+      - "debug=true"
+  crypto:
+    score: 5
+    description: "Cryptographic issues in Struts security"
+    patterns:
+      - "SecurityUtils"
+      - "encryption.key"
+      - "token.encryption"
+      - "MessageDigest"
+      - "Cipher"
+      - "SecureRandom"
+      - "KeyGenerator"
+  rce:
+    score: 9
+    description: "Critical RCE vulnerabilities often found in Struts"
+    patterns:
+      - "OGNL.getValue"
+      - "expression evaluation"
+      - "DefaultActionMapper"
+      - "CookieInterceptor"
+      - "FileUploadInterceptor"
+      - "ExceptionDelegator"
+      - "ActionProxy"
+      - "MultiPartRequestWrapper"
+  ssrf:
+    score: 6
+    description: "SSRF through Struts actions and results"
+    patterns:
+      - "HttpClient"
+      - "URL connection"
+      - "redirect action"
+      - "stream result"
+      - "UrlHelper"
+      - "ServletUrlRenderer"
+      - "HttpServletResponse.sendRedirect"
+  xxe:
+    score: 7
+    description: "XXE in Struts XML processing"
+    patterns:
+      - "XMLStreamReader"
+      - "DocumentBuilder"
+      - "SAXParser"
+      - "validation.xml"
+      - "xml parsing"
+      - "XmlConfigurationProvider"
+      - "DTD processing"
+  pathtra:
+    score: 7
+    description: "Path traversal in Struts file operations"
+    patterns:
+      - "FileUploadInterceptor"
+      - "download action"
+      - "stream result"
+      - "FileInputStream"
+      - "ServletContext.getRealPath"
+      - "include result"
+      - "dispatcher result"
+  idor:
+    score: 7
+    description: "IDOR in Struts actions and parameters"
+    patterns:
+      - "action parameter"
+      - "id parameter"
+      - "user identifier"
+      - "direct reference"
+      - "ActionMapping path"
+      - "request parameter"
+      - "dynamic action name"
+  secrets:
+    score: 6
+    description: "Hardcoded secrets in Struts configuration"
+    patterns:
+      - "database.password"
+      - "jdbc.password"
+      - "mail.password"
+      - "security.key"
+      - "token.secret"
+      - "encryption.key"
+      - "api.key"
+  auth:
+    score: 8
+    description: "Authentication vulnerabilities in Struts"
+    patterns:
+      - "AuthenticationInterceptor"
+      - "SecurityInterceptor"
+      - "RolesInterceptor"
+      - "TokenInterceptor"
+      - "TokenSessionStoreInterceptor"
+      - "BasicAuthenticationInterceptor"
+      - "authentication token"
+      - "security context"
+  csrf:
+    score: 7
+    description: "CSRF vulnerabilities in Struts forms"
+    patterns:
+      - "token interceptor"
+      - "<s:token/>"
+      - "TokenHelper"
+      - "TokenProcessor"
+      - "session token"
+      - "form token"
+      - "CSRF guard" 

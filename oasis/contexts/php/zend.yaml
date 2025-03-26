@@ -1,0 +1,272 @@
+ignore_patterns:
+  - cache/**
+  - data/cache/**
+  - vendor/**
+  - logs/**
+  - config/autoload/*.local.php
+  - config/development.config.php
+  - .htaccess
+  - composer.lock
+  - phpunit.xml
+
+security_context: |
+  Zend Framework specific security considerations:
+  - MVC security patterns
+  - Service manager security
+  - Authentication and ACL system
+  - Input filtering and validation
+  - Form security and CSRF protection
+  - Database abstraction layer security
+  - View helper security
+  - Module system security
+  - Event manager security
+  - Session handling security
+
+vulnerability_patterns:
+  sqli:
+    score: 7
+    description: "SQL injection in Zend database operations"
+    patterns:
+      - "Zend\\Db\\Sql"
+      - "createStatement()"
+      - "execute()"
+      - "raw query"
+      - "prepare()"
+      - "query()"
+      - "TableGateway"
+      - "Adapter execute"
+      - "raw SQL"
+      - "queryString"
+
+  xss:
+    score: 7
+    description: "XSS vulnerabilities in views and helpers"
+    patterns:
+      - "escapeHtml()"
+      - "escapeJs()"
+      - "escapeCss()"
+      - "escapeUrl()"
+      - "raw output"
+      - "view helper"
+      - "template output"
+      - "ViewHelper"
+      - "HtmlString"
+      - "unescaped content"
+
+  input:
+    score: 6
+    description: "Input validation vulnerabilities"
+    patterns:
+      - "getParam()"
+      - "getQuery()"
+      - "getPost()"
+      - "InputFilter"
+      - "getValue()"
+      - "getRawValue()"
+      - "getFilterChain()"
+      - "ValidatorChain"
+      - "request data"
+      - "form input"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure"
+    patterns:
+      - "config files"
+      - "local.php"
+      - "development.config"
+      - "module.config"
+      - "credentials"
+      - "sensitive data"
+      - "error display"
+      - "debug mode"
+      - "log files"
+      - "exception details"
+
+  session:
+    score: 7
+    description: "Session management issues"
+    patterns:
+      - "SessionManager"
+      - "Container"
+      - "session config"
+      - "session handler"
+      - "session storage"
+      - "session security"
+      - "session validation"
+      - "session manager"
+      - "session options"
+      - "session state"
+
+  config:
+    score: 7
+    description: "Security misconfigurations"
+    patterns:
+      - "ServiceManager"
+      - "ModuleManager"
+      - "ConfigProvider"
+      - "module.config"
+      - "application.config"
+      - "local.php"
+      - "global.php"
+      - "development mode"
+      - "debug settings"
+      - "error reporting"
+
+  logging:
+    score: 6
+    description: "Sensitive data logging"
+    patterns:
+      - "LoggerInterface"
+      - "log()"
+      - "debug()"
+      - "error()"
+      - "Logger\\Writer"
+      - "sensitive info"
+      - "error handling"
+      - "exception logging"
+      - "debug output"
+      - "log level"
+
+  crypto:
+    score: 7
+    description: "Cryptographic issues"
+    patterns:
+      - "Crypto\\"
+      - "Password\\"
+      - "hash()"
+      - "encrypt()"
+      - "decrypt()"
+      - "Bcrypt"
+      - "salt"
+      - "key generation"
+      - "random bytes"
+      - "crypto functions"
+
+  rce:
+    score: 8
+    description: "Remote code execution risks"
+    patterns:
+      - "eval()"
+      - "shell_exec"
+      - "system()"
+      - "exec()"
+      - "unserialize"
+      - "create_function"
+      - "include"
+      - "require"
+      - "module loader"
+      - "code execution"
+
+  ssrf:
+    score: 7
+    description: "SSRF vulnerabilities"
+    patterns:
+      - "Http\\Client"
+      - "curl"
+      - "file_get_contents"
+      - "HTTP request"
+      - "remote content"
+      - "URL fetch"
+      - "external request"
+      - "HTTP client"
+      - "remote file"
+      - "URL validation"
+
+  xxe:
+    score: 6
+    description: "XXE in XML processing"
+    patterns:
+      - "XmlReader"
+      - "DOMDocument"
+      - "SimpleXML"
+      - "XML parsing"
+      - "external entities"
+      - "XML processing"
+      - "feed parser"
+      - "XML config"
+      - "XML input"
+      - "DTD handling"
+
+  pathtra:
+    score: 7
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "FileSystem"
+      - "file operations"
+      - "Stream"
+      - "file path"
+      - "directory path"
+      - "file access"
+      - "path manipulation"
+      - "file inclusion"
+      - "directory traversal"
+      - "file handling"
+
+  idor:
+    score: 7
+    description: "IDOR vulnerabilities"
+    patterns:
+      - "findById"
+      - "getById"
+      - "direct reference"
+      - "object access"
+      - "resource fetch"
+      - "entity lookup"
+      - "access check"
+      - "permission verify"
+      - "user data"
+      - "data access"
+
+  secrets:
+    score: 7
+    description: "Hardcoded secrets"
+    patterns:
+      - "local.php"
+      - "config files"
+      - "credentials"
+      - "API keys"
+      - "passwords"
+      - "secret keys"
+      - "tokens"
+      - "sensitive config"
+      - "private keys"
+      - "connection strings"
+
+  auth:
+    score: 7
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "AuthenticationService"
+      - "Acl\\"
+      - "Authentication\\"
+      - "identity()"
+      - "hasIdentity()"
+      - "login process"
+      - "auth adapter"
+      - "permission check"
+      - "role check"
+      - "access control"
+
+  csrf:
+    score: 6
+    description: "CSRF vulnerabilities"
+    patterns:
+      - "CsrfElement"
+      - "form security"
+      - "csrf token"
+      - "validateCsrf"
+      - "form hash"
+      - "security token"
+      - "form protection"
+      - "request validation"
+      - "token check"
+      - "form guard"
+
+security_files:
+  - module/Application/config/module.config.php
+  - config/autoload/global.php
+  - module/*/src/Controller/*.php
+  - module/*/src/Service/*.php
+  - module/*/src/Authentication/*.php
+  - module/*/src/Authorization/*.php 

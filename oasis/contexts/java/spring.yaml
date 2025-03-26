@@ -14,12 +14,221 @@ security_context: |
   - Secure session management
 
 vulnerability_patterns:
-  sql_injection:
-    - "@Query"
-    - "JdbcTemplate"
+  deserialization:
+    score: 9
+    description: "Very frequent in Java applications, especially with ObjectInputStream"
+    patterns:
+      - "ObjectInputStream.readObject"
+      - "readUnshared()"
+      - "XMLDecoder"
+      - "ObjectMapper.readValue"
+      - "@JsonDeserialize"
+      - "JacksonXmlDeserialize"
+      - "XStream.fromXML"
+      - "Gson.fromJson"
+      - "readResolve()"
+      - "readExternal()"
+
+  xxe:
+    score: 8
+    description: "Common issue in Java XML parsing"
+    patterns:
+      - "DocumentBuilderFactory"
+      - "SAXParserFactory"
+      - "XMLInputFactory"
+      - "TransformerFactory"
+      - "SchemaFactory"
+      - "SAXBuilder"
+      - "SAXReader"
+      - "XMLReader"
+      - "@XmlRootElement"
+      - "javax.xml.bind.Unmarshaller"
+
+  sqli:
+    score: 5
+    description: "Less frequent with JPA/Hibernate usage but still possible"
+    patterns:
+      - "createNativeQuery"
+      - "jdbcTemplate.query"
+      - "Statement.executeQuery"
+      - "prepareStatement"
+      - "createQuery"
+      - "EntityManager.createNativeQuery"
+
+  idor:
+    score: 7
+    description: "Common in REST APIs and controller methods"
+    patterns:
+      - "@PathVariable Long id"
+      - "findById"
+      - "getOne"
+      - "findByUser"
+      - "@RequestParam Long userId"
+      - "repository.getById"
+      - "repository.getReferenceById"
+
+  auth:
+    score: 6
+    description: "Authentication vulnerabilities in Spring Security configurations"
+    patterns:
+      - "WebSecurityConfigurerAdapter"
+      - "configure(HttpSecurity"
+      - "@PreAuthorize"
+      - "@Secured"
+      - "hasRole"
+      - "hasAuthority"
+      - "permitAll"
+      - "authentication.getPrincipal"
+
+  csrf:
+    score: 4
+    description: "Less common due to default Spring Security protection"
+    patterns:
+      - "csrf().disable()"
+      - "@CrossOrigin"
+      - "CsrfFilter"
+      - "CsrfTokenRepository"
+      - "CookieCsrfTokenRepository"
+
+  config:
+    score: 7
+    description: "Common in application.properties and security configurations"
+    patterns:
+      - "application.properties"
+      - "application.yml"
+      - "WebSecurityConfig"
+      - "SecurityFilterChain"
+      - "cors().disable()"
+      - "headers().frameOptions()"
+
+  secrets:
+    score: 6
+    description: "Sensitive data in configuration files and code"
+    patterns:
+      - "spring.datasource.password"
+      - "spring.mail.password"
+      - "jwt.secret"
+      - "private static final String KEY"
+      - "@Value"
+      - "application-prod.properties"
+
+  logging:
+    score: 5
+    description: "Sensitive data exposure in logs"
+    patterns:
+      - "log.debug"
+      - "log.info"
+      - "System.out.println"
+      - "e.printStackTrace"
+      - "logger.error"
+      - "@Slf4j"
+
+  rce:
+    score: 6
+    description: "Significant risk via Spring Expression Language"
+    patterns:
+      - "Runtime.getRuntime().exec"
+      - "ProcessBuilder"
+      - "SpEL expression"
+      - "@Value"
+      - "StandardEvaluationContext"
+      - "BeanShell.eval"
+
   xss:
-    - "th:utext"
-    - "@ResponseBody"
-  authentication:
-    - "WebSecurityConfigurerAdapter"
-    - "SecurityFilterChain" 
+    score: 5
+    description: "XSS vulnerabilities in Spring MVC views"
+    patterns:
+      - "th:utext"
+      - "@ResponseBody String"
+      - "ModelAndView"
+      - "ResponseEntity<String>"
+      - "produces = MediaType.TEXT_HTML"
+      - "HtmlUtils.htmlEscape"
+      - "StringEscapeUtils"
+      - "@CrossOrigin"
+
+  input:
+    score: 7
+    description: "Input validation vulnerabilities in Spring MVC"
+    patterns:
+      - "@RequestParam without validation"
+      - "@Valid annotation missing"
+      - "BindingResult errors"
+      - "@ModelAttribute without validation"
+      - "MultipartFile without validation"
+      - "@RequestBody without validation"
+      - "ServletRequest.getParameter"
+      - "HttpServletRequest.getHeader"
+      - "PathVariable without pattern"
+      - "BeanPropertyBindingResult"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure in Spring applications"
+    patterns:
+      - "@ResponseBody sensitive data"
+      - "PII in ResponseEntity"
+      - "stacktrace exposure"
+      - "@JsonIgnore missing"
+      - "@JsonProperty(access ="
+      - "ResponseEntity.body("
+      - "Model.addAttribute"
+      - "HttpSession.setAttribute"
+      - "application.properties in jar"
+      - "actuator exposure"
+
+  session:
+    score: 6
+    description: "Session management in Spring Security"
+    patterns:
+      - "sessionManagement()"
+      - "maximumSessions()"
+      - "sessionCreationPolicy"
+      - "invalidSessionUrl"
+      - "sessionRegistry"
+      - "ConcurrentSessionFilter"
+      - "SessionInformation"
+      - "SessionCreationPolicy.IF_REQUIRED"
+      - "HttpSessionEventPublisher"
+      - "SessionFixationProtectionStrategy"
+
+  crypto:
+    score: 6
+    description: "Cryptographic vulnerabilities in Spring Security"
+    patterns:
+      - "PasswordEncoder"
+      - "BCryptPasswordEncoder"
+      - "StandardPasswordEncoder"
+      - "MessageDigest"
+      - "SecureRandom"
+      - "KeyGenerator"
+      - "Cipher.getInstance"
+      - "Mac.getInstance"
+
+  ssrf:
+    score: 6
+    description: "SSRF vulnerabilities in HTTP clients"
+    patterns:
+      - "RestTemplate"
+      - "WebClient"
+      - "HttpURLConnection"
+      - "Apache HttpClient"
+      - "OkHttpClient"
+      - "URLConnection"
+      - "URL.openConnection"
+      - "HttpComponentsClientHttpRequestFactory"
+      - "SimpleClientHttpRequestFactory"
+      - "AsyncRestTemplate"
+
+  pathtra:
+    score: 6
+    description: "Path traversal in Spring resources"
+    patterns:
+      - "ResourceLoader"
+      - "getResource"
+      - "MultipartFile"
+      - "ServletContext.getRealPath"
+      - "FileSystemResource"
+      - "ClassPathResource"
+      - "UrlResource"
+      - "File constructor"

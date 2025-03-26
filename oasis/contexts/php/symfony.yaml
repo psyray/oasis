@@ -15,13 +15,210 @@ security_context: |
   - Parameter binding for safe database operations
 
 vulnerability_patterns:
-  sql_injection:
-    - "->execute("
-    - "createQuery("
-    - "executeQuery("
+  sqli:
+    score: 6
+    description: "SQL injection through Doctrine and raw queries"
+    patterns:
+      - "createQuery()"
+      - "createNativeQuery"
+      - "createQueryBuilder"
+      - "execute()"
+      - "DQL injection"
+      - "EntityManager raw"
+      - "Connection::executeQuery"
+      - "DBAL queries"
+
   xss:
-    - "raw|"
-    - "->setContent("
-  file_upload:
-    - "UploadedFile"
-    - "move_uploaded_file" 
+    score: 7
+    description: "XSS in Twig templates and responses"
+    patterns:
+      - "raw filter"
+      - "html_raw"
+      - "Response::setContent"
+      - "JsonResponse"
+      - "template variables"
+      - "form rendering"
+      - "{% autoescape false %}"
+      - "{{ content|raw }}"
+
+  input:
+    score: 8
+    description: "Input validation in Symfony forms and requests"
+    patterns:
+      - "Request::get"
+      - "getData()"
+      - "FormType"
+      - "RequestStack"
+      - "ParameterBag"
+      - "validation groups"
+      - "Assert\\"
+      - "form constraints"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure in Symfony"
+    patterns:
+      - ".env"
+      - "parameters.yml"
+      - "config files"
+      - "debug mode"
+      - "profiler data"
+      - "doctrine logging"
+      - "error pages"
+      - "exception handling"
+
+  session:
+    score: 7
+    description: "Session management vulnerabilities"
+    patterns:
+      - "session handling"
+      - "SessionInterface"
+      - "session storage"
+      - "remember me"
+      - "session fixation"
+      - "session configuration"
+      - "session security"
+      - "session lifetime"
+
+  config:
+    score: 8
+    description: "Security misconfigurations in Symfony"
+    patterns:
+      - "security.yaml"
+      - "framework.yaml"
+      - "routing.yaml"
+      - "services.yaml"
+      - "bundles.php"
+      - "environment config"
+      - "debug settings"
+      - "production mode"
+
+  logging:
+    score: 6
+    description: "Sensitive data in logs"
+    patterns:
+      - "monolog config"
+      - "logger service"
+      - "debug toolbar"
+      - "profiler data"
+      - "error logging"
+      - "security logging"
+      - "audit trail"
+      - "log levels"
+
+  crypto:
+    score: 6
+    description: "Cryptographic issues in Symfony"
+    patterns:
+      - "password hasher"
+      - "security encoders"
+      - "encryption service"
+      - "random generators"
+      - "secret management"
+      - "key handling"
+      - "cipher usage"
+      - "hash functions"
+
+  rce:
+    score: 7
+    description: "Remote code execution risks"
+    patterns:
+      - "process helper"
+      - "shell_exec"
+      - "eval usage"
+      - "command execution"
+      - "unsafe deserialization"
+      - "expression language"
+      - "code evaluation"
+      - "dynamic includes"
+
+  ssrf:
+    score: 6
+    description: "SSRF vulnerabilities"
+    patterns:
+      - "HttpClient"
+      - "Guzzle usage"
+      - "curl functions"
+      - "http service"
+      - "remote content"
+      - "URL validation"
+      - "webhook handling"
+      - "external requests"
+
+  xxe:
+    score: 6
+    description: "XXE in XML processing"
+    patterns:
+      - "XML parsing"
+      - "DomDocument"
+      - "SimpleXML"
+      - "serializer"
+      - "deserializer"
+      - "XML config"
+      - "SOAP handling"
+      - "feed parsing"
+
+  pathtra:
+    score: 7
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "file locator"
+      - "resource loading"
+      - "file operations"
+      - "uploads handling"
+      - "asset management"
+      - "template loading"
+      - "cache files"
+      - "public files"
+
+  idor:
+    score: 7
+    description: "IDOR vulnerabilities"
+    patterns:
+      - "ParamConverter"
+      - "entity loading"
+      - "user check"
+      - "access control"
+      - "voter system"
+      - "authorization"
+      - "object security"
+      - "ACL system"
+
+  secrets:
+    score: 7
+    description: "Hardcoded secrets and sensitive data"
+    patterns:
+      - ".env files"
+      - "parameters.yml"
+      - "secrets vault"
+      - "credentials"
+      - "API keys"
+      - "database config"
+      - "mailer config"
+      - "service tokens"
+
+  auth:
+    score: 8
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "security bundle"
+      - "user provider"
+      - "authentication"
+      - "password handling"
+      - "user checker"
+      - "guard system"
+      - "firewall config"
+      - "access control"
+
+  csrf:
+    score: 6
+    description: "CSRF vulnerabilities"
+    patterns:
+      - "csrf_token"
+      - "form tokens"
+      - "CsrfTokenManager"
+      - "csrf protection"
+      - "form security"
+      - "token validation"
+      - "csrf listener"
+      - "token storage"

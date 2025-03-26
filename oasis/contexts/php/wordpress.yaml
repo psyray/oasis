@@ -14,12 +14,218 @@ security_context: |
   - User capability checks
 
 vulnerability_patterns:
-  sql_injection:
-    - "$wpdb->query"
-    - "$wpdb->prepare"
+  sqli:
+    score: 8
+    description: "SQL injection in WordPress queries and custom plugins"
+    patterns:
+      - "$wpdb->query"
+      - "$wpdb->prepare"
+      - "raw SQL queries"
+      - "get_results"
+      - "get_var"
+      - "get_row"
+      - "custom queries"
+      - "meta queries"
+      - "tax queries"
+      - "direct database access"
+
   xss:
-    - "echo"
-    - "wp_kses"
-  file_upload:
-    - "wp_handle_upload"
-    - "media_handle_upload" 
+    score: 9
+    description: "Very high XSS risk in themes and plugins"
+    patterns:
+      - "esc_html"
+      - "esc_url"
+      - "wp_kses"
+      - "esc_attr"
+      - "esc_js"
+      - "sanitize_text_field"
+      - "raw output"
+      - "the_content"
+      - "the_title"
+      - "shortcode output"
+
+  input:
+    score: 8
+    description: "Input validation vulnerabilities"
+    patterns:
+      - "$_POST"
+      - "$_GET"
+      - "$_REQUEST"
+      - "sanitize_text_field"
+      - "wp_verify_nonce"
+      - "check_admin_referer"
+      - "validate_file"
+      - "plugin options"
+      - "theme options"
+      - "form submission"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure in WordPress"
+    patterns:
+      - "wp-config.php"
+      - "debug.log"
+      - "error_log"
+      - "admin ajax"
+      - "REST API exposure"
+      - "user data"
+      - "private posts"
+      - "meta data"
+      - "options table"
+
+  session:
+    score: 7
+    description: "Session management issues"
+    patterns:
+      - "wp_session"
+      - "auth cookies"
+      - "user sessions"
+      - "session tokens"
+      - "login cookies"
+      - "remember me"
+      - "session handling"
+      - "cookie management"
+
+  config:
+    score: 8
+    description: "Security misconfigurations"
+    patterns:
+      - "wp-config.php"
+      - "debug mode"
+      - "file permissions"
+      - "plugin settings"
+      - "theme settings"
+      - "admin access"
+      - "security headers"
+      - "WordPress version"
+      - "directory listing"
+
+  logging:
+    score: 6
+    description: "Sensitive data logging"
+    patterns:
+      - "WP_DEBUG_LOG"
+      - "error_log"
+      - "debug.log"
+      - "wp_mail logs"
+      - "access logs"
+      - "admin actions"
+      - "failed logins"
+      - "audit logs"
+
+  crypto:
+    score: 6
+    description: "Cryptographic issues"
+    patterns:
+      - "wp_hash"
+      - "wp_salt"
+      - "password hashing"
+      - "nonce generation"
+      - "random generation"
+      - "key generation"
+      - "encryption functions"
+      - "SSL/TLS config"
+
+  rce:
+    score: 8
+    description: "Remote code execution risks"
+    patterns:
+      - "plugin upload"
+      - "theme upload"
+      - "file editing"
+      - "eval usage"
+      - "code execution"
+      - "php execution"
+      - "unsafe includes"
+      - "template override"
+
+  ssrf:
+    score: 7
+    description: "SSRF vulnerabilities"
+    patterns:
+      - "wp_remote_get"
+      - "wp_remote_post"
+      - "wp_http"
+      - "curl functions"
+      - "http api"
+      - "external requests"
+      - "webhook handling"
+      - "feed fetching"
+
+  xxe:
+    score: 5
+    description: "XXE in WordPress XML processing"
+    patterns:
+      - "XML-RPC"
+      - "WXR import"
+      - "feed parsing"
+      - "XML processing"
+      - "plugin XML"
+      - "theme XML"
+      - "custom XML"
+      - "import/export"
+
+  pathtra:
+    score: 7
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "file operations"
+      - "upload handling"
+      - "media library"
+      - "plugin files"
+      - "theme files"
+      - "include paths"
+      - "directory traversal"
+      - "file access"
+
+  idor:
+    score: 7
+    description: "IDOR vulnerabilities"
+    patterns:
+      - "post access"
+      - "user data"
+      - "meta access"
+      - "attachment access"
+      - "private content"
+      - "user switching"
+      - "role checking"
+      - "capability check"
+
+  secrets:
+    score: 8
+    description: "Hardcoded secrets"
+    patterns:
+      - "AUTH_KEY"
+      - "SECURE_AUTH_KEY"
+      - "DB_PASSWORD"
+      - "API keys"
+      - "salt keys"
+      - "credentials"
+      - "tokens"
+      - "private keys"
+
+  auth:
+    score: 8
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "wp_login"
+      - "authentication"
+      - "user roles"
+      - "capabilities"
+      - "password reset"
+      - "login security"
+      - "2FA bypass"
+      - "auth cookies"
+
+  csrf:
+    score: 7
+    description: "CSRF vulnerabilities"
+    patterns:
+      - "nonce missing"
+      - "wp_nonce"
+      - "check_admin_referer"
+      - "verify_nonce"
+      - "form tokens"
+      - "ajax security"
+      - "state changing"
+      - "admin actions"

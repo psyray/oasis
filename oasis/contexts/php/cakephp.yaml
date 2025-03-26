@@ -1,0 +1,275 @@
+ignore_patterns:
+  - tmp/**
+  - logs/**
+  - vendor/**
+  - config/app_local.php
+  - config/.env
+  - webroot/cache/**
+  - tests/**
+  - .htaccess
+  - composer.lock
+  - phpunit.xml.dist
+
+security_context: |
+  CakePHP specific security considerations:
+  - MVC architecture security
+  - ORM security and data validation
+  - Component-based security system
+  - Authentication and Authorization
+  - Form security and CSRF protection
+  - Security component features
+  - Bake template security
+  - Plugin system security
+  - Session handling
+  - Request handling security
+
+vulnerability_patterns:
+  sqli:
+    score: 6
+    description: "SQL injection in CakePHP ORM operations"
+    patterns:
+      - "query->where"
+      - "connection()->execute"
+      - "raw SQL"
+      - "newQuery()"
+      - "execute()"
+      - "findBySQL"
+      - "custom SQL"
+      - "raw conditions"
+      - "queryBuilder"
+      - "raw expression"
+
+  xss:
+    score: 6
+    description: "XSS vulnerabilities in views and helpers"
+    patterns:
+      - "h()"
+      - "raw()"
+      - "HtmlHelper"
+      - "echo without h"
+      - "unsafe output"
+      - "template vars"
+      - "element render"
+      - "cell render"
+      - "view block"
+      - "unescaped content"
+
+  input:
+    score: 6
+    description: "Input validation vulnerabilities"
+    patterns:
+      - "$this->request"
+      - "getData()"
+      - "getParsedBody()"
+      - "getQuery()"
+      - "validator"
+      - "patchEntity"
+      - "newEntity"
+      - "form data"
+      - "request data"
+      - "input filtering"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure"
+    patterns:
+      - "app_local.php"
+      - "app.php"
+      - ".env"
+      - "debug mode"
+      - "Configure::read"
+      - "Configure::write"
+      - "sensitive info"
+      - "error display"
+      - "debug kit"
+      - "log files"
+
+  session:
+    score: 6
+    description: "Session management issues"
+    patterns:
+      - "$this->request->getSession()"
+      - "Session Component"
+      - "session config"
+      - "session read"
+      - "session write"
+      - "session destroy"
+      - "session handler"
+      - "session security"
+      - "flash messages"
+      - "session storage"
+
+  config:
+    score: 7
+    description: "Security misconfigurations"
+    patterns:
+      - "Configure::write"
+      - "app.php"
+      - "bootstrap.php"
+      - "routes.php"
+      - "security settings"
+      - "debug mode"
+      - "error config"
+      - "security component"
+      - "middleware config"
+      - "plugin loading"
+
+  logging:
+    score: 6
+    description: "Sensitive data logging"
+    patterns:
+      - "Log::write"
+      - "LogTrait"
+      - "debug()"
+      - "error log"
+      - "FileLog"
+      - "sensitive data"
+      - "log level"
+      - "debug info"
+      - "error handling"
+      - "exception logging"
+
+  crypto:
+    score: 7
+    description: "Cryptographic issues"
+    patterns:
+      - "Security::hash"
+      - "DefaultPasswordHasher"
+      - "salt value"
+      - "encryption key"
+      - "crypto config"
+      - "password hash"
+      - "secure random"
+      - "key generation"
+      - "crypto functions"
+      - "hash methods"
+
+  rce:
+    score: 7
+    description: "Remote code execution risks"
+    patterns:
+      - "eval()"
+      - "shell_exec"
+      - "exec()"
+      - "system()"
+      - "Shell class"
+      - "command run"
+      - "unsafe include"
+      - "plugin load"
+      - "template execution"
+      - "code evaluation"
+
+  ssrf:
+    score: 7
+    description: "SSRF vulnerabilities"
+    patterns:
+      - "Http\\Client"
+      - "remote request"
+      - "URL fetch"
+      - "external content"
+      - "HTTP client"
+      - "remote file"
+      - "URL validation"
+      - "external API"
+      - "HTTP request"
+      - "remote access"
+
+  xxe:
+    score: 6
+    description: "XXE in XML processing"
+    patterns:
+      - "Xml class"
+      - "SimpleXML"
+      - "DOMDocument"
+      - "XML parsing"
+      - "feed processing"
+      - "external entities"
+      - "XML handling"
+      - "XML config"
+      - "XML input"
+      - "DTD processing"
+
+  pathtra:
+    score: 7
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "File class"
+      - "Folder class"
+      - "file operations"
+      - "path handling"
+      - "file read"
+      - "file write"
+      - "directory access"
+      - "file inclusion"
+      - "path manipulation"
+      - "file upload"
+
+  idor:
+    score: 7
+    description: "IDOR vulnerabilities"
+    patterns:
+      - "findById"
+      - "get()"
+      - "direct reference"
+      - "record access"
+      - "entity fetch"
+      - "access check"
+      - "authorization"
+      - "user data"
+      - "resource access"
+      - "permission check"
+
+  secrets:
+    score: 7
+    description: "Hardcoded secrets"
+    patterns:
+      - "app_local.php"
+      - ".env"
+      - "security salt"
+      - "API keys"
+      - "database config"
+      - "credentials"
+      - "secret keys"
+      - "tokens"
+      - "passwords"
+      - "sensitive data"
+
+  auth:
+    score: 6
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "Authentication"
+      - "Authorization"
+      - "identity()"
+      - "authenticate"
+      - "authorize"
+      - "isAuthorized"
+      - "login action"
+      - "user check"
+      - "permission verify"
+      - "access control"
+
+  csrf:
+    score: 6
+    description: "CSRF vulnerabilities"
+    patterns:
+      - "SecurityComponent"
+      - "csrf token"
+      - "form security"
+      - "validatePost"
+      - "security check"
+      - "form protection"
+      - "request validation"
+      - "token check"
+      - "form token"
+      - "secure forms"
+
+security_files:
+  - config/app.php
+  - config/bootstrap.php
+  - src/Controller/Component/SecurityComponent.php
+  - src/Controller/AppController.php
+  - src/Model/Table/*.php
+  - src/Application.php
+  - src/Middleware/SecurityMiddleware.php
+  - templates/layout/default.php 

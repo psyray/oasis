@@ -14,12 +14,210 @@ security_context: |
   - Input validation and sanitization
 
 vulnerability_patterns:
-  sql_injection:
-    - "execute("
-    - "text("
+  sqli:
+    score: 7
+    description: "SQL injection in Flask database operations"
+    patterns:
+      - "db.engine.execute"
+      - "text()"
+      - "raw SQL"
+      - "cursor.execute"
+      - "SQLAlchemy raw"
+      - "filter string"
+      - "query.from_statement"
+      - "database.execute"
+
   xss:
-    - "Markup("
-    - "|safe"
-  file_upload:
-    - "files["
-    - "save(" 
+    score: 8
+    description: "XSS in Flask templates and responses"
+    patterns:
+      - "render_template_string"
+      - "safe filter"
+      - "markup"
+      - "Markup()"
+      - "safe attribute"
+      - "html escaping"
+      - "jinja2 raw"
+      - "response.html"
+
+  input:
+    score: 8
+    description: "Input validation vulnerabilities"
+    patterns:
+      - "request.args"
+      - "request.form"
+      - "request.values"
+      - "request.json"
+      - "request.files"
+      - "raw input"
+      - "unvalidated data"
+      - "form parsing"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure"
+    patterns:
+      - "config values"
+      - "debug mode"
+      - "error handling"
+      - "app.config"
+      - "environment vars"
+      - "secret_key"
+      - "credentials"
+      - "sensitive info"
+
+  session:
+    score: 7
+    description: "Session management issues"
+    patterns:
+      - "session object"
+      - "session interface"
+      - "session handling"
+      - "cookie session"
+      - "server session"
+      - "session config"
+      - "session security"
+      - "flask_session"
+
+  config:
+    score: 8
+    description: "Security misconfigurations"
+    patterns:
+      - "app.config"
+      - "debug=True"
+      - "testing mode"
+      - "development config"
+      - "security headers"
+      - "CORS settings"
+      - "upload folder"
+      - "environment"
+
+  logging:
+    score: 6
+    description: "Sensitive data logging"
+    patterns:
+      - "app.logger"
+      - "logging config"
+      - "error logging"
+      - "debug logging"
+      - "log handlers"
+      - "sensitive data"
+      - "log format"
+      - "log level"
+
+  crypto:
+    score: 6
+    description: "Cryptographic issues"
+    patterns:
+      - "generate_password_hash"
+      - "check_password_hash"
+      - "secret_key"
+      - "token generation"
+      - "random values"
+      - "salt generation"
+      - "encryption"
+      - "secure tokens"
+
+  rce:
+    score: 7
+    description: "Remote code execution risks"
+    patterns:
+      - "eval"
+      - "exec"
+      - "subprocess"
+      - "os.system"
+      - "shell commands"
+      - "template injection"
+      - "dynamic imports"
+      - "code execution"
+
+  ssrf:
+    score: 7
+    description: "SSRF vulnerabilities"
+    patterns:
+      - "requests.get"
+      - "urllib.request"
+      - "http client"
+      - "remote content"
+      - "URL validation"
+      - "external requests"
+      - "proxy requests"
+      - "webhook calls"
+
+  xxe:
+    score: 5
+    description: "XXE in XML processing"
+    patterns:
+      - "xml parsing"
+      - "ElementTree"
+      - "lxml usage"
+      - "XML processing"
+      - "feed parsing"
+      - "XML import"
+      - "document parsing"
+      - "external entities"
+
+  pathtra:
+    score: 7
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "send_file"
+      - "file operations"
+      - "open function"
+      - "file paths"
+      - "directory access"
+      - "static files"
+      - "file uploads"
+      - "path joining"
+
+  idor:
+    score: 8
+    description: "IDOR vulnerabilities"
+    patterns:
+      - "get_by_id"
+      - "route parameters"
+      - "user access"
+      - "resource fetch"
+      - "direct references"
+      - "object loading"
+      - "data access"
+      - "authorization"
+
+  secrets:
+    score: 7
+    description: "Hardcoded secrets"
+    patterns:
+      - "app.config"
+      - "environment vars"
+      - "API keys"
+      - "database URL"
+      - "credentials"
+      - "secret keys"
+      - "tokens"
+      - "passwords"
+
+  auth:
+    score: 8
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "login_required"
+      - "current_user"
+      - "user loader"
+      - "session auth"
+      - "token auth"
+      - "password check"
+      - "user validation"
+      - "permissions"
+
+  csrf:
+    score: 7
+    description: "CSRF vulnerabilities"
+    patterns:
+      - "csrf_token"
+      - "CSRFProtect"
+      - "form tokens"
+      - "csrf protection"
+      - "secure forms"
+      - "request validation"
+      - "token verification"
+      - "cross-site request"

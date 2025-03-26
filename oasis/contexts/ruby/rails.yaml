@@ -15,12 +15,210 @@ security_context: |
   - File upload security
 
 vulnerability_patterns:
-  sql_injection:
-    - "find_by_sql"
-    - "execute"
+  sqli:
+    score: 6
+    description: "SQL injection in ActiveRecord operations"
+    patterns:
+      - "where(params[])"
+      - "find_by_sql"
+      - "execute raw"
+      - "Model.where"
+      - "connection.execute"
+      - "sanitize_sql"
+      - "raw SQL"
+      - "unsafe query"
+
   xss:
-    - "raw"
-    - "html_safe"
-  mass_assignment:
-    - "attr_accessible"
-    - "permit" 
+    score: 7
+    description: "XSS through view rendering and helpers"
+    patterns:
+      - "raw output"
+      - "html_safe"
+      - "sanitize"
+      - "safe_join"
+      - "content_tag"
+      - "raw helper"
+      - "escape_javascript"
+      - "javascript_tag"
+
+  input:
+    score: 7
+    description: "Input validation vulnerabilities"
+    patterns:
+      - "params[]"
+      - "permit"
+      - "strong parameters"
+      - "mass assignment"
+      - "attr_accessible"
+      - "validates"
+      - "validation"
+      - "sanitization"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure"
+    patterns:
+      - "config/secrets.yml"
+      - "credentials.yml"
+      - "database.yml"
+      - "master.key"
+      - "environment vars"
+      - "production logs"
+      - "debug info"
+      - "sensitive data"
+
+  session:
+    score: 6
+    description: "Session management issues"
+    patterns:
+      - "session store"
+      - "session[]"
+      - "cookies[]"
+      - "session config"
+      - "session security"
+      - "cookie settings"
+      - "session handling"
+      - "session timeout"
+
+  config:
+    score: 7
+    description: "Security misconfigurations"
+    patterns:
+      - "config/environments"
+      - "initializers"
+      - "security settings"
+      - "debug mode"
+      - "production config"
+      - "development mode"
+      - "security headers"
+      - "CORS settings"
+
+  logging:
+    score: 6
+    description: "Sensitive data logging"
+    patterns:
+      - "Rails.logger"
+      - "logger.debug"
+      - "logger.info"
+      - "production.log"
+      - "development.log"
+      - "log filters"
+      - "sensitive params"
+      - "log level"
+
+  crypto:
+    score: 6
+    description: "Cryptographic issues"
+    patterns:
+      - "BCrypt"
+      - "has_secure_password"
+      - "encryption key"
+      - "digest"
+      - "secret_key_base"
+      - "MessageEncryptor"
+      - "MessageVerifier"
+      - "random tokens"
+
+  rce:
+    score: 7
+    description: "Remote code execution risks"
+    patterns:
+      - "eval"
+      - "system"
+      - "exec"
+      - "backticks"
+      - "constantize"
+      - "send"
+      - "unsafe deserialize"
+      - "yaml load"
+
+  ssrf:
+    score: 7
+    description: "SSRF vulnerabilities"
+    patterns:
+      - "Net::HTTP"
+      - "open-uri"
+      - "http client"
+      - "remote request"
+      - "URL validation"
+      - "HTTP fetch"
+      - "external request"
+      - "webhook calls"
+
+  xxe:
+    score: 6
+    description: "XXE in XML processing"
+    patterns:
+      - "XML parsing"
+      - "Nokogiri"
+      - "REXML"
+      - "XML input"
+      - "external entities"
+      - "document parse"
+      - "XML config"
+      - "feed parsing"
+
+  pathtra:
+    score: 7
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "send_file"
+      - "file read"
+      - "file write"
+      - "path join"
+      - "file operations"
+      - "directory traversal"
+      - "file access"
+      - "path manipulation"
+
+  idor:
+    score: 7
+    description: "IDOR vulnerabilities"
+    patterns:
+      - "find params"
+      - "resource access"
+      - "user scope"
+      - "authorization check"
+      - "access control"
+      - "direct reference"
+      - "model fetch"
+      - "record access"
+
+  secrets:
+    score: 7
+    description: "Hardcoded secrets"
+    patterns:
+      - "credentials.yml"
+      - "secrets.yml"
+      - "master.key"
+      - "API keys"
+      - "tokens"
+      - "passwords"
+      - "secret keys"
+      - "sensitive data"
+
+  auth:
+    score: 6
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "devise"
+      - "authenticate"
+      - "current_user"
+      - "user session"
+      - "login process"
+      - "password reset"
+      - "remember token"
+      - "auth tokens"
+
+  csrf:
+    score: 5
+    description: "CSRF vulnerabilities"
+    patterns:
+      - "protect_from_forgery"
+      - "csrf token"
+      - "authenticity token"
+      - "form security"
+      - "request origin"
+      - "verify token"
+      - "skip forgery"
+      - "csrf protection" 

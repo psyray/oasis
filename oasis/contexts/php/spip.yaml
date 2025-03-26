@@ -1,0 +1,272 @@
+ignore_patterns:
+  - tmp/**
+  - config/**
+  - IMG/**
+  - local/**
+  - cache/**
+  - plugins/**/cache/**
+  - squelettes/cache/**
+  - .htaccess
+  - config/connect.php
+  - robots.txt
+
+security_context: |
+  SPIP specific security considerations:
+  - Authentication system with auteur_session
+  - Editorial workflow security
+  - Plugin system security
+  - Template (squelettes) security
+  - Cache system security
+  - Form token validation (securiser_action)
+  - Database query security through sql_*
+  - File upload security
+  - Session management
+  - URL rewriting security
+
+vulnerability_patterns:
+  sqli:
+    score: 8
+    description: "SQL injection in SPIP database operations"
+    patterns:
+      - "sql_query"
+      - "sql_select"
+      - "sql_fetch"
+      - "sql_in"
+      - "spip_query"
+      - "direct SQL"
+      - "raw query"
+      - "_request without sql_quote"
+      - "sql_insertq"
+      - "sql_updateq"
+
+  xss:
+    score: 8
+    description: "XSS vulnerabilities in squelettes and plugins"
+    patterns:
+      - "propre()"
+      - "typo()"
+      - "echapper_html"
+      - "entites_html"
+      - "raw HTML"
+      - "#TEXTE"
+      - "#TITRE"
+      - "filtre |sans_filtre"
+      - "balise_HTML"
+      - "interdire_scripts"
+
+  input:
+    score: 7
+    description: "Input validation vulnerabilities"
+    patterns:
+      - "_request"
+      - "set_request"
+      - "recuperer_fond"
+      - "charger_fonction"
+      - "formulaires_"
+      - "verifier_"
+      - "traiter_"
+      - "form data"
+      - "input validation"
+      - "parameter handling"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure"
+    patterns:
+      - "connect.php"
+      - "mes_options.php"
+      - "inc_connect"
+      - "debug info"
+      - "error display"
+      - "log files"
+      - "backup files"
+      - "config files"
+      - "private data"
+      - "sensitive info"
+
+  session:
+    score: 8
+    description: "Session management issues"
+    patterns:
+      - "auteur_session"
+      - "session_set"
+      - "auth_identifier_login"
+      - "auth_pass"
+      - "cookie SPIP"
+      - "session_get"
+      - "inc_session"
+      - "session security"
+      - "remember me"
+      - "session fixation"
+
+  config:
+    score: 7
+    description: "Security misconfigurations"
+    patterns:
+      - "ecrire/inc_version"
+      - "mes_options.php"
+      - "_SPIP_TEST"
+      - "spip_connect"
+      - "define('_ECRIRE_INC_VERSION')"
+      - "configuration settings"
+      - "debug mode"
+      - "error reporting"
+      - "security options"
+      - "server config"
+
+  logging:
+    score: 6
+    description: "Sensitive data logging"
+    patterns:
+      - "spip_log"
+      - "journal()"
+      - "debug_log"
+      - "error_log"
+      - "log files"
+      - "debug output"
+      - "sensitive data"
+      - "log storage"
+      - "error handling"
+      - "debug info"
+
+  crypto:
+    score: 7
+    description: "Cryptographic issues"
+    patterns:
+      - "creer_pass"
+      - "md5"
+      - "sha1"
+      - "chiffrer"
+      - "dechiffrer"
+      - "salt"
+      - "password hash"
+      - "crypto functions"
+      - "random generation"
+      - "key storage"
+
+  rce:
+    score: 8
+    description: "Remote code execution risks"
+    patterns:
+      - "eval()"
+      - "exec()"
+      - "shell_exec"
+      - "system()"
+      - "include_spip"
+      - "charger_fonction"
+      - "find_in_path"
+      - "code execution"
+      - "plugin install"
+      - "template execution"
+
+  ssrf:
+    score: 7
+    description: "SSRF vulnerabilities"
+    patterns:
+      - "recuperer_url"
+      - "copie_locale"
+      - "distant_file"
+      - "http request"
+      - "external content"
+      - "feed import"
+      - "remote files"
+      - "HTTP client"
+      - "URL validation"
+      - "external API"
+
+  xxe:
+    score: 6
+    description: "XXE in XML processing"
+    patterns:
+      - "XML parsing"
+      - "simplexml"
+      - "feed processing"
+      - "XML import"
+      - "external entities"
+      - "XML handling"
+      - "syndication"
+      - "RSS processing"
+
+  pathtra:
+    score: 7
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "find_in_path"
+      - "fopen"
+      - "file_exists"
+      - "copier_fichier"
+      - "creer_repertoire"
+      - "effacer_repertoire"
+      - "file operations"
+      - "path manipulation"
+      - "file inclusion"
+      - "directory traversal"
+
+  idor:
+    score: 8
+    description: "IDOR vulnerabilities"
+    patterns:
+      - "id_article"
+      - "id_auteur"
+      - "id_rubrique"
+      - "direct references"
+      - "autoriser()"
+      - "access control"
+      - "user separation"
+      - "permission check"
+      - "object access"
+      - "data access"
+
+  secrets:
+    score: 7
+    description: "Hardcoded secrets"
+    patterns:
+      - "connect.php"
+      - "mes_options.php"
+      - "API keys"
+      - "database config"
+      - "secret keys"
+      - "passwords"
+      - "tokens"
+      - "private data"
+      - "credentials"
+      - "sensitive info"
+
+  auth:
+    score: 8
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "auth_identifier_login"
+      - "auth_pass"
+      - "autoriser()"
+      - "inc_auth"
+      - "login process"
+      - "user validation"
+      - "permission system"
+      - "access control"
+      - "authentication"
+      - "user rights"
+
+  csrf:
+    score: 8
+    description: "CSRF vulnerabilities"
+    patterns:
+      - "securiser_action()"
+      - "calculer_cle_action"
+      - "verifier_cle_action"
+      - "form token"
+      - "request validation"
+      - "form security"
+      - "state changing"
+      - "action security"
+      - "CSRF protection"
+      - "request verification"
+
+security_files:
+  - ecrire/inc_version.php
+  - ecrire/inc/auth.php
+  - ecrire/inc/securiser_action.php
+  - ecrire/inc/session.php
+  - ecrire/base/connect_sql.php
+  - ecrire/auth/spip.php
+  - plugins/auto/csrf 

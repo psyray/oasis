@@ -15,13 +15,196 @@ security_context: |
   - File upload validation
 
 vulnerability_patterns:
-  sql_injection:
-    - "raw("
-    - "extra("
-    - "RawSQL"
+  sqli:
+    score: 5
+    description: "Moderate risk due to ORM, but possible via raw queries"
+    patterns:
+      - "raw()"
+      - "extra()"
+      - "RawSQL"
+      - "connection.cursor()"
+      - "execute()"
+      - "Model.objects.raw"
+
   xss:
-    - "mark_safe"
-    - "|safe"
-  file_upload:
-    - "FileField"
-    - "ImageField" 
+    score: 6
+    description: "Possible despite auto-escaping"
+    patterns:
+      - "mark_safe"
+      - "safe"
+      - "|safe"
+      - "format_html"
+      - "render_to_string"
+      - "json_script"
+
+  ssrf:
+    score: 7
+    description: "Common in modern applications"
+    patterns:
+      - "requests.get"
+      - "urllib.request"
+      - "http.client"
+      - "urllib.parse"
+      - "aiohttp.ClientSession"
+
+  csrf:
+    score: 4
+    description: "Less common due to built-in middleware"
+    patterns:
+      - "@csrf_exempt"
+      - "CSRF_COOKIE_SECURE"
+      - "ensure_csrf_cookie"
+      - "csrf_protect"
+      - "CsrfViewMiddleware"
+
+  auth:
+    score: 6
+    description: "Authentication and authorization issues"
+    patterns:
+      - "@login_required"
+      - "authenticate()"
+      - "is_authenticated"
+      - "user_passes_test"
+      - "permission_required"
+
+  config:
+    score: 8
+    description: "Django settings and configuration issues"
+    patterns:
+      - "DEBUG = True"
+      - "ALLOWED_HOSTS"
+      - "MIDDLEWARE"
+      - "SECRET_KEY"
+      - "DATABASES"
+
+  idor:
+    score: 7
+    description: "Common in view parameters and API endpoints"
+    patterns:
+      - "get_object_or_404"
+      - "filter(user="
+      - "get(pk="
+      - "objects.get(id="
+      - "lookup_field"
+
+  secrets:
+    score: 6
+    description: "Sensitive data in settings and code"
+    patterns:
+      - "settings.py"
+      - "local_settings.py"
+      - ".env"
+      - "API_KEY"
+      - "PASSWORD"
+
+  pathtra:
+    score: 6
+    description: "Path traversal vulnerabilities in Django"
+    patterns:
+      - "open()"
+      - "FileResponse"
+      - "SendFile"
+      - "static.serve"
+      - "document_root"
+      - "file_handler"
+      - "DEFAULT_FILE_STORAGE"
+      - "FileSystemStorage"
+      - "MEDIA_ROOT"
+      - "STATIC_ROOT"
+
+  input:
+    score: 7
+    description: "Input validation issues in Django"
+    patterns:
+      - "clean_data"
+      - "request.POST.get"
+      - "request.GET.get"
+      - "request.FILES"
+      - "request.body"
+      - "request.raw_post_data"
+      - "QueryDict"
+      - "MultiValueDict"
+      - "Form validation"
+      - "ModelForm validation"
+
+  crypto:
+    score: 5
+    description: "Cryptographic issues in Django"
+    patterns:
+      - "SECRET_KEY"
+      - "default_hasher"
+      - "make_password"
+      - "check_password"
+      - "pbkdf2"
+      - "Fernet"
+      - "cryptographic_signing"
+      - "signing.dumps"
+      - "signing.loads"
+      - "get_random_string"
+
+  logging:
+    score: 6
+    description: "Sensitive data logging issues"
+    patterns:
+      - "logger.debug"
+      - "logger.info"
+      - "logger.error"
+      - "traceback"
+      - "DEBUG = True"
+      - "LOGGING"
+      - "request.META"
+      - "django.request"
+      - "django.security"
+      - "django.db.backends"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure in Django"
+    patterns:
+      - "settings.py"
+      - "django.conf"
+      - "DEBUG = True"
+      - "serializer.data"
+      - "JsonResponse"
+      - "__dict__"
+      - "model_to_dict"
+      - "vars()"
+
+  session:
+    score: 6
+    description: "Session vulnerabilities in Django"
+    patterns:
+      - "SESSION_COOKIE_SECURE"
+      - "SESSION_COOKIE_HTTPONLY"
+      - "request.session"
+      - "SessionMiddleware"
+      - "SESSION_EXPIRE_AT_BROWSER_CLOSE"
+      - "SESSION_COOKIE_AGE"
+      - "SESSION_SAVE_EVERY_REQUEST"
+      - "rotate_token()"
+
+  rce:
+    score: 7
+    description: "RCE vulnerabilities in Django"
+    patterns:
+      - "eval"
+      - "exec"
+      - "subprocess"
+      - "os.system"
+      - "os.popen"
+      - "shell=True"
+      - "template.render"
+      - "mark_safe"
+
+  xxe:
+    score: 5
+    description: "XXE vulnerabilities in Django XML processing"
+    patterns:
+      - "xml.etree"
+      - "xmlrpc"
+      - "defusedxml"
+      - "ElementTree"
+      - "minidom"
+      - "pulldom"
+      - "sax"
+      - "expatreader" 

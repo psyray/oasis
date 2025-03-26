@@ -14,12 +14,212 @@ security_context: |
   - Module security
 
 vulnerability_patterns:
-  api:
-    - "useFetch"
-    - "asyncData"
+  sqli:
+    score: 6
+    description: "SQL injection in Nuxt server middleware and API"
+    patterns:
+      - "asyncData query"
+      - "fetch method"
+      - "$axios query"
+      - "server middleware database"
+      - "prisma raw query"
+      - "knex raw"
+      - "database operations"
+      - "dynamic SQL"
+
   xss:
-    - "v-html"
-    - "$content"
-  state:
-    - "useState"
-    - "useStore" 
+    score: 9
+    description: "XSS through Vue templates and SSR"
+    patterns:
+      - "v-html"
+      - "$refs innerHTML"
+      - "v-bind:href"
+      - "computed HTML"
+      - "sanitize-html"
+      - "domProps"
+      - "template injection"
+      - "dynamic rendering"
+      - "nuxt-html-sanitizer"
+
+  input:
+    score: 8
+    description: "Input validation in Nuxt forms and API"
+    patterns:
+      - "req.body"
+      - "$route.params"
+      - "$route.query"
+      - "form validation"
+      - "vee-validate"
+      - "nuxt-validate"
+      - "server middleware"
+      - "file upload"
+      - "input sanitization"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure in Nuxt"
+    patterns:
+      - "asyncData"
+      - "fetch hook"
+      - "store state"
+      - "nuxt.config.js"
+      - "env variables"
+      - "API responses"
+      - "error pages"
+      - "debug info"
+
+  session:
+    score: 7
+    description: "Session management in Nuxt applications"
+    patterns:
+      - "auth module"
+      - "cookie handling"
+      - "vuex store"
+      - "nuxt-session"
+      - "jwt tokens"
+      - "localStorage"
+      - "sessionStorage"
+      - "auth strategy"
+
+  config:
+    score: 8
+    description: "Security misconfigurations in Nuxt"
+    patterns:
+      - "nuxt.config.js"
+      - "build modules"
+      - "security headers"
+      - "CSP settings"
+      - "server middleware"
+      - "axios config"
+      - "proxy settings"
+      - "environment config"
+
+  logging:
+    score: 6
+    description: "Sensitive data in Nuxt logs"
+    patterns:
+      - "console.log"
+      - "nuxt logger"
+      - "error handler"
+      - "debug mode"
+      - "winston integration"
+      - "log files"
+      - "error tracking"
+      - "performance logs"
+
+  crypto:
+    score: 5
+    description: "Cryptographic issues in Nuxt"
+    patterns:
+      - "crypto functions"
+      - "hash generation"
+      - "token encryption"
+      - "password hashing"
+      - "secure random"
+      - "key generation"
+      - "JWT operations"
+      - "cookie encryption"
+
+  rce:
+    score: 7
+    description: "RCE in Nuxt server features"
+    patterns:
+      - "eval usage"
+      - "server middleware exec"
+      - "child_process"
+      - "dynamic imports"
+      - "template compilation"
+      - "unsafe node modules"
+      - "dynamic requires"
+      - "code execution"
+
+  ssrf:
+    score: 7
+    description: "SSRF in Nuxt data fetching"
+    patterns:
+      - "$axios requests"
+      - "asyncData fetch"
+      - "proxy requests"
+      - "API forwarding"
+      - "external URLs"
+      - "webhook handling"
+      - "dynamic endpoints"
+      - "URL validation"
+
+  xxe:
+    score: 4
+    description: "XXE in server-side processing"
+    patterns:
+      - "XML parsing"
+      - "content processing"
+      - "file uploads"
+      - "document handling"
+      - "feed parsing"
+      - "API XML"
+      - "SOAP requests"
+      - "DTD handling"
+
+  pathtra:
+    score: 6
+    description: "Path traversal in Nuxt static and dynamic routes"
+    patterns:
+      - "static files"
+      - "nuxt generate"
+      - "dynamic routes"
+      - "file operations"
+      - "assets handling"
+      - "path manipulation"
+      - "route parameters"
+      - "file access"
+
+  idor:
+    score: 7
+    description: "IDOR in Nuxt routes and API"
+    patterns:
+      - "dynamic params"
+      - "user data access"
+      - "resource fetching"
+      - "API endpoints"
+      - "authorization check"
+      - "access control"
+      - "data isolation"
+      - "user separation"
+
+  secrets:
+    score: 8
+    description: "Secrets exposure in Nuxt configuration"
+    patterns:
+      - ".env"
+      - "runtime config"
+      - "API keys"
+      - "private keys"
+      - "credentials"
+      - "tokens"
+      - "sensitive data"
+      - "configuration secrets"
+
+  auth:
+    score: 8
+    description: "Authentication vulnerabilities in Nuxt"
+    patterns:
+      - "@nuxtjs/auth"
+      - "middleware auth"
+      - "authentication flow"
+      - "token handling"
+      - "session management"
+      - "login process"
+      - "role checking"
+      - "permission validation"
+
+  csrf:
+    score: 7
+    description: "CSRF in Nuxt forms and API"
+    patterns:
+      - "form submission"
+      - "CSRF token"
+      - "axios interceptors"
+      - "state changing"
+      - "cross-origin"
+      - "token validation"
+      - "request verification"
+      - "secure forms" 

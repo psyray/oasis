@@ -14,12 +14,199 @@ security_context: |
   - HTTP interceptors for security headers
 
 vulnerability_patterns:
+  sqli:
+    score: 3
+    description: "SQL injection possible in frontend queries"
+    patterns:
+      - "this.http.get(`${url}?q=${query}`"
+      - "params.append('query'"
+      - "executeQuery"
+      - "graphql query"
+      - "IndexedDB query"
+
   xss:
-    - "bypassSecurityTrustHtml"
-    - "bypassSecurityTrustScript"
+    score: 9
+    description: "High risk of XSS in Angular templates and bindings"
+    patterns:
+      - "[innerHTML]="
+      - "bypassSecurityTrustHtml"
+      - "DomSanitizer.bypass"
+      - "bypassSecurityTrustScript"
+      - "bypassSecurityTrustStyle"
+      - "bypassSecurityTrustUrl"
+      - "bypassSecurityTrustResourceUrl"
+      - "sanitizer.sanitize"
+      - "template interpolation"
+      - "<div [html]="
+
+  input:
+    score: 8
+    description: "Input validation issues in forms and user input"
+    patterns:
+      - "FormGroup"
+      - "FormControl"
+      - "ngModel"
+      - "[(ngModel)]"
+      - "Validators"
+      - "FormBuilder"
+      - "ReactiveFormsModule"
+      - "validateForm"
+      - "custom validator"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure in frontend"
+    patterns:
+      - "localStorage"
+      - "sessionStorage"
+      - "IndexedDB"
+      - "cookies"
+      - "environment.ts"
+      - "debug: true"
+      - "console.log"
+      - "error handling"
+      - "API keys"
+
+  session:
+    score: 6
+    description: "Client-side session management issues"
+    patterns:
+      - "JWT token"
+      - "session storage"
+      - "AuthService"
+      - "TokenService"
+      - "SessionService"
+      - "remember me"
+      - "session timeout"
+      - "token refresh"
+
+  config:
+    score: 7
+    description: "Security misconfigurations in Angular"
+    patterns:
+      - "angular.json"
+      - "environment.prod.ts"
+      - "tsconfig.json"
+      - "enableProdMode"
+      - "HttpClient config"
+      - "SecurityContext"
+      - "Content-Security-Policy"
+      - "debug mode"
+
+  logging:
+    score: 5
+    description: "Sensitive data in logs and error messages"
+    patterns:
+      - "console.log"
+      - "console.debug"
+      - "console.error"
+      - "ErrorHandler"
+      - "debug logging"
+      - "error tracking"
+      - "analytics data"
+      - "performance monitoring"
+
+  crypto:
+    score: 4
+    description: "Client-side cryptographic operations"
+    patterns:
+      - "crypto.subtle"
+      - "CryptoJS"
+      - "hash function"
+      - "encryption"
+      - "WebCrypto"
+      - "random values"
+      - "key generation"
+
+  rce:
+    score: 3
+    description: "Client-side code execution risks"
+    patterns:
+      - "eval"
+      - "Function constructor"
+      - "setTimeout string"
+      - "setInterval string"
+      - "new Function"
+      - "dynamic import"
+
+  ssrf:
+    score: 4
+    description: "SSRF through frontend requests"
+    patterns:
+      - "HttpClient.get"
+      - "fetch API"
+      - "dynamic URL"
+      - "WebSocket"
+      - "EventSource"
+      - "dynamic endpoints"
+
+  xxe:
+    score: 2
+    description: "XML processing in frontend"
+    patterns:
+      - "DOMParser"
+      - "XML parsing"
+      - "SOAP requests"
+      - "XML HTTP request"
+      - "parseXML"
+
+  pathtra:
+    score: 3
+    description: "Path manipulation in routes and resources"
+    patterns:
+      - "Router navigation"
+      - "resource URLs"
+      - "asset loading"
+      - "dynamic imports"
+      - "lazy loading"
+      - "route parameters"
+
+  idor:
+    score: 5
+    description: "IDOR in frontend routes and API calls"
+    patterns:
+      - "route parameters"
+      - "user ID in URL"
+      - "resource ID"
+      - "direct references"
+      - "API endpoints"
+      - "data access"
+
+  secrets:
+    score: 7
+    description: "Hardcoded secrets in Angular code"
+    patterns:
+      - "API keys"
+      - "environment constants"
+      - "hardcoded credentials"
+      - "OAuth tokens"
+      - "service accounts"
+      - "configuration values"
+      - "encryption keys"
+      - "analytics IDs"
+
+  auth:
+    score: 8
+    description: "Authentication issues in Angular"
+    patterns:
+      - "AuthGuard"
+      - "CanActivate"
+      - "JWT handling"
+      - "token validation"
+      - "authentication service"
+      - "login form"
+      - "password handling"
+      - "session management"
+      - "role-based access"
+
   csrf:
-    - "HttpClient"
-    - "fetch("
-  dom:
-    - "ElementRef"
-    - "Renderer2" 
+    score: 6
+    description: "CSRF vulnerabilities in Angular"
+    patterns:
+      - "HttpClient without interceptor"
+      - "XSRF-TOKEN"
+      - "csrf token"
+      - "withCredentials"
+      - "cookie handling"
+      - "form submission"
+      - "state changing requests" 
