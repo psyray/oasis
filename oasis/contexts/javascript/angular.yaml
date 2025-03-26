@@ -1,8 +1,8 @@
 ignore_patterns:
-  - node_modules/**
-  - dist/**
-  - .angular/**
-  - environment.*
+  - 'node_modules/**'
+  - 'dist/**'
+  - '.angular/**'
+  - 'environment.*'
 
 security_context: |
   Angular specific security considerations:

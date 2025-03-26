@@ -1,13 +1,13 @@
 ignore_patterns:
-  - cache/**
-  - data/cache/**
-  - vendor/**
-  - logs/**
-  - config/autoload/*.local.php
-  - config/development.config.php
-  - .htaccess
-  - composer.lock
-  - phpunit.xml
+  - 'cache/**'
+  - 'data/cache/**'
+  - 'vendor/**'
+  - 'logs/**'
+  - 'config/autoload/*.local.php'
+  - 'config/development.config.php'
+  - '.htaccess'
+  - 'composer.lock'
+  - 'phpunit.xml'
 
 security_context: |
   Zend Framework specific security considerations:

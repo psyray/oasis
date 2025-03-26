@@ -1,7 +1,7 @@
 ignore_patterns:
-  - target/**
-  - *.class
-  - struts.properties
+  - 'target/**'
+  - '*.class'
+  - 'struts.properties'
 
 security_context: |
   Struts specific security considerations:

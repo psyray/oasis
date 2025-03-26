@@ -1,8 +1,8 @@
 ignore_patterns:
-  - node_modules/**
-  - build/**
-  - dist/**
-  - .env*
+  - 'node_modules/**'
+  - 'build/**'
+  - 'dist/**'
+  - '.env*'
 
 security_context: |
   React specific security considerations:

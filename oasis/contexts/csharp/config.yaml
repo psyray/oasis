@@ -1,0 +1,45 @@
+name: C#
+extensions:
+  - cs
+  - cshtml
+  - csx
+  - razor
+  - ashx
+  - aspx
+  - ascx
+
+frameworks:
+  aspnetcore:
+    indicators:
+      - Program.cs
+      - Startup.cs
+    detection_patterns:
+      - appsettings.json
+      - wwwroot/
+      - Controllers/
+  
+  aspnetmvc:
+    indicators:
+      - Global.asax
+      - Web.config
+    detection_patterns:
+      - Views/
+      - Controllers/
+      - App_Start/
+  
+  blazor:
+    indicators:
+      - _Imports.razor
+      - App.razor
+    detection_patterns:
+      - Pages/
+      - Shared/
+      - wwwroot/
+  
+  entityframework:
+    indicators:
+      - DbContext
+    detection_patterns:
+      - Migrations/
+      - Models/
+      - Data/ 

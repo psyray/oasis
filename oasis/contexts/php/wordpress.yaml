@@ -1,8 +1,8 @@
 ignore_patterns:
-  - wp-content/uploads/**
-  - wp-content/cache/**
-  - wp-content/backup/**
-  - .htaccess
+  - 'wp-content/uploads/**'
+  - 'wp-content/cache/**'
+  - 'wp-content/backup/**'
+  - '.htaccess'
 
 security_context: |
   WordPress specific security considerations:

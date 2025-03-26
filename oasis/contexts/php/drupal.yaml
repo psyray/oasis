@@ -1,8 +1,8 @@
 ignore_patterns:
-  - sites/*/files/**
-  - sites/*/private/**
-  - sites/*/settings*.php
-  - vendor/**
+  - 'sites/*/files/**'
+  - 'sites/*/private/**'
+  - 'sites/*/settings*.php'
+  - 'vendor/**'
 
 security_context: |
   Drupal specific security considerations:

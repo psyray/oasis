@@ -1,8 +1,8 @@
 ignore_patterns:
-  - target/**
-  - .mvn/**
-  - *.class
-  - application-*.yml
+  - 'target/**'
+  - '.mvn/**'
+  - '*.class'
+  - 'application-*.yml'
 
 security_context: |
   Spring specific security considerations:

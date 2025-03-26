@@ -1,9 +1,9 @@
 ignore_patterns:
-  - tmp/**
-  - log/**
-  - vendor/**
-  - .bundle/**
-  - db/*.sqlite3
+  - 'tmp/**'
+  - 'log/**'
+  - 'vendor/**'
+  - '.bundle/**'
+  - 'db/*.sqlite3'
 
 security_context: |
   Rails specific security considerations:

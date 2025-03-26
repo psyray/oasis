@@ -1,9 +1,9 @@
 ignore_patterns:
-  - vendor/**
-  - var/cache/**
-  - var/log/**
-  - .env
-  - .env.*
+  - 'vendor/**'
+  - 'var/cache/**'
+  - 'var/log/**'
+  - '.env'
+  - '.env.*'
 
 security_context: |
   Symfony specific security considerations:

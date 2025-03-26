@@ -1,9 +1,9 @@
 ignore_patterns:
-  - __pycache__/**
-  - *.pyc
-  - media/**
-  - static/**
-  - .env
+  - '__pycache__/**'
+  - '*.pyc'
+  - 'media/**'
+  - 'static/**'
+  - '.env'
 
 security_context: |
   Django specific security considerations:

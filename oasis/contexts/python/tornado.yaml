@@ -1,8 +1,8 @@
 ignore_patterns:
-  - *.pyc
-  - __pycache__/**
-  - static/**
-  - log/**
+  - '*.pyc'
+  - '__pycache__/**'
+  - 'static/**'
+  - 'log/**'
 
 security_context: |
   Tornado specific security considerations:

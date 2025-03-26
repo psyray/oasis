@@ -1,7 +1,7 @@
 ignore_patterns:
-  - target/**
-  - *.class
-  - hibernate.properties
+  - 'target/**'
+  - '*.class'
+  - 'hibernate.properties'
 
 security_context: |
   Hibernate specific security considerations:

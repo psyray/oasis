@@ -1,0 +1,285 @@
+ignore_patterns:
+  - 'node_modules/**'
+  - 'dist/**'
+  - 'build/**'
+  - 'coverage/**'
+  - '.next/**'
+  - '.nuxt/**'
+  - '*.min.js'
+  - 'bundle.js'
+  - 'vendor/**'
+  - '.cache/**'
+
+security_context: |
+  JavaScript standard security considerations:
+  - Client-side execution environment risks
+  - DOM manipulation security
+  - Event handling and user input validation
+  - Cross-Origin security policies
+  - Secure data storage in browsers
+  - Asynchronous code execution safety
+
+vulnerability_patterns:
+  sqli:
+    score: 7
+    description: "SQL Injection in JavaScript database operations"
+    patterns:
+      - "string concatenation in SQL query"
+      - "user input directly in query"
+      - "lack of parameterized queries"
+      - "dynamic SQL generation"
+      - "raw input in database operations"
+      - "query parameters from request"
+      - "execute raw SQL"
+      - "format string in SQL"
+      - "SQL query string interpolation"
+      - "unsafe database.execute"
+      - "executeSql with template"
+
+  xss:
+    score: 9
+    description: "Cross-Site Scripting (XSS) in client-side JavaScript"
+    patterns:
+      - "unescaped output to HTML"
+      - "innerHTML with user input"
+      - "document.write with variables"
+      - "eval with user content"
+      - "rendering content without sanitization"
+      - "dangerous DOM operations"
+      - "raw user data in templates"
+      - "bypass content sanitization"
+      - "script injection vulnerability"
+      - "missing HTML encoding"
+      - "dangerouslySetInnerHTML"
+      - "template literals with user data"
+      - "attribute injection vulnerability"
+      - "data-* attribute with user input"
+      - "event handler assignment"
+      - "href with javascript: protocol"
+      - "DOM manipulation with createElement"
+      - "svg onload attribute"
+      - "CSS expression with user input"
+      - "postMessage without origin check"
+
+  input:
+    score: 8
+    description: "Insufficient Input Validation"
+    patterns:
+      - "input validation missing"
+      - "unvalidated user input"
+      - "unsafe type casting"
+      - "user-controlled parameter"
+      - "direct use of request parameters"
+      - "no input sanitization"
+      - "raw form data processing"
+      - "missing input boundary checks"
+      - "untrusted data handling"
+      - "user input without validation"
+      - "regex without timeout"
+      - "client-side validation only"
+      - "header injection vulnerability"
+      - "content-type validation missing"
+      - "file upload filtering bypass"
+
+  data:
+    score: 8
+    description: "Sensitive Data Exposure"
+    patterns:
+      - "sensitive data exposure"
+      - "plaintext credentials"
+      - "hardcoded secrets"
+      - "API keys in code"
+      - "unencrypted sensitive data"
+      - "information disclosure"
+      - "data leakage"
+      - "sensitive data in client-side code"
+      - "credentials in config files"
+      - "sensitive data caching"
+      - "credentials in URL parameters"
+      - "debug information disclosure"
+      - "internal IP disclosure"
+      - "server version exposure"
+      - "technology stack disclosure"
+
+  session:
+    score: 8
+    description: "Session Management Issues"
+    patterns:
+      - "session fixation"
+      - "insecure session handling"
+      - "session hijacking risk"
+      - "missing session timeout"
+      - "weak session ID generation"
+      - "session token exposure"
+      - "cookie security missing"
+      - "insufficient session expiration"
+      - "missing secure flag"
+      - "missing httpOnly flag"
+      - "session data in URL"
+      - "no session validation"
+      - "predictable session tokens"
+      - "client-side session storage"
+      - "missing SameSite attribute"
+
+  config:
+    score: 7
+    description: "Security Misconfiguration"
+    patterns:
+      - "security misconfiguration"
+      - "debug mode enabled"
+      - "insecure permissions"
+      - "missing security headers"
+      - "verbose error messages"
+      - "directory listing enabled"
+      - "development settings in production"
+      - "missing CORS protections"
+      - "dangerous HTTP headers"
+      - "X-Frame-Options missing"
+      - "Content-Security-Policy missing"
+      - "missing X-Content-Type-Options"
+      - "CORS wildcard origin"
+
+  logging:
+    score: 6
+    description: "Sensitive Data Logging"
+    patterns:
+      - "sensitive data in logs"
+      - "password logging"
+      - "PII in logs"
+      - "token logging"
+      - "unsafe error logging"
+      - "debug logging in production"
+      - "authentication data in logs"
+      - "session identifiers logged"
+      - "authorization tokens in logs"
+      - "API keys in debug logs"
+
+  crypto:
+    score: 7
+    description: "Insecure Cryptographic Usage"
+    patterns:
+      - "weak encryption"
+      - "insecure random number generation"
+      - "weak hash algorithm"
+      - "MD5 usage"
+      - "SHA1 usage"
+      - "static initialization vector"
+      - "hardcoded encryption key"
+      - "insufficient key size"
+      - "broken cipher implementation"
+      - "predictable random generator"
+
+  rce:
+    score: 9
+    description: "Remote Code Execution"
+    patterns:
+      - "eval with user input"
+      - "exec function with variables"
+      - "dynamic code evaluation"
+      - "eval in JavaScript"
+      - "Function constructor with input"
+      - "new Function with variable"
+      - "template expression evaluation"
+      - "code interpolation in string"
+
+  ssrf:
+    score: 7
+    description: "Server-Side Request Forgery"
+    patterns:
+      - "URL fetching from user input"
+      - "request module with variable URL"
+      - "http client with dynamic endpoint"
+      - "webhook implementation"
+      - "dynamic API requests"
+      - "URL parsing without validation"
+      - "fetch with user-provided URL"
+      - "unsafe URL redirection"
+      - "axios.get with variable"
+
+  xxe:
+    score: 6
+    description: "XML External Entity Injection"
+    patterns:
+      - "XML parser without entity restrictions"
+      - "XML processing without disabling DTD"
+      - "unsafe DOM parser"
+      - "XML libraries with dangerous defaults"
+      - "XML with custom entity handling"
+      - "untrusted DOCX/XLSX processing"
+      - "SVG with embedded XXE"
+      - "XML without schema validation"
+
+  pathtra:
+    score: 7
+    description: "Path Traversal"
+    patterns:
+      - "file operations with user input"
+      - "path concatenation without validation"
+      - "directory traversal vulnerability"
+      - "reading files with variable paths"
+      - "filepath not normalized"
+      - "unsafe file access"
+      - "path manipulation risk"
+      - "dot-dot-slash in paths"
+      - "missing filepath sanitization"
+      - "relative path navigation"
+
+  idor:
+    score: 7
+    description: "Insecure Direct Object Reference"
+    patterns:
+      - "user ID in URL parameters"
+      - "missing access control checks"
+      - "direct object reference in request"
+      - "lack of authorization validation"
+      - "resource ID manipulation vulnerability"
+      - "authorization bypass risk"
+      - "direct reference to database records"
+      - "object level authorization missing"
+      - "unsafe parameter handling"
+      - "insufficient permission checking"
+
+  secrets:
+    score: 8
+    description: "Hardcoded Secrets"
+    patterns:
+      - "hardcoded API key"
+      - "password in source code"
+      - "hardcoded credentials"
+      - "embedded secret"
+      - "private key in code"
+      - "OAuth token in variables"
+      - "secret key declaration"
+      - "cleartext password"
+      - "connection string with credentials"
+      - "JWT secret in code"
+
+  auth:
+    score: 8
+    description: "Authentication Issues"
+    patterns:
+      - "weak password requirements"
+      - "missing multi-factor authentication"
+      - "insufficient credential handling"
+      - "authentication bypass vulnerability"
+      - "insecure password storage"
+      - "broken authentication flow"
+      - "credential reset weakness"
+      - "session fixation vulnerability"
+      - "insecure remember me function"
+      - "inadequate brute force protection"
+
+  csrf:
+    score: 7
+    description: "Cross-Site Request Forgery"
+    patterns:
+      - "missing CSRF token"
+      - "state-changing operation without protection"
+      - "form submission without CSRF verification"
+      - "cookie-only authentication"
+      - "missing SameSite attribute"
+      - "actions without user confirmation"
+      - "lack of request origin validation"
+      - "missing anti-forgery token"
+      - "insecure cross-domain requests"
+      - "automatic actions without validation" 

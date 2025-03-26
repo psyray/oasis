@@ -1,8 +1,8 @@
 ignore_patterns:
-  - node_modules/**
-  - .nuxt/**
-  - dist/**
-  - .output/**
+  - 'node_modules/**'
+  - '.nuxt/**'
+  - 'dist/**'
+  - '.output/**'
 
 security_context: |
   Nuxt.js specific security considerations:

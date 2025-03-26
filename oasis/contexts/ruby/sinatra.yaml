@@ -1,8 +1,8 @@
 ignore_patterns:
-  - tmp/**
-  - log/**
-  - .bundle/**
-  - vendor/**
+  - 'tmp/**'
+  - 'log/**'
+  - '.bundle/**'
+  - 'vendor/**'
 
 security_context: |
   Sinatra specific security considerations:

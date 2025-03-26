@@ -27,7 +27,7 @@ class OasisScanner:
         self.ollama_manager = None
         self.embedding_manager = None
         self.output_dir = None
-        self.context_manager = None
+        self.security_analyzer = None
 
     def setup_argument_parser(self):
         """
@@ -74,6 +74,10 @@ class OasisScanner:
                                     help=self.get_vulnerability_help())
         analysis_group.add_argument('-ch', '--chunk-size', type=int,
                                     help=f'Maximum size of text chunks for embedding (default: {DEFAULT_ARGS["CHUNK_SIZE"]})')
+        analysis_group.add_argument('-ml', '--max-languages', type=int, default=3,
+                                    help='Maximum number of languages to detect and analyze (default: 3)')
+        analysis_group.add_argument('-na', '--no-autodetect', action='store_true',
+                                    help='Disable automatic technology stack detection')
         
         # Model Selection
         model_group = parser.add_argument_group('Model Selection')
@@ -115,6 +119,8 @@ class OasisScanner:
         
         # Special Modes
         special_group = parser.add_argument_group('Special Modes')
+        special_group.add_argument('-td', '--tech-detect', action='store_true',
+                                help='Detect and display technology stack profile only')
         special_group.add_argument('-a', '--audit', action='store_true',
                                 help='Run embedding distribution analysis')
         special_group.add_argument('-ol', '--ollama-url', dest='ollama_url', type=str, 
@@ -187,7 +193,7 @@ class OasisScanner:
             logger.info(f"{'='*len(msg)}")
 
             # Create analyzer with current main model and scan model
-            security_analyzer = SecurityAnalyzer(
+            self.security_analyzer = SecurityAnalyzer(
                 args=self.args,
                 llm_model=main_model,
                 embedding_manager=self.embedding_manager,
@@ -195,12 +201,15 @@ class OasisScanner:
                 scan_model=scan_model
             )
 
+            if language:
+                self.security_analyzer.set_technology_context(language, framework)
+
             # Set the current model for report generation
             self.report.current_model = main_model
 
             # Process analysis with selected model
             try:
-                security_analyzer.process_analysis_with_model(
+                self.security_analyzer.process_analysis_with_model(
                     vulnerabilities, 
                     self.args, 
                     self.report
@@ -286,25 +295,30 @@ class OasisScanner:
         self.report = Report(self.args.input_path, self.args.output_format)
 
         # Initialize context manager
-        self.context_manager = TechnologyContextManager()
+        self.tech_context = TechnologyContextManager(args=self.args)
 
-        # Initialize Ollama and check connection
-        if not self.args.web:
-            if not self._init_ollama(self.args.ollama_url):
-                return 1
-            # Initialize embedding manager and process input files
-            return self._execute_requested_mode() if self._init_processing() else 1
+        # If tech-detect mode is enabled, only perform technology detection
+        if hasattr(self.args, 'tech_detect') and self.args.tech_detect:
+            self.tech_context.detect_and_display_tech_stack(self.args.input_path)
+            return
 
         # Serve reports via web interface
-        WebServer(
-            self.report, 
-            debug=self.args.debug,
-            web_expose=self.args.web_expose,
-            web_password=self.args.web_password,
-            web_port=self.args.web_port
-        ).run()
-        return 0  # Exit after serving the web interface
-            
+        if hasattr(self.args, 'web') and self.args.web:
+            WebServer(
+                self.report, 
+                debug=self.args.debug,
+                web_expose=self.args.web_expose,
+                web_password=self.args.web_password,
+                web_port=self.args.web_port
+            ).run()
+            return 0  # Exit after serving the web interface
+
+        # Initialize Ollama and check connection
+        if not self._init_ollama(self.args.ollama_url):
+            return 1
+        # Initialize embedding manager and process input files
+        return self._execute_requested_mode() if self._init_processing() else 1
+
     def _init_arguments(self, args) -> Union[bool, None]:
         """
         Initialize and validate arguments
@@ -346,7 +360,7 @@ class OasisScanner:
         self._setup_logging()
 
         # Initialize context manager early for extension handling
-        self.context_manager = TechnologyContextManager()
+        self.context_manager = TechnologyContextManager(args=self.args)
 
         # Handle extensions based on language or auto-detection
         if hasattr(self.args, 'language') and self.args.language:

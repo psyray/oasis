@@ -1,8 +1,8 @@
 ignore_patterns:
-  - node_modules/**
-  - .next/**
-  - out/**
-  - build/**
+  - 'node_modules/**'
+  - '.next/**'
+  - 'out/**'
+  - 'build/**'
 
 security_context: |
   Next.js specific security considerations:

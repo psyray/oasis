@@ -1,8 +1,8 @@
 ignore_patterns:
-  - __pycache__/**
-  - .pytest_cache/**
-  - venv/**
-  - .env
+  - '__pycache__/**'
+  - '.pytest_cache/**'
+  - 'venv/**'
+  - '.env'
 
 security_context: |
   FastAPI specific security considerations:

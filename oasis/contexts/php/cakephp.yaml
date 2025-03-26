@@ -1,14 +1,14 @@
 ignore_patterns:
-  - tmp/**
-  - logs/**
-  - vendor/**
-  - config/app_local.php
-  - config/.env
-  - webroot/cache/**
-  - tests/**
-  - .htaccess
-  - composer.lock
-  - phpunit.xml.dist
+  - 'tmp/**'
+  - 'logs/**'
+  - 'vendor/**'
+  - 'config/app_local.php'
+  - 'config/.env'
+  - 'webroot/cache/**'
+  - 'tests/**'
+  - '.htaccess'
+  - 'composer.lock'
+  - 'phpunit.xml.dist'
 
 security_context: |
   CakePHP specific security considerations:

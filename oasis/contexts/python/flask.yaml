@@ -1,8 +1,8 @@
 ignore_patterns:
-  - __pycache__/**
-  - *.pyc
-  - instance/**
-  - .env
+  - '__pycache__/**'
+  - '*.pyc'
+  - 'instance/**'
+  - '.env'
 
 security_context: |
   Flask specific security considerations:

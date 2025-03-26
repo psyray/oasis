@@ -1,8 +1,8 @@
 ignore_patterns:
-  - *.pyc
-  - __pycache__/**
-  - data/**
-  - *.egg-info/**
+  - '*.pyc'
+  - '__pycache__/**'
+  - 'data/**'
+  - '*.egg-info/**'
 
 security_context: |
   Pyramid specific security considerations:

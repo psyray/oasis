@@ -1,0 +1,264 @@
+ignore_patterns:
+  - 'bin/**'
+  - 'obj/**'
+  - '.vs/**'
+  - 'packages/**'
+  - 'TestResults/**'
+  - '*.suo'
+  - '*.user'
+  - '*.cache'
+  - '*.dll'
+  - '*.pdb'
+  - '*.exe'
+  - 'Debug/**'
+  - 'Release/**'
+
+security_context: |
+  C# standard security considerations:
+  - .NET Framework/Core security implications
+  - Memory management through garbage collection
+  - Type safety and reflection risks
+  - LINQ injection risks
+  - Async/await security
+  - Serialization security
+
+vulnerability_patterns:
+  sqli:
+    score: 8
+    description: "SQL Injection in C# database operations"
+    patterns:
+      - "string concatenation in SQL query"
+      - "user input directly in query"
+      - "lack of parameterized queries"
+      - "dynamic SQL generation"
+      - "raw input in database operations"
+      - "query parameters from request"
+      - "execute raw SQL"
+      - "SqlCommand.CommandText"
+      - "ExecuteReader(string)"
+      - "string.Format SQL"
+
+  xss:
+    score: 7
+    description: "Cross-Site Scripting (XSS)"
+    patterns:
+      - "unescaped output to HTML"
+      - "raw user data in templates"
+      - "bypass content sanitization"
+      - "script injection vulnerability"
+      - "missing HTML encoding"
+      - "HttpUtility.Raw"
+      - "Response.Write(user input)"
+      - "Html.Raw"
+      - "@Html.Raw"
+      - "HtmlString"
+
+  input:
+    score: 8
+    description: "Insufficient Input Validation"
+    patterns:
+      - "input validation missing"
+      - "unvalidated user input"
+      - "unsafe type casting"
+      - "user-controlled parameter"
+      - "direct use of request parameters"
+      - "no input sanitization"
+      - "raw form data processing"
+      - "missing input boundary checks"
+      - "Request.Form"
+      - "Request.QueryString"
+
+  data:
+    score: 8
+    description: "Sensitive Data Exposure"
+    patterns:
+      - "sensitive data exposure"
+      - "plaintext credentials"
+      - "hardcoded secrets"
+      - "API keys in code"
+      - "unencrypted sensitive data"
+      - "information disclosure"
+      - "data leakage"
+      - "credentials in config files"
+      - "web.config secrets"
+      - "appsettings.json"
+
+  session:
+    score: 7
+    description: "Session Management Issues"
+    patterns:
+      - "session fixation"
+      - "insecure session handling"
+      - "session hijacking risk"
+      - "missing session timeout"
+      - "weak session ID generation"
+      - "session token exposure"
+      - "Session["
+      - "HttpContext.Session"
+      - "FormsAuthentication"
+      - "SessionID"
+
+  config:
+    score: 7
+    description: "Security Misconfiguration"
+    patterns:
+      - "security misconfiguration"
+      - "debug mode enabled"
+      - "insecure permissions"
+      - "missing security headers"
+      - "verbose error messages"
+      - "directory listing enabled"
+      - "CustomErrors Mode=Off"
+      - "compilation debug=true"
+      - "trace enabled=true"
+      - "<httpRuntime enableVersionHeader"
+
+  logging:
+    score: 6
+    description: "Sensitive Data Logging"
+    patterns:
+      - "sensitive data in logs"
+      - "password logging"
+      - "PII in logs"
+      - "token logging"
+      - "unsafe error logging"
+      - "debug logging in production"
+      - "authentication data in logs"
+      - "ILogger sensitive"
+      - "Console.WriteLine"
+      - "Debug.WriteLine"
+
+  crypto:
+    score: 8
+    description: "Insecure Cryptographic Usage"
+    patterns:
+      - "weak encryption"
+      - "insecure random number generation"
+      - "weak hash algorithm"
+      - "MD5 usage"
+      - "SHA1 usage"
+      - "static initialization vector"
+      - "hardcoded encryption key"
+      - "Random.Next"
+      - "RNGCryptoServiceProvider"
+      - "System.Random"
+
+  rce:
+    score: 9
+    description: "Remote Code Execution"
+    patterns:
+      - "eval with user input"
+      - "exec function with variables"
+      - "system call with parameters"
+      - "Process.Start"
+      - "Assembly.Load"
+      - "Type.GetType(string)"
+      - "dynamic code execution"
+      - "CSharpCodeProvider"
+      - "Assembly.LoadFile"
+      - "Activator.CreateInstance"
+
+  ssrf:
+    score: 7
+    description: "Server-Side Request Forgery"
+    patterns:
+      - "URL fetching from user input"
+      - "request module with variable URL"
+      - "http client with dynamic endpoint"
+      - "webhook implementation"
+      - "dynamic API requests"
+      - "HttpClient.GetAsync"
+      - "WebClient.DownloadString"
+      - "WebRequest.Create"
+      - "HttpWebRequest"
+      - "RestSharp.RestClient"
+
+  xxe:
+    score: 7
+    description: "XML External Entity Injection"
+    patterns:
+      - "XML parser without entity restrictions"
+      - "XML processing without disabling DTD"
+      - "unsafe DOM parser"
+      - "XML libraries with dangerous defaults"
+      - "XmlDocument.Load"
+      - "XmlReader.Create"
+      - "XmlSerializer"
+      - "XDocument.Load"
+      - "XPathDocument"
+      - "DataContractSerializer"
+
+  pathtra:
+    score: 8
+    description: "Path Traversal"
+    patterns:
+      - "file operations with user input"
+      - "path concatenation without validation"
+      - "directory traversal vulnerability"
+      - "reading files with variable paths"
+      - "filepath not normalized"
+      - "unsafe file access"
+      - "File.ReadAllText"
+      - "Path.Combine"
+      - "Directory.GetFiles"
+      - "FileStream"
+
+  idor:
+    score: 7
+    description: "Insecure Direct Object Reference"
+    patterns:
+      - "user ID in URL parameters"
+      - "missing access control checks"
+      - "direct object reference in request"
+      - "lack of authorization validation"
+      - "resource ID manipulation vulnerability"
+      - "authorization bypass risk"
+      - "direct reference to database records"
+      - "object level authorization missing"
+      - "RouteData.Values"
+      - "Request.QueryString"
+
+  secrets:
+    score: 8
+    description: "Hardcoded Secrets"
+    patterns:
+      - "hardcoded API key"
+      - "password in source code"
+      - "hardcoded credentials"
+      - "embedded secret"
+      - "private key in code"
+      - "OAuth token in variables"
+      - "secret key declaration"
+      - "cleartext password"
+      - "connection string with credentials"
+      - "ConfigurationManager.AppSettings"
+
+  auth:
+    score: 8
+    description: "Authentication Issues"
+    patterns:
+      - "weak password requirements"
+      - "missing multi-factor authentication"
+      - "insufficient credential handling"
+      - "authentication bypass vulnerability"
+      - "insecure password storage"
+      - "broken authentication flow"
+      - "credential reset weakness"
+      - "session fixation vulnerability"
+      - "FormsAuthentication"
+      - "MembershipProvider"
+
+  csrf:
+    score: 7
+    description: "Cross-Site Request Forgery"
+    patterns:
+      - "missing CSRF token"
+      - "state-changing operation without protection"
+      - "form submission without CSRF verification"
+      - "cookie-only authentication"
+      - "missing SameSite attribute"
+      - "actions without user confirmation"
+      - "lack of request origin validation"
+      - "ValidateAntiForgeryToken missing"
+      - "AntiForgeryToken"
+      - "RequestVerificationToken" 

@@ -1,8 +1,8 @@
 ignore_patterns:
-  - node_modules/**
-  - dist/**
-  - logs/**
-  - .env
+  - 'node_modules/**'
+  - 'dist/**'
+  - 'logs/**'
+  - '.env'
 
 security_context: |
   Express specific security considerations:

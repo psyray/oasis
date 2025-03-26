@@ -1,0 +1,229 @@
+ignore_patterns:
+  - 'target/**'
+  - 'build/**'
+  - '.gradle/**'
+  - '.mvn/**'
+  - '*.class'
+  - '*.jar'
+  - '.settings/**'
+  - 'bin/**'
+
+security_context: |
+  Java standard security considerations:
+  - Type safety and memory management through JVM
+  - Built-in security manager for access control
+  - Standard cryptographic APIs through JCA/JCE
+  - Input validation and output encoding
+  - Secure class loading and bytecode verification
+  - Thread safety and synchronization
+
+vulnerability_patterns:
+  sqli:
+    score: 8
+    description: "SQL injection in JDBC operations"
+    patterns:
+      - "Statement.execute"
+      - "createStatement()"
+      - "prepareStatement"
+      - "executeQuery"
+      - "executeUpdate"
+      - "string concatenation in SQL"
+      - "ResultSet.getString"
+      - "Connection.prepareCall"
+      - "JDBC direct query"
+      - "DatabaseMetaData"
+
+  xss:
+    score: 7
+    description: "Cross-site scripting in Java web applications"
+    patterns:
+      - "response.getWriter().print"
+      - "PrintWriter.print"
+      - "ServletOutputStream"
+      - "JSP scriptlets"
+      - "out.println"
+      - "response.getWriter().write"
+      - "StringBuilder append"
+      - "HtmlUtils"
+      - "raw HTML output"
+      - "unescaped content"
+
+  rce:
+    score: 9
+    description: "Remote code execution vulnerabilities"
+    patterns:
+      - "Runtime.exec"
+      - "ProcessBuilder"
+      - "System.load"
+      - "URLClassLoader"
+      - "Class.forName"
+      - "Method.invoke"
+      - "Constructor.newInstance"
+      - "ScriptEngine"
+      - "GroovyShell"
+      - "ObjectInputStream"
+
+  input:
+    score: 7
+    description: "Input validation vulnerabilities"
+    patterns:
+      - "request.getParameter"
+      - "getInputStream()"
+      - "BufferedReader"
+      - "ServletRequest"
+      - "getQueryString"
+      - "getHeader"
+      - "getCookies"
+      - "MultipartRequest"
+      - "parseRequest"
+      - "readLine()"
+
+  pathtra:
+    score: 8
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "File("
+      - "FileInputStream"
+      - "FileOutputStream"
+      - "RandomAccessFile"
+      - "Paths.get"
+      - "new File()"
+      - "FileReader"
+      - "FileWriter"
+      - "Files.readAllBytes"
+      - "Files.write"
+
+  crypto:
+    score: 7
+    description: "Cryptographic issues"
+    patterns:
+      - "MessageDigest"
+      - "Cipher"
+      - "SecretKeySpec"
+      - "IvParameterSpec"
+      - "KeyGenerator"
+      - "SecureRandom"
+      - "Mac"
+      - "KeyStore"
+      - "SSLContext"
+      - "TrustManager"
+
+  xxe:
+    score: 8
+    description: "XML External Entity vulnerabilities"
+    patterns:
+      - "DocumentBuilder"
+      - "SAXParser"
+      - "XMLReader"
+      - "TransformerFactory"
+      - "SchemaFactory"
+      - "ValidationFactory"
+      - "XMLInputFactory"
+      - "DOMParser"
+      - "SAXBuilder"
+      - "XPathExpression"
+
+  deserialization:
+    score: 9
+    description: "Unsafe deserialization vulnerabilities"
+    patterns:
+      - "ObjectInputStream"
+      - "readObject()"
+      - "XMLDecoder"
+      - "ObjectMapper"
+      - "fromXML"
+      - "unmarshall"
+      - "readValue"
+      - "deserialize"
+      - "readExternal"
+      - "Externalizable"
+
+  logging:
+    score: 6
+    description: "Logging vulnerabilities"
+    patterns:
+      - "System.out.println"
+      - "printStackTrace"
+      - "Logger"
+      - "LogFactory"
+      - "log4j"
+      - "SLF4J"
+      - "LogManager"
+      - "debug()"
+      - "error()"
+      - "info()"
+
+  auth:
+    score: 8
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "equals() for password"
+      - "compareTo"
+      - "String comparison"
+      - "Principal"
+      - "Subject"
+      - "Permission"
+      - "AccessController"
+      - "SecurityManager"
+      - "doPrivileged"
+      - "checkPermission"
+
+  secrets:
+    score: 8
+    description: "Hardcoded secrets and credentials"
+    patterns:
+      - "private static final String PASSWORD"
+      - "String password ="
+      - "String secret ="
+      - "String key ="
+      - "getConnection("
+      - "Properties.load"
+      - "System.getProperty"
+      - "System.getenv"
+      - "hardcoded credentials"
+      - ".properties file"
+
+  ssrf:
+    score: 7
+    description: "Server-Side Request Forgery"
+    patterns:
+      - "URL("
+      - "URLConnection"
+      - "HttpURLConnection"
+      - "HttpClient"
+      - "openConnection()"
+      - "openStream()"
+      - "getInputStream()"
+      - "Apache HttpClient"
+      - "OkHttpClient"
+      - "RestTemplate"
+
+  idor:
+    score: 7
+    description: "Insecure Direct Object References"
+    patterns:
+      - "findById"
+      - "getById"
+      - "load("
+      - "get("
+      - "select by id"
+      - "direct reference"
+      - "primary key"
+      - "object lookup"
+      - "entity retrieval"
+      - "direct access"
+
+  race:
+    score: 7
+    description: "Race conditions and thread safety issues"
+    patterns:
+      - "synchronized"
+      - "volatile"
+      - "AtomicInteger"
+      - "ConcurrentHashMap"
+      - "ThreadLocal"
+      - "ReentrantLock"
+      - "Semaphore"
+      - "CountDownLatch"
+      - "thread safety"
+      - "concurrent access" 

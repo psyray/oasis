@@ -1,8 +1,8 @@
 ignore_patterns:
-  - application/cache/**
-  - application/logs/**
-  - vendor/**
-  - .env
+  - 'application/cache/**'
+  - 'application/logs/**'
+  - 'vendor/**'
+  - '.env'
 
 security_context: |
   CodeIgniter specific security considerations:

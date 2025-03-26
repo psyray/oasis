@@ -1,8 +1,8 @@
 ignore_patterns:
-  - node_modules/**
-  - dist/**
-  - .nuxt/**
-  - .output/**
+  - 'node_modules/**'
+  - 'dist/**'
+  - '.nuxt/**'
+  - '.output/**'
 
 security_context: |
   Vue specific security considerations:

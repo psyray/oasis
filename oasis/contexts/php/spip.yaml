@@ -1,14 +1,14 @@
 ignore_patterns:
-  - tmp/**
-  - config/**
-  - IMG/**
-  - local/**
-  - cache/**
-  - plugins/**/cache/**
-  - squelettes/cache/**
-  - .htaccess
-  - config/connect.php
-  - robots.txt
+  - 'tmp/**'
+  - 'config/**'
+  - 'IMG/**'
+  - 'local/**'
+  - 'cache/**'
+  - 'plugins/**/cache/**'
+  - 'squelettes/cache/**'
+  - '.htaccess'
+  - 'config/connect.php'
+  - 'robots.txt'
 
 security_context: |
   SPIP specific security considerations:

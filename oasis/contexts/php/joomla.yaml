@@ -1,13 +1,13 @@
 ignore_patterns:
-  - cache/**
-  - tmp/**
-  - administrator/cache/**
-  - administrator/logs/**
-  - logs/**
-  - images/**
-  - .htaccess
-  - configuration.php
-  - robots.txt
+  - 'cache/**'
+  - 'tmp/**'
+  - 'administrator/cache/**'
+  - 'administrator/logs/**'
+  - 'logs/**'
+  - 'images/**'
+  - '.htaccess'
+  - 'configuration.php'
+  - 'robots.txt'
 
 security_context: |
   Joomla specific security considerations:
