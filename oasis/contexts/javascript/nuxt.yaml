@@ -1,0 +1,25 @@
+ignore_patterns:
+  - node_modules/**
+  - .nuxt/**
+  - dist/**
+  - .output/**
+
+security_context: |
+  Nuxt.js specific security considerations:
+  - Server middleware security
+  - Nuxt content security
+  - API endpoints security
+  - SSR security considerations
+  - Plugin security
+  - Module security
+
+vulnerability_patterns:
+  api:
+    - "useFetch"
+    - "asyncData"
+  xss:
+    - "v-html"
+    - "$content"
+  state:
+    - "useState"
+    - "useStore" 

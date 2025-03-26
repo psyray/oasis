@@ -1,0 +1,25 @@
+ignore_patterns:
+  - node_modules/**
+  - dist/**
+  - .nuxt/**
+  - .output/**
+
+security_context: |
+  Vue specific security considerations:
+  - XSS prevention in templates
+  - v-html directive risks
+  - Vue Router security
+  - Vuex state management security
+  - Props validation
+  - Template expression security
+
+vulnerability_patterns:
+  xss:
+    - "v-html"
+    - "innerHTML"
+  state:
+    - "$store"
+    - "vuex"
+  routing:
+    - "router.push"
+    - "beforeEach" 

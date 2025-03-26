@@ -1,0 +1,25 @@
+ignore_patterns:
+  - node_modules/**
+  - .next/**
+  - out/**
+  - build/**
+
+security_context: |
+  Next.js specific security considerations:
+  - API routes security
+  - Server-side rendering security
+  - getServerSideProps security
+  - Image optimization security
+  - Headers and CSP configuration
+  - Authentication patterns
+
+vulnerability_patterns:
+  api:
+    - "getServerSideProps"
+    - "getInitialProps"
+  xss:
+    - "dangerouslySetInnerHTML"
+    - "next/script"
+  auth:
+    - "getSession"
+    - "useSession" 

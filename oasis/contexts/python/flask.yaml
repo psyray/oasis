@@ -1,0 +1,25 @@
+ignore_patterns:
+  - __pycache__/**
+  - *.pyc
+  - instance/**
+  - .env
+
+security_context: |
+  Flask specific security considerations:
+  - CSRF protection with Flask-WTF
+  - Session security configuration
+  - SQL injection prevention with SQLAlchemy
+  - XSS protection through Jinja2 escaping
+  - Secure file upload handling
+  - Input validation and sanitization
+
+vulnerability_patterns:
+  sql_injection:
+    - "execute("
+    - "text("
+  xss:
+    - "Markup("
+    - "|safe"
+  file_upload:
+    - "files["
+    - "save(" 

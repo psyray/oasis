@@ -1,0 +1,25 @@
+ignore_patterns:
+  - target/**
+  - *.class
+  - hibernate.properties
+
+security_context: |
+  Hibernate specific security considerations:
+  - SQL injection prevention in HQL/JPQL
+  - Second-level cache security
+  - Secure entity relationships
+  - Lazy loading security implications
+  - Criteria API security
+  - Entity validation
+
+vulnerability_patterns:
+  sql_injection:
+    - "createQuery("
+    - "createSQLQuery("
+    - "createNativeQuery("
+  data_exposure:
+    - "@OneToMany"
+    - "@ManyToMany"
+  validation:
+    - "@Valid"
+    - "Validator" 

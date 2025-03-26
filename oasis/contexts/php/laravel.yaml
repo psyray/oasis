@@ -1,0 +1,28 @@
+ignore_patterns:
+  - vendor/**
+  - storage/framework/**
+  - storage/logs/**
+  - bootstrap/cache/**
+  - .env
+  - .env.*
+
+security_context: |
+  Laravel specific security considerations:
+  - CSRF protection is built-in but needs proper middleware usage
+  - Mass assignment vulnerabilities can occur if $fillable/$guarded not properly set
+  - SQL injection prevention through Eloquent ORM and query builders
+  - XSS prevention using {{ }} vs {!! !!} blade syntax
+  - Authentication system with built-in protection against timing attacks
+  - File upload vulnerabilities in storage system if not properly validated
+
+vulnerability_patterns:
+  sql_injection:
+    - "DB::raw"
+    - "->whereRaw"
+    - "->selectRaw"
+  xss:
+    - "{!!"
+    - "->html()"
+  file_upload:
+    - "$request->file"
+    - "Storage::put" 

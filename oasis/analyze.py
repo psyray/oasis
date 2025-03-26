@@ -1,5 +1,5 @@
 import argparse
-from typing import List, Dict, Tuple, Any, Union
+from typing import List, Dict, Tuple, Any, Union, Optional
 from pathlib import Path
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
@@ -15,11 +15,12 @@ from .report import Report
 from .embedding import EmbeddingManager, build_vulnerability_embedding_prompt
 from .cache import CacheManager
 from .enums import AnalysisMode, AnalysisType
+from .context_manager import TechnologyContextManager
 
 # Define analysis modes and types
 class SecurityAnalyzer:
     def __init__(self, args, llm_model: str, embedding_manager: EmbeddingManager, ollama_manager: OllamaManager,
-                 scan_model: str = None):
+                 scan_model: str = None, technology_context: TechnologyContextManager = None):
         """
         Initialize the security analyzer with support for tiered model analysis
 
@@ -77,6 +78,14 @@ class SecurityAnalyzer:
             analysis_type = AnalysisType.ADAPTIVE if self.analyze_by_function else AnalysisType.STANDARD
             self.cache_manager.clear_scan_cache(analysis_type)
         
+        self.tech_context = technology_context
+        self.current_tech_stack = None
+
+    def set_technology_context(self, language: str, framework: Optional[str] = None):
+        """Set the technology context for analysis"""
+        self.tech_context.load_context(language, framework)
+        self.current_tech_stack = {"language": language, "framework": framework}
+
     def _get_vulnerability_details(self, vulnerability: Union[str, Dict]) -> Tuple[str, str, list, str, str]:
         """
         Extract vulnerability details from dict or return empty strings if invalid.
@@ -123,8 +132,21 @@ class SecurityAnalyzer:
         # Get common format requirements
         common_prompt = _get_common_prompt(vuln_name)
         
+        # Add technology context if available
+        tech_context = ""
+        if self.current_tech_stack:
+            tech_context = f"""
+TECHNOLOGY CONTEXT:
+- Language: {self.current_tech_stack['language']}
+- Framework: {self.current_tech_stack['framework'] or 'None'}
+
+{self.tech_context.get_security_context()}
+"""
+        
         # Build the complete prompt with clear sections and strict instructions
-        return f"""You are a cybersecurityy expert specialized in {vuln_name} vulnerabilities ONLY. 
+        return f"""You are a cybersecurity expert specialized in {vuln_name} vulnerabilities ONLY.
+
+{tech_context}
 
 CRITICAL INSTRUCTION: You must ONLY analyze the code for {vuln_name} vulnerabilities.
 DO NOT mention, describe, or analyze ANY other type of vulnerability.

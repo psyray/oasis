@@ -1,0 +1,27 @@
+ignore_patterns:
+  - __pycache__/**
+  - *.pyc
+  - media/**
+  - static/**
+  - .env
+
+security_context: |
+  Django specific security considerations:
+  - CSRF middleware protection
+  - XSS protection through template escaping
+  - SQL injection prevention with ORM
+  - Clickjacking protection middleware
+  - Password hashing and validation
+  - File upload validation
+
+vulnerability_patterns:
+  sql_injection:
+    - "raw("
+    - "extra("
+    - "RawSQL"
+  xss:
+    - "mark_safe"
+    - "|safe"
+  file_upload:
+    - "FileField"
+    - "ImageField" 

@@ -1,0 +1,26 @@
+ignore_patterns:
+  - tmp/**
+  - log/**
+  - vendor/**
+  - .bundle/**
+  - db/*.sqlite3
+
+security_context: |
+  Rails specific security considerations:
+  - CSRF protection through tokens
+  - SQL injection prevention with ActiveRecord
+  - XSS protection through template escaping
+  - Mass assignment protection
+  - Secure password handling
+  - File upload security
+
+vulnerability_patterns:
+  sql_injection:
+    - "find_by_sql"
+    - "execute"
+  xss:
+    - "raw"
+    - "html_safe"
+  mass_assignment:
+    - "attr_accessible"
+    - "permit" 

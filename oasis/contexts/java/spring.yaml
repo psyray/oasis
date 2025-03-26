@@ -1,0 +1,25 @@
+ignore_patterns:
+  - target/**
+  - .mvn/**
+  - *.class
+  - application-*.yml
+
+security_context: |
+  Spring specific security considerations:
+  - Spring Security configuration
+  - CSRF protection
+  - Authentication and authorization
+  - SQL injection prevention with JPA
+  - XSS protection in templates
+  - Secure session management
+
+vulnerability_patterns:
+  sql_injection:
+    - "@Query"
+    - "JdbcTemplate"
+  xss:
+    - "th:utext"
+    - "@ResponseBody"
+  authentication:
+    - "WebSecurityConfigurerAdapter"
+    - "SecurityFilterChain" 

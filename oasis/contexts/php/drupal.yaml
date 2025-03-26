@@ -1,0 +1,25 @@
+ignore_patterns:
+  - sites/*/files/**
+  - sites/*/private/**
+  - sites/*/settings*.php
+  - vendor/**
+
+security_context: |
+  Drupal specific security considerations:
+  - Form API security
+  - Database API security
+  - Access control system
+  - File system security
+  - Module security
+  - Theme security
+
+vulnerability_patterns:
+  sql:
+    - "db_query"
+    - "->query"
+  xss:
+    - "check_plain"
+    - "filter_xss"
+  access:
+    - "node_access"
+    - "user_access" 

@@ -1,0 +1,25 @@
+ignore_patterns:
+  - wp-content/uploads/**
+  - wp-content/cache/**
+  - wp-content/backup/**
+  - .htaccess
+
+security_context: |
+  WordPress specific security considerations:
+  - Nonce verification for form submissions
+  - Sanitization of user input using wp_kses
+  - Prepared statements for database queries
+  - File upload validation and sanitization
+  - Plugin and theme security vulnerabilities
+  - User capability checks
+
+vulnerability_patterns:
+  sql_injection:
+    - "$wpdb->query"
+    - "$wpdb->prepare"
+  xss:
+    - "echo"
+    - "wp_kses"
+  file_upload:
+    - "wp_handle_upload"
+    - "media_handle_upload" 

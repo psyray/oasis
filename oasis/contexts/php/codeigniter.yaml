@@ -1,0 +1,25 @@
+ignore_patterns:
+  - application/cache/**
+  - application/logs/**
+  - vendor/**
+  - .env
+
+security_context: |
+  CodeIgniter specific security considerations:
+  - Input class security
+  - Query builder security
+  - Form validation security
+  - Session security
+  - File upload security
+  - XSS filtering
+
+vulnerability_patterns:
+  sql:
+    - "$this->db->query"
+    - "->where("
+  xss:
+    - "xss_clean"
+    - "$this->input"
+  session:
+    - "$this->session"
+    - "userdata" 

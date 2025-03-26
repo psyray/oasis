@@ -1,0 +1,27 @@
+ignore_patterns:
+  - vendor/**
+  - var/cache/**
+  - var/log/**
+  - .env
+  - .env.*
+
+security_context: |
+  Symfony specific security considerations:
+  - CSRF protection through security tokens
+  - Form type validation and sanitization
+  - Doctrine ORM for SQL injection prevention
+  - Twig templating engine for XSS prevention
+  - Security component for authentication and authorization
+  - Parameter binding for safe database operations
+
+vulnerability_patterns:
+  sql_injection:
+    - "->execute("
+    - "createQuery("
+    - "executeQuery("
+  xss:
+    - "raw|"
+    - "->setContent("
+  file_upload:
+    - "UploadedFile"
+    - "move_uploaded_file" 

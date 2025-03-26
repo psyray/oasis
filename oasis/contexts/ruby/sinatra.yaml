@@ -1,0 +1,25 @@
+ignore_patterns:
+  - tmp/**
+  - log/**
+  - .bundle/**
+  - vendor/**
+
+security_context: |
+  Sinatra specific security considerations:
+  - Session security
+  - CSRF protection
+  - Rack security middleware
+  - Route security
+  - Template security
+  - Parameter validation
+
+vulnerability_patterns:
+  session:
+    - "enable :sessions"
+    - "session["
+  csrf:
+    - "csrf_token"
+    - "protect_from_forgery"
+  template:
+    - "erb :"
+    - "haml :" 

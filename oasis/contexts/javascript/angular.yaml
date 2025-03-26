@@ -1,0 +1,25 @@
+ignore_patterns:
+  - node_modules/**
+  - dist/**
+  - .angular/**
+  - environment.*
+
+security_context: |
+  Angular specific security considerations:
+  - Built-in XSS protection
+  - CSRF/XSRF token handling
+  - Content Security Policy
+  - Sanitization services
+  - Route guards for authorization
+  - HTTP interceptors for security headers
+
+vulnerability_patterns:
+  xss:
+    - "bypassSecurityTrustHtml"
+    - "bypassSecurityTrustScript"
+  csrf:
+    - "HttpClient"
+    - "fetch("
+  dom:
+    - "ElementRef"
+    - "Renderer2" 

@@ -1,0 +1,25 @@
+ignore_patterns:
+  - __pycache__/**
+  - .pytest_cache/**
+  - venv/**
+  - .env
+
+security_context: |
+  FastAPI specific security considerations:
+  - Dependency injection security
+  - Pydantic model validation
+  - OAuth2 implementation
+  - CORS middleware
+  - Request validation
+  - Response security
+
+vulnerability_patterns:
+  validation:
+    - "BaseModel"
+    - "validator"
+  auth:
+    - "OAuth2"
+    - "HTTPBearer"
+  injection:
+    - "Depends"
+    - "Request" 

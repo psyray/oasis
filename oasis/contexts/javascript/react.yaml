@@ -1,0 +1,25 @@
+ignore_patterns:
+  - node_modules/**
+  - build/**
+  - dist/**
+  - .env*
+
+security_context: |
+  React specific security considerations:
+  - XSS prevention through JSX escaping
+  - CSRF protection in API calls
+  - Secure state management
+  - DOM-based vulnerabilities
+  - Secure routing implementation
+  - Third-party package vulnerabilities
+
+vulnerability_patterns:
+  xss:
+    - "dangerouslySetInnerHTML"
+    - "innerHTML ="
+  csrf:
+    - "fetch("
+    - "axios."
+  state_management:
+    - "useState("
+    - "useReducer(" 

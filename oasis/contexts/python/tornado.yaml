@@ -1,0 +1,25 @@
+ignore_patterns:
+  - *.pyc
+  - __pycache__/**
+  - static/**
+  - log/**
+
+security_context: |
+  Tornado specific security considerations:
+  - XSRF protection
+  - Cookie security
+  - User authentication
+  - SSL/HTTPS configuration
+  - WebSocket security
+  - Request handling security
+
+vulnerability_patterns:
+  xsrf:
+    - "check_xsrf_cookie"
+    - "_xsrf"
+  auth:
+    - "get_current_user"
+    - "get_secure_cookie"
+  websocket:
+    - "WebSocketHandler"
+    - "on_message" 

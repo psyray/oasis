@@ -1,0 +1,24 @@
+ignore_patterns:
+  - target/**
+  - *.class
+  - struts.properties
+
+security_context: |
+  Struts specific security considerations:
+  - OGNL injection prevention
+  - Action form validation
+  - XSS protection in JSP
+  - File upload vulnerabilities
+  - Dynamic method invocation risks
+  - Interceptor security
+
+vulnerability_patterns:
+  ognl_injection:
+    - "getText("
+    - "getProperty("
+  xss:
+    - "<s:property"
+    - "value="
+  file_upload:
+    - "FileUploadInterceptor"
+    - "multipart/form-data" 

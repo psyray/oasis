@@ -1,0 +1,25 @@
+ignore_patterns:
+  - *.pyc
+  - __pycache__/**
+  - data/**
+  - *.egg-info/**
+
+security_context: |
+  Pyramid specific security considerations:
+  - Authentication policies
+  - Authorization policies
+  - CSRF protection
+  - Session security
+  - Request factory security
+  - View security
+
+vulnerability_patterns:
+  auth:
+    - "AuthTktAuthenticationPolicy"
+    - "ACLAuthorizationPolicy"
+  session:
+    - "session_factory"
+    - "ISession"
+  security:
+    - "security="
+    - "permission=" 

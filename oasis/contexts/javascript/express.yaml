@@ -1,0 +1,25 @@
+ignore_patterns:
+  - node_modules/**
+  - dist/**
+  - logs/**
+  - .env
+
+security_context: |
+  Express specific security considerations:
+  - Middleware security
+  - Route parameter validation
+  - Session security
+  - CORS configuration
+  - Error handling security
+  - HTTP headers security
+
+vulnerability_patterns:
+  injection:
+    - "req.params"
+    - "req.query"
+  session:
+    - "req.session"
+    - "express-session"
+  headers:
+    - "res.header"
+    - "helmet" 

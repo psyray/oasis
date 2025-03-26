@@ -1,0 +1,47 @@
+name: Python
+extensions:
+  - py
+  - pyw
+  - pyc
+  - pyo
+  - pyd
+
+frameworks:
+  django:
+    indicators:
+      - manage.py
+      - django.contrib
+    detection_patterns:
+      - settings.py
+      - urls.py
+  
+  flask:
+    indicators:
+      - flask_app.py
+      - requirements.txt
+    detection_patterns:
+      - app.py
+      - wsgi.py
+  
+  fastapi:
+    indicators:
+      - main.py
+      - requirements.txt
+    detection_patterns:
+      - app/
+      - api/
+  
+  pyramid:
+    indicators:
+      - development.ini
+      - production.ini
+    detection_patterns:
+      - setup.py
+      - wsgi.py
+  
+  tornado:
+    indicators:
+      - tornado.web
+    detection_patterns:
+      - handlers/
+      - server.py 
