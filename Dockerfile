@@ -15,6 +15,11 @@ WORKDIR /app
 # Define build arguments for flexibility during image creation
 ARG GIT_REPO
 ARG MODEL_NB
+ARG OLLAMA_PATH
+# Note: Ensure your local Ollama installation has the models "mistral" and "nomic-embed-text"
+
+# Make the local Ollama installation available via an environment variable
+ENV OLLAMA=${OLLAMA_PATH}
 
 # Copy application files into the container
 COPY . /app
@@ -29,14 +34,9 @@ RUN pip install pipx --break-system-packages && \
 # Install application dependencies with pipx to isolate them
 RUN pipx install --editable .
 
-# Download Ollama
-RUN curl -fsSL https://ollama.com/install.sh | sh
-
-# Pull required models
-RUN ollama pull mistral && ollama pull nomic-embed-text
-
-# Clone the repository 
-RUN git clone $GIT_REPO repo && \
+# Clone the repository and process it using oasis.
+# The oasis command can make use of the local Ollama installation if needed.
+RUN git clone ${GIT_REPO} repo && \
     oasis /app/repo | echo ${MODEL_NB}
 
 # Move security reports to the designated volume for access
