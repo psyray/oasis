@@ -244,12 +244,11 @@ class TechnologyContextManager:
             List of tuples (language, file_count) sorted by frequency
         """
         extension_counts = Counter()
-        
+
         # Count files by extension
         for file in path.rglob('*'):
             if file.is_file():
-                ext = file.suffix.lower().lstrip('.')
-                if ext:
+                if ext := file.suffix.lower().lstrip('.'):
                     extension_counts[ext] += 1
 
         # Map extensions to languages
@@ -274,7 +273,7 @@ class TechnologyContextManager:
                 for framework, indicators in self.framework_indicators[
                     language
                 ].items()
-                if self._check_framework_indicators(input_path, indicators)
+                if self._check_framework_indicators(input_path, indicators['indicators'])
             ),
             None,
         )
@@ -326,7 +325,7 @@ class TechnologyContextManager:
             return "No technology stack detected"
 
         output = ["=== Technology Profile ==="]
-        
+
         # Display each detected language and its framework
         for i, (language, framework) in enumerate(tech_stacks, 1):
             output.extend([
@@ -336,15 +335,15 @@ class TechnologyContextManager:
                 *[f"  - {ext}" for ext in self.language_extensions.get(language, [])]
             ])
 
-            # Add vulnerability patterns for this language
-            patterns = self.get_merged_vulnerability_patterns(language, framework)
-            if patterns:
+            if patterns := self.get_merged_vulnerability_patterns(
+                language, framework
+            ):
                 output.extend([
                     "\nVulnerability Patterns:",
                     *[f"  - {vuln_type} (score: {data.get('score', 5)})" 
                       for vuln_type, data in patterns.items()]
                 ])
-            
+
             output.append("\n" + "="*30)  # Separator between languages
 
         return "\n".join(output)

@@ -188,7 +188,7 @@ oasis -i [path_to_analyze] -v sqli,xss --clear-cache-scan -sm gemma3:4b -m gemma
 Full production scan:
 ```bash
 # Comprehensive scan of a large codebase
-oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:lates -t 0.7 --vulns all
+oasis -i [path_to_analyze] -sm qwen2.5-coder:3b -m qwen2.5-coder:32b,gemma3:27b -t 0.7 --vulns all
 ```
 
 
