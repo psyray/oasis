@@ -791,7 +791,7 @@ class EmbeddingAnalyzer:
             vuln: Vulnerability to analyze
         """
 
-        cache_key = f"{sanitize_name(vuln['name'])}_{self.analyze_type}"
+        cache_key = f"{sanitize_name(vuln['name'])}_{self.embedding_manager.analyze_type}"
         if cache_key in self.results_cache:
             return self.results_cache[cache_key]
 
@@ -2248,20 +2248,22 @@ def _get_common_prompt(vuln_name: str) -> str:
     """
     return f"""
 If you find {vuln_name} vulnerabilities:
-1. Quote the exact vulnerable code snippets related ONLY to {vuln_name}
-2. Explain specifically how this code is vulnerable to {vuln_name}
-3. Provide severity level (Critical/High/Medium/Low) for this {vuln_name} vulnerability
-4. Describe the potential impact specific to this {vuln_name} vulnerability
-5. Identify the application entry point and execution path:
+1. Insert a clear separator between each vulnerability
+2. Give exact filename and line number of the vulnerable code snippet
+3. Quote the exact vulnerable code snippets related ONLY to {vuln_name}
+4. Explain specifically how this code is vulnerable to {vuln_name}
+5. Provide severity level (Critical/High/Medium/Low) for this {vuln_name} vulnerability
+6. Describe the potential impact specific to this {vuln_name} vulnerability
+7. Identify the application entry point and execution path:
    - Determine the initial entry point (route, API endpoint, function or method)
    - Create an ASCII flowchart showing the complete execution path from entry point to vulnerability
    - Show all relevant functions/methods called in the execution chain
-6. Identify the complete attack/exploitation path:
+8. Identify the complete attack/exploitation path:
    - HTTP methods involved (GET, POST, PUT, DELETE)
    - Specific parameters or variables that can be manipulated (form fields, URL parameters, headers)
    - Step-by-step exploitation scenario with example payloads
    - Any dependencies or conditions required for successful exploitation
-7. Provide detailed remediation recommendations with secure code examples
+9. Provide detailed remediation recommendations with secure code examples
 
 If NO {vuln_name} vulnerabilities are found, respond with ONLY:
 "No {vuln_name} vulnerabilities found in this segment."
@@ -2273,7 +2275,7 @@ FORMAT REQUIREMENTS:
 - Focus ONLY on {vuln_name} - this is extremely important
 - Step-by-step exploitation scenario with example payloads, including precise request methods (e.g., GET, POST) and explicit parameter names (e.g., 'user_id', 'token')
 - When providing the ASCII flowchart, make sure to do the following:
-  1. Begin with a header "## Execution Path"
+  1. Begin with a header "### Execution Path"
   2. Use a properly formatted code block with triple backticks (```) at the beginning AND end
   3. The opening and closing triple backticks must be on a new line with no space in front of them and no space behind them.
   4. Do not add any other content inside the code block besides the ASCII diagram
