@@ -3,6 +3,11 @@ using System.Data.SqlClient;
 using System.Web;
 using System.Security.Cryptography;
 using System.Text;
+using System.IO;
+using System.Net;
+using System.Diagnostics;
+using System.Xml;
+using System.Reflection;
 
 public class VulnerableCode
 {
@@ -68,5 +73,91 @@ public class VulnerableCode
             byte[] hash = md5.ComputeHash(Encoding.UTF8.GetBytes(password));
             return Convert.ToBase64String(hash);
         }
+    }
+
+    // Remote Code Execution (RCE) vulnerability
+    public object ExecuteCode(string code)
+    {
+        // Vulnerable: Dynamic code execution
+        return Eval(code);
+    }
+
+    private object Eval(string code)
+    {
+        // Mock implementation of code evaluation
+        Microsoft.CSharp.CSharpCodeProvider provider = new Microsoft.CSharp.CSharpCodeProvider();
+        System.CodeDom.Compiler.CompilerParameters parameters = new System.CodeDom.Compiler.CompilerParameters();
+        // Vulnerable implementation
+        return null; // Simplified for example
+    }
+
+    public string RunCommand(string command)
+    {
+        // Vulnerable: Direct command execution
+        Process process = new Process();
+        process.StartInfo.FileName = "cmd.exe";
+        process.StartInfo.Arguments = "/c " + command;
+        process.StartInfo.RedirectStandardOutput = true;
+        process.StartInfo.UseShellExecute = false;
+        process.Start();
+        string output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        return output;
+    }
+
+    // Server-Side Request Forgery (SSRF) vulnerability
+    public string FetchUrl(string url)
+    {
+        // Vulnerable: No URL validation
+        using (WebClient client = new WebClient())
+        {
+            return client.DownloadString(url);
+        }
+    }
+
+    // XML External Entity (XXE) vulnerability
+    public XmlDocument ParseXml(string xml)
+    {
+        // Vulnerable: No protection against XXE
+        XmlDocument doc = new XmlDocument();
+        doc.XmlResolver = new XmlUrlResolver(); // Allows XXE
+        doc.LoadXml(xml);
+        return doc;
+    }
+
+    // Path Traversal vulnerability
+    public string ReadFile(string fileName)
+    {
+        // Vulnerable: No path validation
+        return File.ReadAllText(fileName);
+    }
+
+    // Insecure Direct Object Reference (IDOR) vulnerability
+    private string[] UserRecords = {"admin:secret", "user:password"};
+    
+    public string GetUserRecord(int id)
+    {
+        // Vulnerable: No access control
+        return UserRecords[id];
+    }
+    
+    // Authentication Issues
+    public bool Login(string username, string password)
+    {
+        // Vulnerable: Weak authentication
+        if (username == "admin" && password == "admin123")
+        {
+            return true;
+        }
+        return false;
+    }
+    
+    // Cross-Site Request Forgery (CSRF) vulnerability
+    public bool TransferMoney(string fromAccount, string toAccount, int amount)
+    {
+        // Vulnerable: No CSRF protection
+        Console.WriteLine($"Transferring {amount} from {fromAccount} to {toAccount}");
+        // Process transfer without validating request origin
+        return true;
     }
 } 

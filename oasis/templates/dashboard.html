@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}OASIS - Security reports dashboard{% endblock %}
+
+{% block header_title %}OASIS Dashboard{% endblock %}
+
+{% block head_extra %}
+<script>
+    // Pre-loading model emojis from Python
+    const modelEmojis = {{ model_emojis|tojson|safe }};
+    const vulnEmojis = {{ vuln_emojis|tojson|safe }};
+</script>
+{% endblock %}
+
+{% block content %}
+    <div class="main-container">
+        <button id="toggle-filters" class="toggle-filters-btn">
+            <span class="filter-icon">🔍</span>
+            <span class="filter-text">Filters</span>
+        </button>
+        
+        <aside class="sidebar">
+            <div class="filter-section">
+                <h2 class="filter-title">🤖 Filter by model</h2>
+                <div class="filter-options" id="model-filters">
+                    <div class="loading"><div class="loading-spinner"></div></div>
+                </div>
+            </div>
+            
+            <div class="filter-section">
+                <h2 class="filter-title">🛡️ Filter by vulnerability</h2>
+                <div class="filter-options" id="vulnerability-filters">
+                    <div class="loading"><div class="loading-spinner"></div></div>
+                </div>
+            </div>
+            
+            <div class="filter-section">
+                <h2 class="filter-title">📅 Filter by date</h2>
+                <div class="filter-options" id="date-filters">
+                    <div class="date-filter-inputs">
+                        <div class="date-input-group">
+                            <label for="date-start">Start:</label>
+                            <input type="date" id="date-start" class="date-input">
+                        </div>
+                        <div class="date-input-group">
+                            <label for="date-end">End:</label>
+                            <input type="date" id="date-end" class="date-input">
+                        </div>
+                        <button id="date-filter-apply" class="btn btn-primary">🔍 Apply</button>
+                    </div>
+                </div>
+            </div>
+            
+            <button id="filter-clear" class="btn btn-secondary" style="width: 100%;">🧹 Clear all filters</button>
+        </aside>
+        
+        <main class="content">
+            <div id="stats-container">
+                <div class="loading"><div class="loading-spinner"></div></div>
+            </div>
+            
+            <!-- <div class="view-selector">
+                <div id="view-list" class="view-tab active">List</div>
+                <div id="view-tree-model" class="view-tab">Tree by model</div>
+                <div id="view-tree-vuln" class="view-tab">Tree by vulnerability</div>
+            </div>
+             -->
+            <!-- <div id="reports-filters">
+                <div class="loading"><div class="loading-spinner"></div></div>
+            </div> -->
+            <div id="reports-container">
+                <div class="loading"><div class="loading-spinner"></div></div>
+            </div>
+        </main>
+    </div>
+    
+    <div id="report-modal" class="modal">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="report-modal-title">Report</h2>
+                    <button type="button" class="close" onclick="closeReportModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="report-modal-content"></div>
+                </div>
+                <div class="modal-footer">
+                    <div id="download-options"></div>
+                    <button class="btn btn-secondary" onclick="closeReportModal()">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <!-- Include only the main app file - it will load the other modules -->
+    <script src="{{ url_for('static', filename='js/dashboard-app.js') }}"></script>
+{% endblock %} 

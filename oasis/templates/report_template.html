@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        {% include 'report_styles.css' %}
+    </style>
+</head>
+<body style="background-color: {{ background_color }};">
+    <header class="report-header">
+        <div class="logo-container">
+            <div class="logo-circle">
+                <img src="{{ logo_path }}" alt="OASIS Logo" class="oasis-logo-img">
+            </div>
+        </div>
+        <div class="report-title">OASIS Security Report</div>
+    </header>
+    
+    <main class="report-content">
+        {{ content|safe }}
+    </main>
+    
+    <footer class="report-footer">
+        <div class="footer-text">O<small>llama</small> A<small>utomated</small> S<small>ecurity</small> I<small>ntelligence</small> S<small>canner</small></div>
+    </footer>
+</body>
+</html> 

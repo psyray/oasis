@@ -33,11 +33,10 @@ env/
 *.swo
 
 # OASIS specific
-embeddings_cache.pkl
+.oasis_cache/
 security_reports/
 models.md
 *.pdf
-*.html
 
 # Logs
 *.log
