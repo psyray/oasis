@@ -1,0 +1,224 @@
+ignore_patterns:
+  - 'node_modules/**'
+  - '.next/**'
+  - 'out/**'
+  - 'build/**'
+
+security_context: |
+  Next.js specific security considerations:
+  - API routes security
+  - Server-side rendering security
+  - getServerSideProps security
+  - Image optimization security
+  - Headers and CSP configuration
+  - Authentication patterns
+
+vulnerability_patterns:
+  sqli:
+    score: 6
+    description: "SQL injection in API routes and server-side data fetching"
+    patterns:
+      - "getStaticProps query"
+      - "getServerSideProps database"
+      - "api route query"
+      - "prisma.$queryRaw"
+      - "db.query"
+      - "raw SQL in API"
+      - "database operations"
+      - "dynamic queries"
+
+  xss:
+    score: 9
+    description: "XSS through SSR and client components"
+    patterns:
+      - "dangerouslySetInnerHTML"
+      - "next/script"
+      - "html parsing"
+      - "sanitize HTML"
+      - "dynamic rendering"
+      - "__html"
+      - "styled-jsx"
+      - "innerHTML usage"
+      - "script injection"
+
+  input:
+    score: 8
+    description: "Input validation in forms and API routes"
+    patterns:
+      - "req.body"
+      - "req.query"
+      - "params validation"
+      - "form data"
+      - "file upload"
+      - "dynamic routes"
+      - "query parameters"
+      - "input sanitization"
+      - "zod validation"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure in props and API responses"
+    patterns:
+      - "getInitialProps"
+      - "getStaticProps"
+      - "getServerSideProps"
+      - "API response"
+      - "environment variables"
+      - "debug information"
+      - ".env"
+      - "secret exposure"
+
+  session:
+    score: 7
+    description: "Session handling in Next.js applications"
+    patterns:
+      - "next-auth"
+      - "session handling"
+      - "jwt tokens"
+      - "cookie management"
+      - "iron-session"
+      - "session storage"
+      - "authentication state"
+      - "session persistence"
+
+  config:
+    score: 8
+    description: "Security misconfigurations in Next.js"
+    patterns:
+      - "next.config.js"
+      - "security headers"
+      - "Content-Security-Policy"
+      - "rewrites"
+      - "redirects"
+      - "middleware config"
+      - "API configuration"
+      - "environment setup"
+
+  logging:
+    score: 6
+    description: "Logging sensitive data in Next.js"
+    patterns:
+      - "console.log"
+      - "error logging"
+      - "debug mode"
+      - "server logs"
+      - "client logs"
+      - "error handling"
+      - "performance logging"
+      - "analytics data"
+
+  crypto:
+    score: 5
+    description: "Cryptographic operations in Next.js"
+    patterns:
+      - "encryption"
+      - "hashing"
+      - "JWT signing"
+      - "crypto operations"
+      - "random generation"
+      - "token creation"
+      - "secure cookies"
+      - "cryptographic functions"
+
+  rce:
+    score: 7
+    description: "RCE vulnerabilities in server components and API routes"
+    patterns:
+      - "eval usage"
+      - "dynamic imports"
+      - "exec in API"
+      - "child_process"
+      - "server evaluation"
+      - "dynamic code"
+      - "unsafe node modules"
+      - "command execution"
+
+  ssrf:
+    score: 7
+    description: "SSRF in data fetching and API routes"
+    patterns:
+      - "fetch calls"
+      - "getStaticProps fetch"
+      - "getServerSideProps fetch"
+      - "dynamic URLs"
+      - "API forwarding"
+      - "proxy requests"
+      - "external services"
+      - "URL validation"
+
+  xxe:
+    score: 4
+    description: "XXE in server-side XML processing"
+    patterns:
+      - "XML parsing"
+      - "API XML handling"
+      - "document processing"
+      - "file uploads"
+      - "content parsing"
+      - "data import"
+      - "external entities"
+
+  pathtra:
+    score: 6
+    description: "Path traversal in file operations and routing"
+    patterns:
+      - "static file serving"
+      - "public directory"
+      - "file operations"
+      - "dynamic paths"
+      - "file access"
+      - "route parameters"
+      - "file handling"
+      - "path manipulation"
+
+  idor:
+    score: 7
+    description: "IDOR in API routes and data access"
+    patterns:
+      - "dynamic routes"
+      - "user data access"
+      - "API parameters"
+      - "resource fetching"
+      - "authorization check"
+      - "access control"
+      - "user separation"
+      - "data isolation"
+
+  secrets:
+    score: 8
+    description: "Secrets exposure in Next.js applications"
+    patterns:
+      - ".env files"
+      - "API keys"
+      - "environment variables"
+      - "client secrets"
+      - "configuration files"
+      - "credentials"
+      - "tokens"
+      - "sensitive constants"
+
+  auth:
+    score: 8
+    description: "Authentication issues in Next.js"
+    patterns:
+      - "next-auth setup"
+      - "authentication flow"
+      - "protected routes"
+      - "middleware auth"
+      - "session handling"
+      - "token validation"
+      - "role checking"
+      - "permission control"
+
+  csrf:
+    score: 7
+    description: "CSRF in form submissions and API routes"
+    patterns:
+      - "form handling"
+      - "API protection"
+      - "CSRF tokens"
+      - "cross-site requests"
+      - "state changing"
+      - "token validation"
+      - "secure forms"
+      - "request verification" 

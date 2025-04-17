@@ -1,0 +1,266 @@
+ignore_patterns:
+  - 'node_modules/**'
+  - 'dist/**'
+  - 'build/**'
+  - 'coverage/**'
+  - '.next/**'
+  - '.nuxt/**'
+  - '*.js'
+  - '*.js.map'
+  - '*.d.ts'
+  - '.angular/**'
+  - '.cache/**'
+
+security_context: |
+  TypeScript standard security considerations:
+  - Type system bypass risks
+  - Type assertion and casting vulnerabilities
+  - Generic type misuse
+  - Decorator security implications
+  - Interface and type definition risks
+  - Async/await and Promise chain security
+
+vulnerability_patterns:
+  sqli:
+    score: 8
+    description: "SQL Injection in TypeScript database operations"
+    patterns:
+      - "string concatenation in SQL query"
+      - "user input directly in query"
+      - "lack of parameterized queries"
+      - "dynamic SQL generation"
+      - "raw input in database operations"
+      - "query parameters from request"
+      - "execute raw SQL"
+      - "template literals in SQL"
+      - "type assertion in query"
+      - "any type in query parameters"
+
+  xss:
+    score: 9
+    description: "Cross-Site Scripting (XSS)"
+    patterns:
+      - "unescaped output to HTML"
+      - "innerHTML ="
+      - "outerHTML ="
+      - "document.write"
+      - "insertAdjacentHTML"
+      - "dangerouslySetInnerHTML"
+      - "bypass sanitization"
+      - "type assertion in DOM"
+      - "as HTMLElement"
+      - "as any in DOM"
+      - "template literals in DOM"
+      - "unsafe type casting DOM"
+      - "Element.innerHTML"
+      - "DOMParser.parseFromString"
+
+  input:
+    score: 8
+    description: "Insufficient Input Validation"
+    patterns:
+      - "input validation missing"
+      - "unvalidated user input"
+      - "unsafe type casting"
+      - "type assertion without check"
+      - "as any"
+      - "as unknown"
+      - "type coercion"
+      - "partial type validation"
+      - "optional chaining without validation"
+      - "non-null assertion operator"
+
+  data:
+    score: 8
+    description: "Sensitive Data Exposure"
+    patterns:
+      - "sensitive data exposure"
+      - "plaintext credentials"
+      - "hardcoded secrets"
+      - "API keys in code"
+      - "unencrypted sensitive data"
+      - "information disclosure"
+      - "data leakage"
+      - "type information exposure"
+      - "interface exposure"
+      - "debug type information"
+
+  session:
+    score: 7
+    description: "Session Management Issues"
+    patterns:
+      - "session fixation"
+      - "insecure session handling"
+      - "session hijacking risk"
+      - "missing session timeout"
+      - "weak session ID generation"
+      - "session token exposure"
+      - "cookie security missing"
+      - "type assertion in session"
+      - "session interface bypass"
+      - "unsafe session type"
+
+  config:
+    score: 7
+    description: "Security Misconfiguration"
+    patterns:
+      - "security misconfiguration"
+      - "debug mode enabled"
+      - "insecure permissions"
+      - "missing security headers"
+      - "verbose error messages"
+      - "type checking disabled"
+      - "noImplicitAny: false"
+      - "strictNullChecks: false"
+      - "any in configuration"
+      - "unsafe type assertion"
+
+  logging:
+    score: 6
+    description: "Sensitive Data Logging"
+    patterns:
+      - "sensitive data in logs"
+      - "password logging"
+      - "PII in logs"
+      - "token logging"
+      - "unsafe error logging"
+      - "debug logging in production"
+      - "type information in logs"
+      - "console.log(sensitive)"
+      - "error stack exposure"
+      - "type assertion in logging"
+
+  crypto:
+    score: 7
+    description: "Insecure Cryptographic Usage"
+    patterns:
+      - "weak encryption"
+      - "insecure random number generation"
+      - "weak hash algorithm"
+      - "MD5 usage"
+      - "SHA1 usage"
+      - "static initialization vector"
+      - "hardcoded encryption key"
+      - "Math.random"
+      - "crypto type assertion"
+      - "unsafe crypto interface"
+
+  rce:
+    score: 9
+    description: "Remote Code Execution"
+    patterns:
+      - "eval with user input"
+      - "Function constructor"
+      - "new Function("
+      - "setTimeout(string"
+      - "setInterval(string"
+      - "dynamic import("
+      - "require("
+      - "type assertion in eval"
+      - "unsafe dynamic import"
+      - "any in code execution"
+
+  ssrf:
+    score: 7
+    description: "Server-Side Request Forgery"
+    patterns:
+      - "URL fetching from user input"
+      - "fetch("
+      - "axios.get"
+      - "http client with dynamic endpoint"
+      - "webhook implementation"
+      - "dynamic API requests"
+      - "URL type assertion"
+      - "unsafe URL interface"
+      - "type bypass in requests"
+      - "any in URL handling"
+
+  xxe:
+    score: 7
+    description: "XML External Entity Injection"
+    patterns:
+      - "XML parser without entity restrictions"
+      - "XML processing without disabling DTD"
+      - "unsafe DOM parser"
+      - "XML libraries with dangerous defaults"
+      - "DOMParser"
+      - "parseXML"
+      - "XML type assertion"
+      - "unsafe XML interface"
+      - "type bypass in XML"
+      - "any in XML parsing"
+
+  pathtra:
+    score: 8
+    description: "Path Traversal"
+    patterns:
+      - "file operations with user input"
+      - "path concatenation without validation"
+      - "directory traversal vulnerability"
+      - "reading files with variable paths"
+      - "filepath not normalized"
+      - "unsafe file access"
+      - "path type assertion"
+      - "unsafe path interface"
+      - "type bypass in paths"
+      - "any in file operations"
+
+  idor:
+    score: 7
+    description: "Insecure Direct Object Reference"
+    patterns:
+      - "user ID in URL parameters"
+      - "missing access control checks"
+      - "direct object reference in request"
+      - "lack of authorization validation"
+      - "resource ID manipulation vulnerability"
+      - "type assertion in IDs"
+      - "unsafe ID interface"
+      - "type bypass in references"
+      - "any in object references"
+      - "partial type checking"
+
+  secrets:
+    score: 8
+    description: "Hardcoded Secrets"
+    patterns:
+      - "hardcoded API key"
+      - "password in source code"
+      - "hardcoded credentials"
+      - "embedded secret"
+      - "private key in code"
+      - "OAuth token in variables"
+      - "secret key declaration"
+      - "cleartext password"
+      - "connection string with credentials"
+      - "type exposure of secrets"
+
+  auth:
+    score: 8
+    description: "Authentication Issues"
+    patterns:
+      - "weak password requirements"
+      - "missing multi-factor authentication"
+      - "insufficient credential handling"
+      - "authentication bypass vulnerability"
+      - "insecure password storage"
+      - "broken authentication flow"
+      - "type assertion in auth"
+      - "unsafe auth interface"
+      - "type bypass in auth"
+      - "any in authentication"
+
+  csrf:
+    score: 7
+    description: "Cross-Site Request Forgery"
+    patterns:
+      - "missing CSRF token"
+      - "state-changing operation without protection"
+      - "form submission without CSRF verification"
+      - "cookie-only authentication"
+      - "missing SameSite attribute"
+      - "type assertion in CSRF"
+      - "unsafe CSRF interface"
+      - "type bypass in tokens"
+      - "any in CSRF validation"
+      - "partial token validation" 

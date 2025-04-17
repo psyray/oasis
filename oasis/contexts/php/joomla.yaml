@@ -1,0 +1,245 @@
+ignore_patterns:
+  - 'cache/**'
+  - 'tmp/**'
+  - 'administrator/cache/**'
+  - 'administrator/logs/**'
+  - 'logs/**'
+  - 'images/**'
+  - '.htaccess'
+  - 'configuration.php'
+  - 'robots.txt'
+
+security_context: |
+  Joomla specific security considerations:
+  - Access control through ACL system
+  - Component security and permissions
+  - Module position security
+  - Plugin system security
+  - Media manager security
+  - Form token validation
+  - Database query security through JDatabase
+  - Template override security
+  - Extension installation security
+  - Session management security
+
+vulnerability_patterns:
+  sqli:
+    score: 8
+    description: "SQL injection in Joomla database operations"
+    patterns:
+      - "JFactory::getDbo()"
+      - "$db->setQuery"
+      - "$db->execute"
+      - "raw queries"
+      - "query() method"
+      - "loadResult()"
+      - "loadObject()"
+      - "quoteName missing"
+      - "escape() missing"
+      - "direct SQL"
+
+  xss:
+    score: 9
+    description: "XSS vulnerabilities in components and modules"
+    patterns:
+      - "HTMLHelper"
+      - "escape()"
+      - "raw output"
+      - "JInput filtering"
+      - "template output"
+      - "module params"
+      - "component views"
+      - "JHTML"
+      - "addScriptDeclaration"
+      - "unfiltered content"
+
+  input:
+    score: 8
+    description: "Input validation vulnerabilities"
+    patterns:
+      - "JInput"
+      - "getVar()"
+      - "getString()"
+      - "filter property"
+      - "request data"
+      - "form validation"
+      - "field filtering"
+      - "input sanitization"
+      - "parameter handling"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure"
+    patterns:
+      - "configuration.php"
+      - "error reporting"
+      - "debug mode"
+      - "database credentials"
+      - "user information"
+      - "sensitive params"
+      - "log files"
+      - "backup files"
+
+  session:
+    score: 7
+    description: "Session management issues"
+    patterns:
+      - "JSession"
+      - "session handling"
+      - "checkToken()"
+      - "session state"
+      - "user session"
+      - "session security"
+      - "remember me"
+      - "session fixation"
+
+  config:
+    score: 8
+    description: "Security misconfigurations"
+    patterns:
+      - "Global Configuration"
+      - "JConfig"
+      - "component params"
+      - "security settings"
+      - "error display"
+      - "debug settings"
+      - "access settings"
+      - "server config"
+
+  logging:
+    score: 6
+    description: "Sensitive data logging"
+    patterns:
+      - "JLog"
+      - "error logging"
+      - "system debug"
+      - "log files"
+      - "debug output"
+      - "error handling"
+      - "sensitive data"
+      - "log storage"
+
+  crypto:
+    score: 7
+    description: "Cryptographic issues"
+    patterns:
+      - "JCrypt"
+      - "password hashing"
+      - "encryption key"
+      - "salt generation"
+      - "hash functions"
+      - "crypto methods"
+      - "key storage"
+      - "random generation"
+
+  rce:
+    score: 8
+    description: "Remote code execution risks"
+    patterns:
+      - "extension install"
+      - "template override"
+      - "eval usage"
+      - "exec functions"
+      - "shell commands"
+      - "unsafe includes"
+      - "code execution"
+      - "plugin execution"
+
+  ssrf:
+    score: 7
+    description: "SSRF vulnerabilities"
+    patterns:
+      - "JHttpFactory"
+      - "remote requests"
+      - "URL validation"
+      - "external content"
+      - "feed import"
+      - "remote files"
+      - "HTTP client"
+      - "external API"
+
+  xxe:
+    score: 6
+    description: "XXE in XML processing"
+    patterns:
+      - "JXMLElement"
+      - "SimpleXML"
+      - "XML parsing"
+      - "extension install"
+      - "feed processing"
+      - "XML import"
+      - "external entities"
+      - "XML handling"
+
+  pathtra:
+    score: 7
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "JPath"
+      - "file operations"
+      - "media manager"
+      - "file upload"
+      - "directory access"
+      - "path manipulation"
+      - "file inclusion"
+      - "template files"
+
+  idor:
+    score: 7
+    description: "IDOR vulnerabilities"
+    patterns:
+      - "item access"
+      - "user data"
+      - "component access"
+      - "direct references"
+      - "access control"
+      - "user separation"
+      - "permission check"
+      - "ACL bypass"
+
+  secrets:
+    score: 7
+    description: "Hardcoded secrets"
+    patterns:
+      - "configuration.php"
+      - "API credentials"
+      - "database config"
+      - "secret keys"
+      - "passwords"
+      - "tokens"
+      - "private data"
+      - "sensitive info"
+
+  auth:
+    score: 8
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "JAuthentication"
+      - "user checks"
+      - "login process"
+      - "access control"
+      - "user groups"
+      - "permission system"
+      - "ACL rules"
+      - "authentication plugins"
+
+  csrf:
+    score: 7
+    description: "CSRF vulnerabilities"
+    patterns:
+      - "JSession::checkToken"
+      - "form token"
+      - "request token"
+      - "CSRF protection"
+      - "token validation"
+      - "form security"
+      - "state changing"
+      - "request verification"
+
+security_files:
+  - administrator/components/com_admin/sql/updates
+  - administrator/manifests/packages
+  - libraries/src/Session/Session.php
+  - libraries/src/User/User.php
+  - plugins/authentication
+  - plugins/system/remember 

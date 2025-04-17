@@ -1,0 +1,227 @@
+ignore_patterns:
+  - 'node_modules/**'
+  - 'build/**'
+  - 'dist/**'
+  - '.env*'
+
+security_context: |
+  React specific security considerations:
+  - XSS prevention through JSX escaping
+  - CSRF protection in API calls
+  - Secure state management
+  - DOM-based vulnerabilities
+  - Secure routing implementation
+  - Third-party package vulnerabilities
+
+vulnerability_patterns:
+  sqli:
+    score: 3
+    description: "SQL injection risks in React frontend queries"
+    patterns:
+      - "GraphQL injection"
+      - "dynamic query building"
+      - "raw query string"
+      - "query concatenation"
+      - "client-side database"
+      - "IndexedDB queries"
+      - "localStorage queries"
+      - "dynamic SQL construction"
+
+  xss:
+    score: 9
+    description: "High risk of XSS through React rendering"
+    patterns:
+      - "dangerouslySetInnerHTML"
+      - "__html property"
+      - "innerHTML manipulation"
+      - "raw HTML injection"
+      - "unsanitized props"
+      - "dynamic rendering"
+      - "JSX injection"
+      - "script tags"
+      - "unsafe prop types"
+      - "DOM manipulation"
+
+  input:
+    score: 8
+    description: "Input validation vulnerabilities in React forms"
+    patterns:
+      - "controlled components"
+      - "uncontrolled components"
+      - "form validation"
+      - "user input"
+      - "onChange handlers"
+      - "input refs"
+      - "formik validation"
+      - "react-hook-form"
+      - "input sanitization"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure in React components"
+    patterns:
+      - "Redux store"
+      - "Context API"
+      - "local storage"
+      - "session storage"
+      - "environment variables"
+      - "API keys exposure"
+      - "debug information"
+      - "error boundaries"
+      - "sensitive props"
+
+  session:
+    score: 6
+    description: "Client-side session management issues"
+    patterns:
+      - "session storage"
+      - "token handling"
+      - "auth context"
+      - "redux persist"
+      - "remember me"
+      - "session timeout"
+      - "cookie management"
+      - "state persistence"
+
+  config:
+    score: 7
+    description: "Security misconfigurations in React"
+    patterns:
+      - "env files"
+      - "webpack config"
+      - "development mode"
+      - "source maps"
+      - "security headers"
+      - "CSP settings"
+      - "react-scripts config"
+      - "build settings"
+
+  logging:
+    score: 5
+    description: "Sensitive data in React logs"
+    patterns:
+      - "console.log"
+      - "error boundaries"
+      - "debug logging"
+      - "react-logger"
+      - "performance monitoring"
+      - "error tracking"
+      - "development tools"
+      - "sensitive data exposure"
+
+  crypto:
+    score: 4
+    description: "Client-side cryptographic operations"
+    patterns:
+      - "crypto-js"
+      - "Web Crypto API"
+      - "hash functions"
+      - "encryption"
+      - "random generation"
+      - "key management"
+      - "token encryption"
+      - "secure random"
+
+  rce:
+    score: 5
+    description: "Code execution risks in React"
+    patterns:
+      - "eval usage"
+      - "Function constructor"
+      - "dynamic imports"
+      - "unsafe-eval"
+      - "dynamic code"
+      - "script injection"
+      - "component injection"
+      - "dynamic rendering"
+
+  ssrf:
+    score: 4
+    description: "SSRF through React requests"
+    patterns:
+      - "fetch API"
+      - "axios requests"
+      - "dynamic URLs"
+      - "resource loading"
+      - "external requests"
+      - "API calls"
+      - "image loading"
+      - "URL validation"
+
+  xxe:
+    score: 2
+    description: "XML processing in React frontend"
+    patterns:
+      - "XML parsing"
+      - "DOMParser"
+      - "XML requests"
+      - "SOAP handling"
+      - "file upload"
+      - "document processing"
+      - "parser config"
+      - "XML data"
+
+  pathtra:
+    score: 4
+    description: "Path traversal in React Router"
+    patterns:
+      - "react-router"
+      - "dynamic routes"
+      - "route params"
+      - "file paths"
+      - "resource loading"
+      - "path manipulation"
+      - "navigation"
+      - "route handling"
+
+  idor:
+    score: 5
+    description: "IDOR in React components"
+    patterns:
+      - "user IDs"
+      - "resource access"
+      - "route parameters"
+      - "data fetching"
+      - "component props"
+      - "authorization check"
+      - "access control"
+      - "user data"
+
+  secrets:
+    score: 7
+    description: "Hardcoded secrets in React code"
+    patterns:
+      - ".env files"
+      - "API keys"
+      - "hardcoded tokens"
+      - "credentials"
+      - "configuration data"
+      - "sensitive constants"
+      - "private keys"
+      - "client secrets"
+
+  auth:
+    score: 7
+    description: "Authentication issues in React"
+    patterns:
+      - "protected routes"
+      - "auth context"
+      - "token handling"
+      - "login flow"
+      - "authentication state"
+      - "role-based access"
+      - "permission check"
+      - "session management"
+
+  csrf:
+    score: 6
+    description: "CSRF in React applications"
+    patterns:
+      - "form submission"
+      - "CSRF tokens"
+      - "axios defaults"
+      - "fetch headers"
+      - "state mutation"
+      - "cross-origin"
+      - "request verification"
+      - "secure forms" 

@@ -1,0 +1,259 @@
+ignore_patterns:
+  - '*.swp'
+  - '*.swo'
+  - '.bash_history'
+  - '.zsh_history'
+  - '*.log'
+  - 'tmp/*'
+  - '.local/*'
+  - '.cache/*'
+
+security_context: |
+  Shell script security considerations:
+  - Command injection risks
+  - Path manipulation security
+  - Environment variable handling
+  - File permission management
+  - Process execution safety
+  - Input validation and sanitization
+
+vulnerability_patterns:
+  sqli:
+    score: 6
+    description: "SQL Injection in shell database operations"
+    patterns:
+      - "string concatenation in SQL query"
+      - "user input directly in query"
+      - "mysql -e"
+      - "psql -c"
+      - "sqlite3"
+      - "query parameters from input"
+      - "execute raw SQL"
+      - "SQL string interpolation"
+      - "database command injection"
+      - "unescaped SQL variables"
+
+  xss:
+    score: 5
+    description: "Cross-Site Scripting (XSS)"
+    patterns:
+      - "unescaped output to HTML"
+      - "echo without escaping"
+      - "printf without sanitization"
+      - "CGI script output"
+      - "web content generation"
+      - "HTML template generation"
+      - "dynamic web content"
+      - "script output"
+      - "content rendering"
+      - "web server output"
+
+  input:
+    score: 9
+    description: "Insufficient Input Validation"
+    patterns:
+      - "input validation missing"
+      - "unvalidated user input"
+      - "unsafe variable expansion"
+      - "command substitution"
+      - "unquoted variables"
+      - "$@"
+      - "$*"
+      - "read without validation"
+      - "pipe input"
+      - "stdin processing"
+
+  data:
+    score: 8
+    description: "Sensitive Data Exposure"
+    patterns:
+      - "sensitive data exposure"
+      - "plaintext credentials"
+      - "hardcoded secrets"
+      - "API keys in script"
+      - "unencrypted sensitive data"
+      - "information disclosure"
+      - "data leakage"
+      - "credentials in script"
+      - "sensitive environment vars"
+      - "exposed configuration"
+
+  session:
+    score: 6
+    description: "Session Management Issues"
+    patterns:
+      - "session handling"
+      - "temporary files"
+      - "session data storage"
+      - "session cleanup"
+      - "session identifier"
+      - "session token"
+      - "session file handling"
+      - "process session"
+      - "user session"
+      - "session management"
+
+  config:
+    score: 8
+    description: "Security Misconfiguration"
+    patterns:
+      - "security misconfiguration"
+      - "debug mode enabled"
+      - "insecure permissions"
+      - "world-readable files"
+      - "verbose error messages"
+      - "directory permissions"
+      - "unsafe umask"
+      - "incorrect file modes"
+      - "insecure configuration"
+      - "unsafe settings"
+
+  logging:
+    score: 7
+    description: "Sensitive Data Logging"
+    patterns:
+      - "sensitive data in logs"
+      - "password logging"
+      - "PII in logs"
+      - "token logging"
+      - "unsafe error logging"
+      - "debug logging"
+      - "authentication data in logs"
+      - "credential logging"
+      - "sensitive output"
+      - "information leakage"
+
+  crypto:
+    score: 7
+    description: "Insecure Cryptographic Usage"
+    patterns:
+      - "weak encryption"
+      - "insecure random generation"
+      - "weak hash algorithm"
+      - "MD5 usage"
+      - "SHA1 usage"
+      - "$RANDOM"
+      - "/dev/urandom"
+      - "openssl weak options"
+      - "weak ciphers"
+      - "insecure encryption"
+
+  rce:
+    score: 10
+    description: "Remote Code Execution"
+    patterns:
+      - "eval"
+      - "exec"
+      - "source"
+      - "`command`"
+      - "$(command)"
+      - "bash -c"
+      - "sh -c"
+      - "system"
+      - "popen"
+      - "command injection"
+
+  ssrf:
+    score: 7
+    description: "Server-Side Request Forgery"
+    patterns:
+      - "curl"
+      - "wget"
+      - "nc"
+      - "netcat"
+      - "telnet"
+      - "http request"
+      - "network connection"
+      - "remote fetch"
+      - "URL download"
+      - "external request"
+
+  xxe:
+    score: 5
+    description: "XML External Entity Injection"
+    patterns:
+      - "xmllint"
+      - "xml parsing"
+      - "xpath"
+      - "xsltproc"
+      - "xml processing"
+      - "xml validation"
+      - "DTD processing"
+      - "XML transformation"
+      - "XML handling"
+      - "XML operations"
+
+  pathtra:
+    score: 9
+    description: "Path Traversal"
+    patterns:
+      - "file operations with variables"
+      - "path concatenation"
+      - "directory traversal"
+      - "cd $variable"
+      - "unsafe path handling"
+      - "relative paths"
+      - "symbolic links"
+      - "file inclusion"
+      - "path manipulation"
+      - "directory operations"
+
+  idor:
+    score: 7
+    description: "Insecure Direct Object Reference"
+    patterns:
+      - "file descriptor handling"
+      - "process ID manipulation"
+      - "direct file access"
+      - "resource access"
+      - "user ID handling"
+      - "group ID handling"
+      - "permission check"
+      - "access control"
+      - "resource identifier"
+      - "object reference"
+
+  secrets:
+    score: 9
+    description: "Hardcoded Secrets"
+    patterns:
+      - "hardcoded API key"
+      - "password in script"
+      - "hardcoded credentials"
+      - "embedded secret"
+      - "private key in script"
+      - "token in code"
+      - "secret in variable"
+      - "cleartext password"
+      - "connection string"
+      - "API token"
+
+  auth:
+    score: 8
+    description: "Authentication Issues"
+    patterns:
+      - "weak password handling"
+      - "password comparison"
+      - "credential handling"
+      - "authentication bypass"
+      - "password storage"
+      - "authentication flow"
+      - "credential reset"
+      - "sudo usage"
+      - "privilege escalation"
+      - "permission handling"
+
+  csrf:
+    score: 6
+    description: "Cross-Site Request Forgery"
+    patterns:
+      - "web request handling"
+      - "form submission"
+      - "token validation"
+      - "request verification"
+      - "web security"
+      - "request authentication"
+      - "web token"
+      - "request validation"
+      - "web security token"
+      - "request protection" 
