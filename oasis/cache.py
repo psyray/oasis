@@ -5,7 +5,7 @@ import hashlib
 import pickle
 
 from .enums import AnalysisMode, AnalysisType
-from .tools import sanitize_name, logger
+from .tools import create_cache_dir, sanitize_name, logger
 
 class CacheManager:
     """
@@ -23,14 +23,8 @@ class CacheManager:
         """
         self.cache_days = cache_days
         
-        # Create base cache directory
-        input_path = Path(input_path)
-        if input_path.is_dir():
-            self.cache_dir = input_path.parent / '.oasis_cache'
-        else:
-            self.cache_dir = input_path.parent / '.oasis_cache'
-            
-        self.cache_dir.mkdir(exist_ok=True)
+        # Create cache directory
+        self.cache_dir = create_cache_dir(input_path)
         
         # Create model-specific cache directories
         self.model_cache_dir = self.cache_dir / sanitize_name(llm_model)
