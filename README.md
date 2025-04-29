@@ -146,7 +146,7 @@ pipx uninstall oasis
 
 Basic usage:
 ```bash
-oasis --input-path [path_to_analyze]
+oasis --input [path_to_analyze]
 ```
 
 ## 🚀 Quick Test
@@ -159,7 +159,7 @@ cd oasis
 pipx install --editable .
 
 # Run analysis on test files
-oasis --input-path test_files/
+oasis --input test_files/
 ```
 
 This will analyze the provided test files and generate security reports in the parent directory of the folder to analyze, `security_reports`.
@@ -412,7 +412,7 @@ OASIS offers a specialized Audit Mode that performs an embedding distribution an
 
 ```bash
 # Run OASIS in audit mode
-oasis --input-path [path_to_analyze] --audit
+oasis --input [path_to_analyze] --audit
 ```
 
 ### What Audit Mode Does
@@ -455,13 +455,13 @@ OASIS includes a web interface to view and explore security reports:
 
 ```bash
 # Start the web interface with default settings (localhost:5000)
-oasis --input-path [path_to_analyze] --web
+oasis --input [path_to_analyze] --web
 
 # Start with custom port and expose to all network interfaces
-oasis --input-path [path_to_analyze] --web --web-port 8080 --web-expose all
+oasis --input [path_to_analyze] --web --web-port 8080 --web-expose all
 
 # Start with a specific password
-oasis --input-path [path_to_analyze] --web --web-password mysecretpassword
+oasis --input [path_to_analyze] --web --web-password mysecretpassword
 ```
 
 ### Security Features
