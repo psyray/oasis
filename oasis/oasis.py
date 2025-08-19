@@ -157,9 +157,17 @@ class OasisScanner:
         logger.info(f"\nStarting security analysis at {generate_timestamp()}\n")
         start_time = time.time()
         
-        # Determine analysis type (adaptive or standard)
+        # Determine analysis type
         adaptive = hasattr(self.args, 'adaptive') and self.args.adaptive
-        analysis_type = "🧠 adaptive" if adaptive else "📋 standard"
+        analyze_type = getattr(self.args, 'analyze_type', 'standard')
+        
+        if adaptive:
+            analysis_type = "🧠 adaptive"
+        elif analyze_type == 'deep':
+            analysis_type = "🔥 deep (skip scan)"
+        else:
+            analysis_type = "📋 standard (scan + deep)"
+            
         logger.info(f"Using {analysis_type} analysis mode")
 
         # Process all main models one by one

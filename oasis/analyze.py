@@ -296,10 +296,13 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
         """
         # Determine analysis type
         adaptive = hasattr(args, 'adaptive') and args.adaptive
+        analyze_type = getattr(args, 'analyze_type', 'standard')
         
         # Select appropriate workflow based on analysis type
         if adaptive:
             all_results = self.analysis_pipeline.perform_adaptive_analysis(vulnerabilities, args, report)
+        elif analyze_type == 'deep':
+            all_results = self._perform_deep_only_analysis(vulnerabilities, args, report)
         else:
             all_results = self._perform_standard_analysis(vulnerabilities, args, report)
         
@@ -335,6 +338,105 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
             # Phase 2: Deep analysis of suspicious chunks with the powerful model
             all_results = self._perform_deep_analysis(suspicious_data, args, report, vuln_pbar)
         
+        return all_results
+
+    def _perform_deep_only_analysis(self, vulnerabilities, args, report):
+        """
+        Perform deep analysis on all files without initial scanning phase.
+        This method skips the lightweight scan and directly performs deep analysis
+        on all code chunks for all specified vulnerabilities.
+        
+        Args:
+            vulnerabilities: List of vulnerability types to analyze
+            args: Command line arguments
+            report: Report object
+        
+        Returns:
+            Dictionary with analysis results
+        """
+        all_results = {}
+        
+        logger.info("\n")
+        logger.info("===== DEEP ANALYSIS MODE =====")
+        logger.info(f"Using {self.ollama_manager.get_model_display_name(self.llm_model)} for deep analysis")
+        logger.info("Skipping scan phase - analyzing all files directly")
+        
+        # Main progress bar for vulnerabilities
+        with tqdm(total=len(vulnerabilities), desc="Overall vulnerability progress", 
+                 position=0, leave=True, disable=args.silent) as vuln_pbar:
+            
+            for vuln in vulnerabilities:
+                vuln_name = vuln['name']
+                vuln_pbar.set_postfix_str(f"Deep analyzing: {vuln_name}")
+                
+                # Directly analyze all files for this vulnerability using the LLM
+                detailed_results = []
+                
+                # Get vulnerability details for prompt building
+                vuln_details = self._get_vulnerability_details(vuln)
+                vuln_name_detail, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation = vuln_details
+                
+                # Analyze each file in the codebase
+                for file_path, data in self.code_base.items():
+                    # Get the chunks for this file
+                    chunks = data.get('chunks', [data['content']])
+                    
+                    file_analysis_results = []
+                    
+                    # Analyze each chunk with the LLM directly
+                    for i, chunk in enumerate(chunks):
+                        if not chunk.strip():  # Skip empty chunks
+                            continue
+                            
+                        # Build the analysis prompt
+                        prompt = self._build_analysis_prompt(
+                            vuln_name_detail, vuln_desc, vuln_patterns, 
+                            vuln_impact, vuln_mitigation, chunk, i+1, len(chunks)
+                        )
+                        
+                        # Perform LLM analysis
+                        try:
+                            response = self.client.generate(model=self.llm_model, prompt=prompt)
+                            if response and hasattr(response, 'response'):
+                                analysis_result = response.response
+                                file_analysis_results.append({
+                                    'chunk_index': i,
+                                    'chunk_content': chunk,
+                                    'analysis': analysis_result,
+                                    'similarity_score': 1.0  # All chunks get full score in deep mode
+                                })
+                        except Exception as e:
+                            logger.error(f"Error analyzing chunk {i} in {file_path}: {str(e)}")
+                            file_analysis_results.append({
+                                'chunk_index': i,
+                                'chunk_content': chunk,
+                                'error': str(e),
+                                'similarity_score': 1.0
+                            })
+                    
+                    # If we found any analysis results for this file, add them
+                    if file_analysis_results:
+                        detailed_results.append({
+                            'file_path': file_path,
+                            'similarity_score': 1.0,
+                            'analysis': f"## Deep Analysis Results for {file_path}\n\n" + 
+                                      "\n\n---\n\n".join([
+                                          f"### Chunk {r['chunk_index'] + 1}\n\n{r.get('analysis', r.get('error', 'No analysis available'))}"
+                                          for r in file_analysis_results
+                                      ])
+                        })
+                
+                # Store results and generate report
+                if detailed_results:
+                    all_results[vuln_name] = detailed_results
+                    report.generate_vulnerability_report(vuln, detailed_results, self.llm_model)
+                else:
+                    logger.info(f"No files analyzed for {vuln_name}")
+                    all_results[vuln_name] = []
+                
+                # Update progress
+                vuln_pbar.update(1)
+                
         return all_results
 
     def _perform_initial_scanning(self, vulnerabilities, args, main_pbar=None):
@@ -2242,12 +2344,12 @@ If you find {vuln_name} vulnerabilities:
 2. Explain specifically how this code is vulnerable to {vuln_name}
 3. Provide severity level (Critical/High/Medium/Low) for this {vuln_name} vulnerability
 4. Describe the potential impact specific to this {vuln_name} vulnerability
-5. Identify the application entry point and execution path:
+5. Identify whenever possible the application entry point and execution path:
    - Determine the initial entry point (route, API endpoint, function or method)
    - Create an ASCII flowchart showing the complete execution path from entry point to vulnerability
    - Show all relevant functions/methods called in the execution chain
 6. Identify the complete attack/exploitation path:
-   - HTTP methods involved (GET, POST, PUT, DELETE)
+   - For web vulnerabilities, HTTP methods involved (GET, POST, PUT, DELETE)
    - Specific parameters or variables that can be manipulated (form fields, URL parameters, headers)
    - Step-by-step exploitation scenario with example payloads
    - Any dependencies or conditions required for successful exploitation
@@ -2259,22 +2361,5 @@ FORMAT REQUIREMENTS:
 - DO NOT MENTION any other vulnerability types besides {vuln_name}
 - Focus ONLY on {vuln_name} - this is extremely important
 - Step-by-step exploitation scenario with example payloads, including precise request methods (e.g., GET, POST) and explicit parameter names (e.g., 'user_id', 'token')
-- When providing the ASCII flowchart, make sure to do the following:
-  1. Begin with a header "## Execution Path"
-  2. Use a properly formatted code block with triple backticks (```) at the beginning AND end
-  3. Do not add any other content inside the code block besides the ASCII diagram
-  4. Format the ASCII diagram like this:
-  ```
-  Entry Point: /api/endpoint
-       |
-       v
-  [process_data]
-       |
-       v
-  [validate_input]
-       |
-       v
-  [parse_user_data] <-- Vulnerable Function
-  ```
-  5. After the closing triple backticks, continue with the next section
 """
+
