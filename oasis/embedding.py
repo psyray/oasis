@@ -14,7 +14,7 @@ from .config import EXTRACT_FUNCTIONS, SUPPORTED_EXTENSIONS, DEFAULT_ARGS
 
 # Import from other modules
 from .ollama_manager import OllamaManager
-from .tools import create_cache_dir, logger, chunk_content, parse_input, sanitize_name, open_file
+from .tools import create_cache_dir, logger, chunk_content, parse_input, sanitize_name, open_file, _should_disable_progress
 
 class EmbeddingManager:
     def __init__(self, args, ollama_manager: OllamaManager):
@@ -26,6 +26,7 @@ class EmbeddingManager:
             ollama_manager: Ollama manager
         """
         try:
+            self.args = args
             self.ollama_manager = ollama_manager
             self.ollama_client = self.ollama_manager.get_client()
 
@@ -126,7 +127,8 @@ class EmbeddingManager:
                     embed_model=self.embedding_model,
                     chunk_size=self.chunk_size,
                     analyze_by_function=self.analyze_by_function,
-                    api_url=self.ollama_manager.api_url
+                    api_url=self.ollama_manager.api_url,
+                    no_progress=getattr(self.args, 'no_progress', False)
                 )
                 for file_path in files 
                 if self.analyze_by_function or str(file_path) not in self.code_base
@@ -136,7 +138,7 @@ class EmbeddingManager:
 
             # Process files in parallel with progress bar
             with Pool(processes=num_processes) as pool:
-                with tqdm(total=len(process_args), desc="Generating embeddings", leave=True) as pbar:
+                with tqdm(total=len(process_args), desc="Generating embeddings", leave=True, disable=_should_disable_progress(self.args)) as pbar:
                     for result in pool.imap_unordered(process_file_parallel, process_args):
                         if result:
                             file_path, content, embedding, is_function_analysis, function_embeddings = result
@@ -736,7 +738,7 @@ class EmbeddingManager:
 
         # Use a small, fast model for this task
         extraction_model = EXTRACT_FUNCTIONS['MODEL']
-        if not self.ollama_manager.ensure_model_available(extraction_model):
+        if not self.ollama_manager.ensure_model_available(extraction_model, _should_disable_progress(self.args)):
             return {}
         
         # Make sure we're using a normalized version of the content
@@ -858,7 +860,7 @@ def process_file_parallel(args: tuple) -> Tuple[str, str, List[float], bool, Opt
         # Extract embeddings based on analysis type
         if args.analyze_by_function:
             # Extract functions
-            functions = extract_functions_from_file(args.input_path, content, ollama_manager)
+            functions = extract_functions_from_file(args.input_path, content, EXTRACT_FUNCTIONS['MODEL'], ollama_manager, getattr(args, 'no_progress', False))
             
             # Generate embeddings for functions
             function_embeddings = {}
@@ -972,7 +974,7 @@ def generate_content_embedding(content: str, model: str, chunk_size: int = DEFAU
         logger.exception(f"Error generating embedding: {str(e)}")
         return None
 
-def extract_functions_from_file(file_path: str, content: str, extraction_model: str = EXTRACT_FUNCTIONS['MODEL'], ollama_manager: OllamaManager = None) -> Dict[str, str]:
+def extract_functions_from_file(file_path: str, content: str, extraction_model: str = EXTRACT_FUNCTIONS['MODEL'], ollama_manager: OllamaManager = None, disable_progress: bool = False) -> Dict[str, str]:
     """
     Extract functions from file content
     
@@ -980,7 +982,7 @@ def extract_functions_from_file(file_path: str, content: str, extraction_model: 
         file_path: Path to source file
         content: File content
         extraction_model: Model to use for extraction
-        
+        disable_progress: Whether to disable progress bars
     Returns:
         Dictionary mapping function IDs to function content
     """
@@ -998,7 +1000,7 @@ def extract_functions_from_file(file_path: str, content: str, extraction_model: 
         client = ollama_manager.get_client()
         
         # Ensure model is available
-        if not ollama_manager.ensure_model_available(extraction_model):
+        if not ollama_manager.ensure_model_available(extraction_model, disable_progress):
             return {}
             
         # Create prompt

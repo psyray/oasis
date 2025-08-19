@@ -12,6 +12,21 @@ from .config import KEYWORD_LISTS, MODEL_EMOJIS, VULNERABILITY_MAPPING
 # Initialize logger with module name
 logger = logging.getLogger('oasis')
 
+def _should_disable_progress(args=None, silent=False):
+    """
+    Utility function to determine if progress bars should be disabled
+    
+    Args:
+        args: Arguments object (optional)
+        silent: Silent flag (optional, for backward compatibility)
+        
+    Returns:
+        bool: True if progress bars should be disabled
+    """
+    if args:
+        return getattr(args, 'silent', False) or getattr(args, 'no_progress', False)
+    return silent
+
 # Suppress weasyprint warnings
 logging.getLogger('weasyprint').setLevel(logging.ERROR)
 

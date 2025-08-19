@@ -70,12 +70,13 @@ class OllamaManager:
         except ConnectionError:
             return False
     
-    def get_available_models(self, show_formatted: bool = False) -> List[str]:
+    def get_available_models(self, show_formatted: bool = False, disable_progress: bool = False) -> List[str]:
         """
         Get list of available models from Ollama API
 
         Args:
             show_formatted: If True, show formatted model list with progress
+            disable_progress: Whether to disable progress bars
         Returns:
             List of model names
         """
@@ -87,7 +88,7 @@ class OllamaManager:
                 return self.formatted_models
 
             if show_formatted and model_names:
-                self.formatted_models = self.format_model_display_batch(model_names)
+                self.formatted_models = self.format_model_display_batch(model_names, disable_progress)
                 logger.info("\nAvailable models:")
                 for i, (model_name, formatted_model) in enumerate(zip(model_names, self.formatted_models), 1):
                     # Align model numbers with proper spacing
@@ -201,11 +202,12 @@ class OllamaManager:
         model_info = self._get_model_info(model)
         logger.debug(f"Raw model info type: {type(model_info)}")
 
+        params = None
         if hasattr(model_info, 'parameters'):
             params = model_info.parameters
             logger.debug(f"Parameters: {params}")
 
-        if 'num_ctx' in params:
+        if params and 'num_ctx' in params:
             context_length = int(params.split()[1])
             chunk_size = int(context_length * 0.9)
             logger.info(f"Model {model} context length: {context_length}")
@@ -215,7 +217,7 @@ class OllamaManager:
         logger.warning(f"Could not detect context length for {model}, using default size: {MAX_CHUNK_SIZE}")
         return MAX_CHUNK_SIZE
     
-    def select_models(self, available_models: List[str], show_formatted: bool = True, max_models: int = None, msg: str = "", recommend_lightweight: bool = False) -> List[str]:
+    def select_models(self, available_models: List[str], show_formatted: bool = True, max_models: int = None, msg: str = "", recommend_lightweight: bool = False, disable_progress: bool = False) -> List[str]:
         """
         Let user select models interactively
 
@@ -231,7 +233,7 @@ class OllamaManager:
             return []
 
         # Filter models to display only lightweight models if requested
-        if recommend_lightweight and (lightweight_models := self._filter_lightweight_models(available_models)):
+        if recommend_lightweight and (lightweight_models := self._filter_lightweight_models(available_models, disable_progress)):
             logger.info(f"Filtering models to display only lightweight models (< 10B parameters): {len(lightweight_models)} models found.")
             if not lightweight_models:
                 logger.warning("No lightweight models found, displaying all available models.")
@@ -240,7 +242,7 @@ class OllamaManager:
 
         # Format models if requested
         if show_formatted:
-            formatted_models = self.format_model_display_batch(available_models)
+            formatted_models = self.format_model_display_batch(available_models, disable_progress)
         else:
             formatted_models = available_models
             
@@ -328,12 +330,13 @@ class OllamaManager:
             model_emoji = self._get_model_emoji(model_name)
             return f"{model_emoji}{model_name.split(':')[0]}"
     
-    def _preload_model_info(self, model_names: List[str]) -> None:
+    def _preload_model_info(self, model_names: List[str], disable_progress: bool = False) -> None:
         """
         Preload information for multiple models at once to reduce API calls
         
         Args:
             model_names: List of model names to preload information for
+            disable_progress: Whether to disable progress bars
         """
         # Check first which models are not in cache
         with self._cache_lock:
@@ -346,7 +349,7 @@ class OllamaManager:
         logger.debug(f"Preloading information for {len(models_to_load)} models")
         client = self.get_client()
         
-        for model in tqdm(models_to_load, desc="Preloading model info", unit="model"):
+        for model in tqdm(models_to_load, desc="Preloading model info", unit="model", disable=disable_progress):
             try:
                 model_info = client.show(model)
                 with self._cache_lock:
@@ -358,12 +361,13 @@ class OllamaManager:
                 with self._cache_lock:
                     self._model_info_cache[model] = {}
     
-    def format_model_display_batch(self, model_names: List[str]) -> List[str]:
+    def format_model_display_batch(self, model_names: List[str], disable_progress: bool = False) -> List[str]:
         """
         Format multiple model names
         
         Args:
             model_names: List of model names to format
+            disable_progress: Whether to disable progress bars
             
         Returns:
             List of formatted model strings
@@ -371,17 +375,18 @@ class OllamaManager:
         logger.info("Getting detailed model information...")
         
         # Preload model information to reduce API calls
-        self._preload_model_info(model_names)
+        self._preload_model_info(model_names, disable_progress)
         
         # Now format each model using the cached information
         return [self.format_model_display(model) for model in model_names]
     
-    def _filter_lightweight_models(self, models: List[str]) -> List[str]:
+    def _filter_lightweight_models(self, models: List[str], disable_progress: bool = False) -> List[str]:
         """
         Filter models to only include lightweight models (less than 10B parameters)
         
         Args:
             models: List of model names to filter
+            disable_progress: Whether to disable progress bars
             
         Returns:
             List of lightweight model names
@@ -390,7 +395,7 @@ class OllamaManager:
             return []
 
         # Preload model information to reduce API calls
-        self._preload_model_info(models)
+        self._preload_model_info(models, disable_progress)
 
         lightweight_models = []
 
@@ -522,7 +527,8 @@ class OllamaManager:
                 show_formatted=True,
                 msg=msg,
                 max_models=1,
-                recommend_lightweight=True
+                recommend_lightweight=True,
+                disable_progress=getattr(args, 'no_progress', False)
             )):
                 scan_model = None
 
@@ -530,7 +536,7 @@ class OllamaManager:
             # Then, select the main analysis model - show all models
             msg = "\nThen, choose your main model for deep vulnerability analysis:"
             if not (main_models := self.select_models(
-                available_models, show_formatted=True, msg=msg
+                available_models, show_formatted=True, msg=msg, disable_progress=getattr(args, 'no_progress', False)
             )):
                 main_models = None
 
@@ -539,12 +545,13 @@ class OllamaManager:
 
         return None
 
-    def ensure_model_available(self, model: str) -> bool:
+    def ensure_model_available(self, model: str, disable_progress: bool = False) -> bool:
         """
         Ensure a model is available, pull if needed
 
         Args:
             model: Model name to check/pull
+            disable_progress: Whether to disable progress bars
         Returns:
             True if model is available, False if error
         """
@@ -561,7 +568,7 @@ class OllamaManager:
             logger.info(f"🤖 Model {model} not found locally, pulling from Ollama library...")
 
             try:
-                with tqdm(desc=f"Downloading {model}", unit='B', unit_scale=True, unit_divisor=1024) as pbar:
+                with tqdm(desc=f"Downloading {model}", unit='B', unit_scale=True, unit_divisor=1024, disable=disable_progress) as pbar:
                     for response in client.pull(model, stream=True):
                         if 'status' in response:
                             status = response['status']
