@@ -11,7 +11,7 @@ from typing import Union
 from .config import MODEL_EMOJIS, REPORT, DEFAULT_ARGS
 
 # Import from other modules
-from .tools import generate_timestamp, setup_logging, logger, display_logo, get_vulnerability_mapping
+from .tools import generate_timestamp, setup_logging, logger, display_logo, get_vulnerability_mapping, _should_disable_progress
 from .ollama_manager import OllamaManager
 from .embedding import EmbeddingManager
 from .analyze import SecurityAnalyzer, EmbeddingAnalyzer
@@ -107,6 +107,8 @@ class OasisScanner:
                                 help='Enable debug output')
         logging_group.add_argument('-s', '--silent', action='store_true',
                                 help='Disable all output messages')
+        logging_group.add_argument('--no-progress', action='store_true',
+                                help='Disable the output of the progress bars')
         
         # Special Modes
         special_group = parser.add_argument_group('Special Modes')
@@ -157,9 +159,17 @@ class OasisScanner:
         logger.info(f"\nStarting security analysis at {generate_timestamp()}\n")
         start_time = time.time()
         
-        # Determine analysis type (adaptive or standard)
+        # Determine analysis type
         adaptive = hasattr(self.args, 'adaptive') and self.args.adaptive
-        analysis_type = "🧠 adaptive" if adaptive else "📋 standard"
+        analyze_type = getattr(self.args, 'analyze_type', 'standard')
+        
+        if adaptive:
+            analysis_type = "🧠 adaptive"
+        elif analyze_type == 'deep':
+            analysis_type = "🔥 deep (skip scan)"
+        else:
+            analysis_type = "📋 standard (scan + deep)"
+            
         logger.info(f"Using {analysis_type} analysis mode")
 
         # Process all main models one by one
@@ -366,7 +376,7 @@ class OasisScanner:
             return False
 
         # Check embedding model availability
-        return bool(self.ollama_manager.ensure_model_available(self.args.embed_model))
+        return bool(self.ollama_manager.ensure_model_available(self.args.embed_model, _should_disable_progress(self.args)))
 
     def _init_processing(self):
         """
@@ -412,7 +422,7 @@ class OasisScanner:
             return 1
 
         # Get available models
-        available_models = self.ollama_manager.get_available_models()
+        available_models = self.ollama_manager.get_available_models(disable_progress=_should_disable_progress(self.args))
         if not available_models:
             logger.error("No models available. Please check Ollama installation.")
             return 1
@@ -508,7 +518,7 @@ class OasisScanner:
             logger.info("🔎 Querying available models from Ollama...")
             
             # Display formatted list of models
-            available_models = self.ollama_manager.get_available_models(show_formatted=True)
+            available_models = self.ollama_manager.get_available_models(show_formatted=True, disable_progress=_should_disable_progress(self.args))
             
             if not available_models:
                 logger.error("No models available. Please check your Ollama installation.")

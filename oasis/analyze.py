@@ -10,7 +10,7 @@ from .config import CHUNK_ANALYZE_TIMEOUT, MODEL_EMOJIS, VULNERABILITY_PROMPT_EX
 
 # Import from other modules
 from .ollama_manager import OllamaManager
-from .tools import chunk_content, logger, calculate_similarity, sanitize_name
+from .tools import chunk_content, logger, calculate_similarity, sanitize_name, _should_disable_progress
 from .report import Report
 from .embedding import EmbeddingManager, build_vulnerability_embedding_prompt
 from .cache import CacheManager
@@ -31,6 +31,7 @@ class SecurityAnalyzer:
             scan_model: Lightweight model for initial scanning (if None, uses llm_model)
         """
         try:
+            self.args = args
             self.ollama_manager = ollama_manager
             self.client = self.ollama_manager.get_client()
         except Exception as e:
@@ -44,7 +45,7 @@ class SecurityAnalyzer:
         
         # Set up scanning model (lighter model for initial passes)
         self.scan_model = scan_model or llm_model
-        self.ollama_manager.ensure_model_available(self.scan_model)
+        self.ollama_manager.ensure_model_available(self.scan_model, _should_disable_progress(self.args))
         logger.info("\n")
         logger.info(f"{MODEL_EMOJIS['default']} Using {self.ollama_manager.get_model_display_name(self.scan_model)} for initial scanning and {self.ollama_manager.get_model_display_name(self.llm_model)} for deep analysis")
         
@@ -296,10 +297,13 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
         """
         # Determine analysis type
         adaptive = hasattr(args, 'adaptive') and args.adaptive
+        analyze_type = getattr(args, 'analyze_type', 'standard')
         
         # Select appropriate workflow based on analysis type
         if adaptive:
             all_results = self.analysis_pipeline.perform_adaptive_analysis(vulnerabilities, args, report)
+        elif analyze_type == 'deep':
+            all_results = self._perform_deep_only_analysis(vulnerabilities, args, report)
         else:
             all_results = self._perform_standard_analysis(vulnerabilities, args, report)
         
@@ -327,7 +331,7 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
         
         # Main progress bar for vulnerabilities
         with tqdm(total=len(vulnerabilities), desc="Overall vulnerability progress", 
-                 position=0, leave=True, disable=args.silent) as vuln_pbar:
+                 position=0, leave=True, disable=_should_disable_progress(args)) as vuln_pbar:
             
             # Phase 1: Initial scanning of all suspicious files with lightweight model
             suspicious_data = self._perform_initial_scanning(vulnerabilities, args, vuln_pbar)
@@ -335,6 +339,105 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
             # Phase 2: Deep analysis of suspicious chunks with the powerful model
             all_results = self._perform_deep_analysis(suspicious_data, args, report, vuln_pbar)
         
+        return all_results
+
+    def _perform_deep_only_analysis(self, vulnerabilities, args, report):
+        """
+        Perform deep analysis on all files without initial scanning phase.
+        This method skips the lightweight scan and directly performs deep analysis
+        on all code chunks for all specified vulnerabilities.
+        
+        Args:
+            vulnerabilities: List of vulnerability types to analyze
+            args: Command line arguments
+            report: Report object
+        
+        Returns:
+            Dictionary with analysis results
+        """
+        all_results = {}
+        
+        logger.info("\n")
+        logger.info("===== DEEP ANALYSIS MODE =====")
+        logger.info(f"Using {self.ollama_manager.get_model_display_name(self.llm_model)} for deep analysis")
+        logger.info("Skipping scan phase - analyzing all files directly")
+        
+        # Main progress bar for vulnerabilities
+        with tqdm(total=len(vulnerabilities), desc="Overall vulnerability progress", 
+                 position=0, leave=True, disable=_should_disable_progress(args)) as vuln_pbar:
+            
+            for vuln in vulnerabilities:
+                vuln_name = vuln['name']
+                vuln_pbar.set_postfix_str(f"Deep analyzing: {vuln_name}")
+                
+                # Directly analyze all files for this vulnerability using the LLM
+                detailed_results = []
+                
+                # Get vulnerability details for prompt building
+                vuln_details = self._get_vulnerability_details(vuln)
+                vuln_name_detail, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation = vuln_details
+                
+                # Analyze each file in the codebase
+                for file_path, data in self.code_base.items():
+                    # Get the chunks for this file
+                    chunks = data.get('chunks', [data['content']])
+                    
+                    file_analysis_results = []
+                    
+                    # Analyze each chunk with the LLM directly
+                    for i, chunk in enumerate(chunks):
+                        if not chunk.strip():  # Skip empty chunks
+                            continue
+                            
+                        # Build the analysis prompt
+                        prompt = self._build_analysis_prompt(
+                            vuln_name_detail, vuln_desc, vuln_patterns, 
+                            vuln_impact, vuln_mitigation, chunk, i+1, len(chunks)
+                        )
+                        
+                        # Perform LLM analysis
+                        try:
+                            response = self.client.generate(model=self.llm_model, prompt=prompt)
+                            if response and hasattr(response, 'response'):
+                                analysis_result = response.response
+                                file_analysis_results.append({
+                                    'chunk_index': i,
+                                    'chunk_content': chunk,
+                                    'analysis': analysis_result,
+                                    'similarity_score': 1.0  # All chunks get full score in deep mode
+                                })
+                        except Exception as e:
+                            logger.error(f"Error analyzing chunk {i} in {file_path}: {str(e)}")
+                            file_analysis_results.append({
+                                'chunk_index': i,
+                                'chunk_content': chunk,
+                                'error': str(e),
+                                'similarity_score': 1.0
+                            })
+                    
+                    # If we found any analysis results for this file, add them
+                    if file_analysis_results:
+                        detailed_results.append({
+                            'file_path': file_path,
+                            'similarity_score': 1.0,
+                            'analysis': f"## Deep Analysis Results for {file_path}\n\n" + 
+                                      "\n\n---\n\n".join([
+                                          f"### Chunk {r['chunk_index'] + 1}\n\n{r.get('analysis', r.get('error', 'No analysis available'))}"
+                                          for r in file_analysis_results
+                                      ])
+                        })
+                
+                # Store results and generate report
+                if detailed_results:
+                    all_results[vuln_name] = detailed_results
+                    report.generate_vulnerability_report(vuln, detailed_results, self.llm_model)
+                else:
+                    logger.info(f"No files analyzed for {vuln_name}")
+                    all_results[vuln_name] = []
+                
+                # Update progress
+                vuln_pbar.update(1)
+                
         return all_results
 
     def _perform_initial_scanning(self, vulnerabilities, args, main_pbar=None):
@@ -365,7 +468,7 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
 
         # Progress bar for vulnerabilities in initial scan phase
         with tqdm(total=len(suspicious_files_by_vuln), desc="Vulnerabilities analyzed (initial scan)", 
-                 position=1, leave=False, disable=args.silent) as vuln_scan_pbar:
+                 position=1, leave=False, disable=_should_disable_progress(args)) as vuln_scan_pbar:
             for vuln_name, data in suspicious_files_by_vuln.items():
                 vuln = data['vuln_data']
                 vuln_details = self._get_vulnerability_details(vuln)
@@ -378,7 +481,7 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
 
                 # Progress bar for files for this vulnerability
                 with tqdm(total=len(suspicious_files), desc=f"Scanning files for {vuln_name}", 
-                         position=2, leave=False, disable=args.silent) as file_pbar:
+                         position=2, leave=False, disable=_should_disable_progress(args)) as file_pbar:
                     for file_path, similarity_score in suspicious_files:
                         # Skip files not in code base
                         if file_path not in self.code_base:
@@ -437,7 +540,7 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
         # Scan each chunk with the lightweight model
         with tqdm(total=len(code_chunks), 
                 desc=f"Chunks in {Path(file_path).name}", 
-                position=3, leave=False, disable=silent) as chunk_pbar:
+                position=3, leave=False, disable=_should_disable_progress(silent=silent)) as chunk_pbar:
             for i, chunk in enumerate(code_chunks):
                 # Use a simplified prompt for the scanning phase
                 scan_prompt = self._build_scan_prompt(vuln_name, vuln_desc, chunk)
@@ -483,7 +586,7 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
         
         # Process each vulnerability separately for reporting
         with tqdm(total=len(suspicious_files_by_vuln), desc="Vulnerabilities analyzed (deep analysis)", 
-                 position=1, leave=False, disable=args.silent) as deep_vuln_pbar:
+                 position=1, leave=False, disable=_should_disable_progress(args)) as deep_vuln_pbar:
             for vuln_name, data in suspicious_files_by_vuln.items():
                 vuln = data['vuln_data']
 
@@ -540,7 +643,7 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
 
         # Progress bar for files being analyzed
         with tqdm(total=len(suspicious_files), desc=f"Analyzing files for {vuln_name}", 
-                 position=2, leave=False, disable=silent) as file_pbar:
+                 position=2, leave=False, disable=_should_disable_progress(silent=silent)) as file_pbar:
             # Analyze all suspicious files for this vulnerability
             for file_path in suspicious_files:
                 key = (file_path, vuln_name)
@@ -629,7 +732,7 @@ YOUR FINAL ANSWER (MUST BE EXACTLY "SUSPICIOUS" OR "CLEAN"):
         
         # Progress bar for vulnerability similarity analysis
         with tqdm(total=len(vulnerabilities), desc="Searching for similarities by vulnerability", 
-                 position=0, leave=False) as vuln_pbar:
+                 position=0, leave=False, disable=_should_disable_progress(self.args)) as vuln_pbar:
             for vuln in vulnerabilities:
                 # Find potentially vulnerable files based on embedding similarity
                 results = self.search_vulnerabilities(vuln, threshold=self.threshold)
@@ -1012,7 +1115,7 @@ class EmbeddingAnalyzer:
 
         num_processes = max(1, min(cpu_count(), len(process_args)))
         results = []
-        with tqdm(total=len(process_args), desc="Analyzing", leave=True) as pbar:
+        with tqdm(total=len(process_args), desc="Analyzing", leave=True, disable=_should_disable_progress(self.args)) as pbar:
             with Pool(processes=num_processes) as pool:
                 for result in pool.imap(analyze_item_parallel, process_args):
                     if result and 'error' not in result:
@@ -1192,7 +1295,7 @@ class AdaptiveAnalysisPipeline:
         """
         suspicious_chunks = []
         
-        with tqdm(total=len(code_chunks), desc="Static pattern analysis", leave=False) as pbar:
+        with tqdm(total=len(code_chunks), desc="Static pattern analysis", leave=False, disable=_should_disable_progress(self.args)) as pbar:
             for i, chunk in enumerate(code_chunks):
                 # Convert all patterns and chunk to lowercase for case-insensitive matching
                 chunk_lower = chunk.lower()
@@ -1232,7 +1335,7 @@ class AdaptiveAnalysisPipeline:
         # Only scan chunks not already identified as suspicious
         remaining_chunks = [(i, chunk) for i, chunk in enumerate(code_chunks) if i not in suspicious_indices]
         
-        with tqdm(total=len(remaining_chunks), desc="Lightweight model scan", leave=False) as pbar:
+        with tqdm(total=len(remaining_chunks), desc="Lightweight model scan", leave=False, disable=_should_disable_progress(self.args)) as pbar:
             for i, chunk in remaining_chunks:
                 # Use simplified scan prompt
                 scan_prompt = self.analyzer._build_scan_prompt(vuln_name, vuln_desc, chunk)
@@ -1272,7 +1375,7 @@ class AdaptiveAnalysisPipeline:
             'from_user', 'user_input', 'data flow', 'sanitize'
         ]
         
-        with tqdm(total=len(suspicious_chunks), desc="Identifying context-sensitive chunks", leave=False) as pbar:
+        with tqdm(total=len(suspicious_chunks), desc="Identifying context-sensitive chunks", leave=False, disable=_should_disable_progress(self.args)) as pbar:
             for chunk_idx, chunk_text in suspicious_chunks:
                 chunk_lower = chunk_text.lower()
                 
@@ -1307,7 +1410,7 @@ class AdaptiveAnalysisPipeline:
         """
         results = []
 
-        with tqdm(total=len(context_chunks), desc="Medium-depth analysis", leave=False) as pbar:
+        with tqdm(total=len(context_chunks), desc="Medium-depth analysis", leave=False, disable=_should_disable_progress(self.args)) as pbar:
             for idx, (chunk_idx, chunk_text) in enumerate(context_chunks):
                 # Build a more detailed prompt than the scan prompt, but less detailed than deep analysis
                 prompt = f"""You are a security analyst specialized in {vuln_name} vulnerabilities.
@@ -1422,7 +1525,7 @@ DO NOT include any other text in your response.
         # Get common format requirements
         common_prompt = _get_common_prompt(vuln_name)
         
-        with tqdm(total=len(high_risk_chunks), desc="Deep analysis of high-risk chunks", leave=False) as pbar:
+        with tqdm(total=len(high_risk_chunks), desc="Deep analysis of high-risk chunks", leave=False, disable=_should_disable_progress(self.args)) as pbar:
             for chunk_idx, chunk_text in high_risk_chunks:
                 # Build comprehensive analysis prompt
                 prompt = f"""You are a cybersecurity expert specialized in {vuln_name} vulnerabilities ONLY.
@@ -1807,7 +1910,7 @@ class BatchAdaptiveAnalysis:
         # Only load model once for all scan tasks
         if not self.models_loaded["scan"]:
             logger.debug(f"\nPHASE 2-3: Loading scan model {self.ollama_manager.get_model_display_name(self.scan_model)}")
-            self.ollama_manager.ensure_model_available(self.scan_model)
+            self.ollama_manager.ensure_model_available(self.scan_model, _should_disable_progress(self.args))
             self.models_loaded["scan"] = True
         
         # PHASE 2: Lightweight scanning for all files/vulnerabilities
@@ -1870,7 +1973,7 @@ class BatchAdaptiveAnalysis:
         # Only load model once for all deep tasks
         if not self.models_loaded["deep"]:
             logger.debug(f"\nPHASE 4: Loading deep model {self.ollama_manager.get_model_display_name(self.llm_model)}")
-            self.ollama_manager.ensure_model_available(self.llm_model)
+            self.ollama_manager.ensure_model_available(self.llm_model, _should_disable_progress(self.args))
             self.models_loaded["deep"] = True
         
         # PHASE 4: Deep analysis for all files/vulnerabilities
@@ -1987,7 +2090,7 @@ class BatchAdaptiveAnalysis:
             "deep": {"total": 0, "cache_hits": 0}
         }
         
-        with tqdm(total=len(self.pending_tasks), desc="Static analysis", leave=False) as pbar:
+        with tqdm(total=len(self.pending_tasks), desc="Static analysis", leave=False, disable=_should_disable_progress(self.args)) as pbar:
             for file_path, vulnerability, threshold in self.pending_tasks:
                 try:
                     # Extract vulnerability details
@@ -2060,14 +2163,14 @@ class BatchAdaptiveAnalysis:
         # Load the scan model ONCE for all tasks
         if not self.models_loaded["scan"]:
             logger.info(f"Loading scan model {self.ollama_manager.get_model_display_name(self.scan_model)} for all tasks")
-            self.ollama_manager.ensure_model_available(self.scan_model)
+            self.ollama_manager.ensure_model_available(self.scan_model, _should_disable_progress(self.args))
             self.models_loaded["scan"] = True
 
         # PHASE 2: Lightweight scanning for all files/vulnerabilities
         logger.info(f"PHASE 2: Lightweight model scan for {len(scan_tasks)} tasks")
         self.cache_stats["scan"]["total"] = len(scan_tasks)
         
-        with tqdm(total=len(scan_tasks), desc="Lightweight scanning", leave=False) as pbar:
+        with tqdm(total=len(scan_tasks), desc="Lightweight scanning", leave=False, disable=_should_disable_progress(self.args)) as pbar:
             for result_key, data in scan_tasks.items():
                 try:
                     file_path, vuln_name = result_key
@@ -2149,7 +2252,7 @@ class BatchAdaptiveAnalysis:
         # Load the deep model ONCE for all tasks
         if not self.models_loaded["deep"]:
             logger.info(f"Loading deep model {self.ollama_manager.get_model_display_name(self.llm_model)} for all tasks")
-            self.ollama_manager.ensure_model_available(self.llm_model)
+            self.ollama_manager.ensure_model_available(self.llm_model, _should_disable_progress(self.args))
             self.models_loaded["deep"] = True
         
         # PHASE 4: Deep analysis for all high-risk chunks
@@ -2242,12 +2345,12 @@ If you find {vuln_name} vulnerabilities:
 2. Explain specifically how this code is vulnerable to {vuln_name}
 3. Provide severity level (Critical/High/Medium/Low) for this {vuln_name} vulnerability
 4. Describe the potential impact specific to this {vuln_name} vulnerability
-5. Identify the application entry point and execution path:
+5. Identify whenever possible the application entry point and execution path:
    - Determine the initial entry point (route, API endpoint, function or method)
    - Create an ASCII flowchart showing the complete execution path from entry point to vulnerability
    - Show all relevant functions/methods called in the execution chain
 6. Identify the complete attack/exploitation path:
-   - HTTP methods involved (GET, POST, PUT, DELETE)
+   - For web vulnerabilities, HTTP methods involved (GET, POST, PUT, DELETE)
    - Specific parameters or variables that can be manipulated (form fields, URL parameters, headers)
    - Step-by-step exploitation scenario with example payloads
    - Any dependencies or conditions required for successful exploitation
@@ -2259,22 +2362,5 @@ FORMAT REQUIREMENTS:
 - DO NOT MENTION any other vulnerability types besides {vuln_name}
 - Focus ONLY on {vuln_name} - this is extremely important
 - Step-by-step exploitation scenario with example payloads, including precise request methods (e.g., GET, POST) and explicit parameter names (e.g., 'user_id', 'token')
-- When providing the ASCII flowchart, make sure to do the following:
-  1. Begin with a header "## Execution Path"
-  2. Use a properly formatted code block with triple backticks (```) at the beginning AND end
-  3. Do not add any other content inside the code block besides the ASCII diagram
-  4. Format the ASCII diagram like this:
-  ```
-  Entry Point: /api/endpoint
-       |
-       v
-  [process_data]
-       |
-       v
-  [validate_input]
-       |
-       v
-  [parse_user_data] <-- Vulnerable Function
-  ```
-  5. After the closing triple backticks, continue with the next section
 """
+
