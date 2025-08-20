@@ -772,6 +772,7 @@ class EmbeddingAnalyzer:
         self.results_cache = {}  # Cache for results by vulnerability type
         self.embedding_analysis_type = embedding_manager.embedding_analysis_type
         self.analyze_by_function = embedding_manager.analyze_by_function
+        self.analyze_type = embedding_manager.analyze_type
 
     def analyze_vulnerability(self, vuln: Dict) -> List[Dict[str, Any]]:
         """
@@ -2252,12 +2253,9 @@ If you find {vuln_name} vulnerabilities:
    - Any dependencies or conditions required for successful exploitation
 7. Provide detailed remediation recommendations with secure code examples
 
-If NO {vuln_name} vulnerabilities are found, respond with ONLY:
-"No {vuln_name} vulnerabilities found in this segment."
-
 FORMAT REQUIREMENTS:
 - Use Markdown formatting
-- For each {vuln_name} vulnerability found, start with the vulnerable code block in a code fence
+- For each {vuln_name} vulnerability found, delimitate clearly the previous section with a "Vulnerability found" title and then the vulnerable code block in a code fence
 - DO NOT MENTION any other vulnerability types besides {vuln_name}
 - Focus ONLY on {vuln_name} - this is extremely important
 - Step-by-step exploitation scenario with example payloads, including precise request methods (e.g., GET, POST) and explicit parameter names (e.g., 'user_id', 'token')

@@ -14,7 +14,7 @@ from .config import EXTRACT_FUNCTIONS, SUPPORTED_EXTENSIONS, DEFAULT_ARGS
 
 # Import from other modules
 from .ollama_manager import OllamaManager
-from .tools import logger, chunk_content, parse_input, sanitize_name, open_file
+from .tools import create_cache_dir, logger, chunk_content, parse_input, sanitize_name, open_file
 
 class EmbeddingManager:
     def __init__(self, args, ollama_manager: OllamaManager):
@@ -86,15 +86,10 @@ class EmbeddingManager:
         Args:
             args: Arguments
         """
-        # Setup cache file
-        input_path = Path(self.input_path)
-        if input_path.is_dir():
-            cache_dir = input_path.parent / '.oasis_cache'
-        else:
-            cache_dir = input_path / '.oasis_cache'
-            
-        cache_dir.mkdir(exist_ok=True)
-        self.cache_file = cache_dir / f"{input_path}_{sanitize_name(self.embedding_model)}.cache"
+        # Create cache directory
+        cache_dir=create_cache_dir(self.input_path)
+        self.cache_file = cache_dir / f"{sanitize_name(self.input_path)}_{sanitize_name(self.embedding_model)}.cache"
+        logger.debug(f"Cache file: {self.cache_file}")
         
         # Clear cache if requested
         if self.clear_cache:
