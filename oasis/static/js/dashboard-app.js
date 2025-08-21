@@ -4,7 +4,10 @@ const DashboardApp = {
     currentViewMode: 'list',
     reportData: [],
     stats: {},
-    cardTemplate: null,
+    templates: {
+        dateTag: null,
+        dashboardCard: null
+    },
     activeFilters: {
         models: [],
         formats: [],
@@ -58,7 +61,31 @@ const DashboardApp = {
                 document.body.innerHTML = '<div class="error-message">Error loading application. Please refresh the page.</div>';
             });
     },
-    
+
+    initTemplates: function() {
+        DashboardApp.debug("Loading templates...");
+        return Promise.all([
+            // Load date tag template
+            fetch('/static/templates/date_tag.html')
+                .then(response => response.text())
+                .then(template => {
+                    DashboardApp.templates.dateTag = template;
+                    DashboardApp.debug("Date tag template loaded");
+                }),
+            
+            // Load card template
+            fetch('/static/templates/dashboard_card.html')
+                .then(response => response.text())
+                .then(template => {
+                    DashboardApp.templates.dashboardCard = template;
+                    DashboardApp.debug("Card template loaded");
+                })
+        ]).catch(error => {
+            console.error('Error loading templates:', error);
+            throw error;
+        });
+    },
+
     // Define global functions once to avoid duplication
     defineGlobalFunctions: function() {
         this.debug("Defining global functions");
@@ -149,38 +176,30 @@ const DashboardApp = {
     startApplication: function() {
         DashboardApp.debug("Starting application...");
         
-        // Load card template
-        this.loadCardTemplate();
-        
-        // Initialize the dashboard
-        this.fetchReports();
-        this.fetchStats();
-        this.initializeFilters();
-        
-        // Initialize modal events if available
-        if (this.initializeModalEvents) {
-            this.initializeModalEvents();
-        }
-        
-        // Setup mobile navigation
-        if (this.setupMobileNavigation) {
-            this.setupMobileNavigation();
-        }
-        
-        // Setup event listeners
-        this.setupEventListeners();
-    },
-    
-    // Load card template
-    loadCardTemplate: function() {
-        fetch('/static/templates/dashboard_card.html')
-            .then(response => response.text())
-            .then(template => {
-                this.cardTemplate = template;
-                DashboardApp.debug("Card template loaded");
+        // Load templates first
+        this.initTemplates()
+            .then(() => {
+                // Initialize the dashboard only after templates are loaded
+                this.fetchReports();
+                this.fetchStats();
+                this.initializeFilters();
+                
+                // Initialize modal events if available
+                if (this.initializeModalEvents) {
+                    this.initializeModalEvents();
+                }
+                
+                // Setup mobile navigation
+                if (this.setupMobileNavigation) {
+                    this.setupMobileNavigation();
+                }
+                
+                // Setup event listeners
+                this.setupEventListeners();
             })
             .catch(error => {
-                console.error("Error loading card template:", error);
+                console.error("Error initializing application:", error);
+                document.body.innerHTML = '<div class="error-message">Error loading application templates. Please refresh the page.</div>';
             });
     },
     

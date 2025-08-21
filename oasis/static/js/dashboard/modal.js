@@ -304,9 +304,18 @@ DashboardApp.initializeModalEvents = function() {
     // Allow closing the modal by clicking outside
     const modal = document.getElementById('report-modal');
     if (modal) {
+        // Click event listener
         modal.addEventListener('click', function(event) {
             // Only close if clicking directly on the modal background
             if (event.target === modal) {
+                DashboardApp.closeReportModal();
+            }
+        });
+
+        // Keyboard event listener for Escape key
+        document.addEventListener('keydown', function(event) {
+            // Check if modal is visible and Escape key was pressed
+            if (event.key === 'Escape' && modal.classList.contains('visible')) {
                 DashboardApp.closeReportModal();
             }
         });

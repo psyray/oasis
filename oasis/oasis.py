@@ -54,6 +54,8 @@ class OasisScanner:
                             help=f'Output format [pdf, html, md] (default: {DEFAULT_ARGS["OUTPUT_FORMAT"]})')
         io_group.add_argument('-x', '--extensions', type=str,
                             help='Comma-separated list of file extensions to analyze (e.g., "py,js,java")')
+        io_group.add_argument('-lg', '--lang', dest='language', type=str, default='en',
+                            help='Language for reports (default: en)')
         
         # Analysis Configuration
         analysis_group = parser.add_argument_group('Analysis Configuration')
@@ -110,6 +112,8 @@ class OasisScanner:
         
         # Special Modes
         special_group = parser.add_argument_group('Special Modes')
+        special_group.add_argument('-l', '--language', type=str, default='en',
+                                help='Language for reports (default: en)')
         special_group.add_argument('-a', '--audit', action='store_true',
                                 help='Run embedding distribution analysis')
         special_group.add_argument('-ol', '--ollama-url', dest='ollama_url', type=str, 
@@ -175,7 +179,7 @@ class OasisScanner:
                 llm_model=main_model,
                 embedding_manager=self.embedding_manager,
                 ollama_manager=self.ollama_manager,
-                scan_model=scan_model
+                scan_model=scan_model[0]
             )
             
             # Set the current model for report generation
@@ -265,8 +269,12 @@ class OasisScanner:
         elif init_result is False:
             return 1  # Error exit code for validation failures
 
-        # Initialize report
-        self.report = Report(self.args.input_path, self.args.output_format)
+        # Initialize report with language settings
+        self.report = Report(
+            self.args.input_path, 
+            self.args.output_format,
+            language=getattr(self.args, 'language', 'en')
+        )
 
         # Initialize Ollama and check connection
         if not self.args.web:
@@ -438,12 +446,12 @@ class OasisScanner:
         self.args.scan_model = scan_model
         
         # Log model selection information
-        display_scan_model = self.ollama_manager.get_model_display_name(scan_model)
+        display_scan_model = ", ".join([self.ollama_manager.get_model_display_name(m) for m in scan_model])
         display_main_models = ", ".join([self.ollama_manager.get_model_display_name(m) for m in main_models])
         if len(main_models) == 1 and scan_model == main_models[0]:
             logger.info(f"{MODEL_EMOJIS['default']}Using '{display_scan_model}' for both scanning and deep analysis")
         else:
-            logger.info(f"{MODEL_EMOJIS['default']}Using '{display_scan_model}' for scanning and {display_main_models} for deep analysis")
+            logger.info(f"{MODEL_EMOJIS['default']}Using '{display_scan_model}' for scanning and '{display_main_models}' for deep analysis")
         
         # Create the report directories for all main models
         self.report.models = main_models

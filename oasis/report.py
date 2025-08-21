@@ -10,7 +10,7 @@ import logging
 from jinja2 import Environment, FileSystemLoader
 
 # Import from configuration
-from .config import REPORT
+from .config import REPORT, LANGUAGES
 
 # Import from other modules
 from .tools import extract_clean_path, logger, sanitize_name, generate_timestamp
@@ -24,7 +24,8 @@ class Report:
         output_format: List of output formats to generate
     """
     
-    def __init__(self, input_path: str | Path, output_format: List[str], models: List[str] = None, current_model: str = None):
+    def __init__(self, input_path: str | Path, output_format: List[str], models: List[str] = None, 
+                 current_model: str = None, language: str = 'en'):
         """
         Initialize the report generator
         
@@ -33,6 +34,7 @@ class Report:
             output_format: List of output formats to generate
             models: List of models to generate reports for
             current_model: Current model being used
+            language: Language code for reports (default: en)
         """
         if models is None:
             models = []
@@ -43,6 +45,9 @@ class Report:
         self.report_dirs = {}
         self.models = models
         self.current_model = current_model
+        self.language_code = language
+        self.language = LANGUAGES[self.language_code]
+
 
         # Configure the Jinja2 environment
         template_dir = Path(__file__).parent / 'templates'
@@ -93,6 +98,11 @@ class Report:
                 for model_dir in models_dir:
                     self.report_dirs[model_dir][fmt] = base_dir / model_dir / fmt
                     self.ensure_directory(self.report_dirs[model_dir][fmt])
+                    
+                    # Create language.txt file in the report directory
+                    lang_file = self.report_dirs[model_dir][fmt].parent / 'language.txt'
+                    with open(lang_file, 'w', encoding='utf-8') as f:
+                        f.write(self.language_code)
 
         return self.report_dirs
     
@@ -336,7 +346,7 @@ class Report:
         output_files = self.filter_output_files("_executive_summary")
 
         # Start building the executive summary
-        report = self.create_header("Security Analysis Executive Summary", model_name)
+        report = self.create_header("Executive Summary", model_name)
         
         report.extend([
             "\n## Overview",

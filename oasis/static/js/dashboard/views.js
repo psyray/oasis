@@ -117,19 +117,7 @@ DashboardApp.renderTreeView = function(groupBy) {
                 
                 // Add date entries
                 reportsForModel.forEach(report => {
-                    const reportDate = report.date ? new Date(report.date) : null;
-                    const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
-                    const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-                    
-                    html += `
-                        <span class="date-tag clickable" 
-                            onclick="openReport('${report.path}', '${report.format}')" 
-                            data-model="${model}" 
-                            data-vulnerability="${report.vulnerability_type}">
-                            <div class="date-main">${formattedDate}</div>
-                            <div class="date-time">${formattedTime}</div>
-                        </span>
-                    `;
+                    html += DashboardApp.generateDateTagHTML(report);
                 });
                 
                 html += `
@@ -183,19 +171,7 @@ DashboardApp.renderTreeView = function(groupBy) {
                 
                 // Add date entries
                 reportsForVuln.forEach(report => {
-                    const reportDate = report.date ? new Date(report.date) : null;
-                    const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
-                    const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-                    
-                    html += `
-                        <span class="date-tag clickable" 
-                            onclick="openReport('${report.path}', '${report.format}')" 
-                            data-model="${report.model}" 
-                            data-vulnerability="${vuln}">
-                            <div class="date-main">${formattedDate}</div>
-                            <div class="date-time">${formattedTime}</div>
-                        </span>
-                    `;
+                    html += DashboardApp.generateDateTagHTML(report);
                 });
                 
                 html += `
@@ -229,21 +205,7 @@ DashboardApp.renderListView = function() {
         return;
     }
     
-    // Load the template if it's not already loaded
-    if (!DashboardApp.cardTemplate) {
-        fetch('/static/templates/dashboard_card.html')
-            .then(response => response.text())
-            .then(template => {
-                DashboardApp.cardTemplate = template;
-                DashboardApp.renderListViewWithTemplate();
-            })
-            .catch(error => {
-                console.error('Error loading template:', error);
-                container.innerHTML = '<div class="error-message">Error loading template. Please refresh the page.</div>';
-            });
-    } else {
-        DashboardApp.renderListViewWithTemplate();
-    }
+    DashboardApp.renderListViewWithTemplate();
 };
 
 DashboardApp.renderListViewWithTemplate = function() {
@@ -287,7 +249,7 @@ DashboardApp.renderListViewWithTemplate = function() {
         const models = [...new Set(reportsForVuln.map(report => report.model))];
         
         // Get report statistics
-        const totalFindings = reportsForVuln.reduce((sum, r) => sum + (r.stats?.total || 0), 0);
+        const totalFindings = reportsForVuln.reduce((sum, r) => sum + (r.stats?.total_findings || 0), 0);
         const highRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.high_risk || 0), 0);
         const mediumRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.medium_risk || 0), 0);
         const lowRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.low_risk || 0), 0);
@@ -333,21 +295,7 @@ DashboardApp.renderListViewWithTemplate = function() {
         // Generate dates HTML
         let datesHTML = '';
         reportsForVuln.sort((a, b) => new Date(b.date) - new Date(a.date)).forEach(report => {
-            // Only show dates for MD reports
-            if (report['date_visible']) {
-                const reportDate = report.date ? new Date(report.date) : null;
-                const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
-                const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-                
-                datesHTML += `
-                    <span class="date-tag clickable" 
-                        onclick="openReport('${report.path}', '${report.format}')" 
-                        data-model="${report.model}">
-                        <div class="date-main">${formattedDate}</div>
-                        <div class="date-time">${formattedTime}</div>
-                    </span>
-                `;
-            }
+            datesHTML += DashboardApp.generateDateTagHTML(report);
         });
             
         // Generate format buttons HTML
@@ -363,7 +311,7 @@ DashboardApp.renderListViewWithTemplate = function() {
         }
             
         // Use the template and replace placeholders
-        let cardHTML = DashboardApp.cardTemplate
+        let cardHTML = DashboardApp.templates.dashboardCard
             .replace('${formattedVulnTypeEmoji}', formattedVulnEmoji)
             .replace('${formattedVulnType}', formattedVuln)
             .replace('${modelsHTML}', modelsHTML)
@@ -454,4 +402,4 @@ DashboardApp.switchView = function(viewMode) {
     DashboardApp.renderCurrentView();
 };
 
-DashboardApp.debug("Views module loaded"); 
+DashboardApp.debug("Views module loaded");
