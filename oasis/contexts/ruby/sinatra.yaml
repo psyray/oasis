@@ -1,0 +1,223 @@
+ignore_patterns:
+  - 'tmp/**'
+  - 'log/**'
+  - '.bundle/**'
+  - 'vendor/**'
+
+security_context: |
+  Sinatra specific security considerations:
+  - Session security
+  - CSRF protection
+  - Rack security middleware
+  - Route security
+  - Template security
+  - Parameter validation
+
+vulnerability_patterns:
+  sqli:
+    score: 8
+    description: "SQL injection in direct database operations"
+    patterns:
+      - "DB.execute"
+      - "raw SQL"
+      - "database query"
+      - "sequel raw"
+      - "direct query"
+      - "query params"
+      - "unsafe query"
+      - "dynamic SQL"
+
+  xss:
+    score: 9
+    description: "XSS in Sinatra views and templates"
+    patterns:
+      - "erb :template"
+      - "slim :template"
+      - "haml :template"
+      - "html escape"
+      - "unsafe output"
+      - "raw content"
+      - "unescaped data"
+      - "template injection"
+
+  input:
+    score: 8
+    description: "Input validation vulnerabilities"
+    patterns:
+      - "params[]"
+      - "request.body"
+      - "raw input"
+      - "user input"
+      - "form data"
+      - "query string"
+      - "request params"
+      - "data validation"
+
+  data:
+    score: 8
+    description: "Sensitive data exposure"
+    patterns:
+      - "config files"
+      - "environment"
+      - "settings"
+      - "credentials"
+      - "debug info"
+      - "error display"
+      - "sensitive data"
+      - "configuration"
+
+  session:
+    score: 8
+    description: "Session management issues"
+    patterns:
+      - "enable :sessions"
+      - "session[]"
+      - "session options"
+      - "session store"
+      - "cookie settings"
+      - "session config"
+      - "session security"
+      - "session handling"
+
+  config:
+    score: 8
+    description: "Security misconfigurations"
+    patterns:
+      - "set :environment"
+      - "development mode"
+      - "production mode"
+      - "security settings"
+      - "server config"
+      - "rack settings"
+      - "middleware"
+      - "app config"
+
+  logging:
+    score: 7
+    description: "Sensitive data logging"
+    patterns:
+      - "logger"
+      - "puts"
+      - "log output"
+      - "error logging"
+      - "debug info"
+      - "sensitive logs"
+      - "log level"
+      - "logging config"
+
+  crypto:
+    score: 8
+    description: "Cryptographic issues"
+    patterns:
+      - "digest"
+      - "encrypt"
+      - "decrypt"
+      - "hash password"
+      - "random token"
+      - "secret key"
+      - "crypto functions"
+      - "secure random"
+
+  rce:
+    score: 8
+    description: "Remote code execution risks"
+    patterns:
+      - "eval"
+      - "system"
+      - "exec"
+      - "backticks"
+      - "shell out"
+      - "command exec"
+      - "unsafe load"
+      - "code execution"
+
+  ssrf:
+    score: 7
+    description: "SSRF vulnerabilities"
+    patterns:
+      - "Net::HTTP"
+      - "open-uri"
+      - "http request"
+      - "remote fetch"
+      - "URL access"
+      - "external request"
+      - "HTTP client"
+      - "remote call"
+
+  xxe:
+    score: 7
+    description: "XXE in XML processing"
+    patterns:
+      - "XML parse"
+      - "Nokogiri"
+      - "REXML"
+      - "XML input"
+      - "document parse"
+      - "external entity"
+      - "XML handling"
+      - "feed parsing"
+
+  pathtra:
+    score: 8
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "send_file"
+      - "file read"
+      - "file access"
+      - "path join"
+      - "directory access"
+      - "file operations"
+      - "static files"
+      - "file serving"
+
+  idor:
+    score: 8
+    description: "IDOR vulnerabilities"
+    patterns:
+      - "find by id"
+      - "record access"
+      - "direct reference"
+      - "object lookup"
+      - "user data"
+      - "resource access"
+      - "data fetch"
+      - "model lookup"
+
+  secrets:
+    score: 8
+    description: "Hardcoded secrets"
+    patterns:
+      - "ENV vars"
+      - "config values"
+      - "API keys"
+      - "credentials"
+      - "passwords"
+      - "tokens"
+      - "secret keys"
+      - "sensitive data"
+
+  auth:
+    score: 9
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "authenticate"
+      - "login check"
+      - "user auth"
+      - "session auth"
+      - "password verify"
+      - "auth helper"
+      - "protected route"
+      - "access control"
+
+  csrf:
+    score: 9
+    description: "CSRF vulnerabilities"
+    patterns:
+      - "csrf protection"
+      - "rack protection"
+      - "csrf token"
+      - "form token"
+      - "authenticity"
+      - "request verify"
+      - "csrf check"
+      - "form security" 

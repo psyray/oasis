@@ -1,0 +1,237 @@
+ignore_patterns:
+  - 'node_modules/**'
+  - 'dist/**'
+  - 'logs/**'
+  - '.env'
+
+security_context: |
+  Express specific security considerations:
+  - Middleware security
+  - Route parameter validation
+  - Session security
+  - CORS configuration
+  - Error handling security
+  - HTTP headers security
+
+vulnerability_patterns:
+  injection:
+    - "req.params"
+    - "req.query"
+  session:
+    - "req.session"
+    - "express-session"
+  headers:
+    - "res.header"
+    - "helmet"
+  sqli:
+    score: 8
+    description: "SQL injection in Express database operations"
+    patterns:
+      - "mysql.query("
+      - "sequelize.query("
+      - "mongoose.find("
+      - "db.collection("
+      - "raw queries"
+      - "$where"
+      - "MongoDB injection"
+      - "parameterized queries missing"
+
+  xss:
+    score: 8
+    description: "XSS through Express template rendering and responses"
+    patterns:
+      - "res.send("
+      - "res.render("
+      - "res.json("
+      - "escape missing"
+      - "template literals in HTML"
+      - "express-handlebars"
+      - "ejs render"
+      - "pug template"
+      - "sanitize-html"
+
+  input:
+    score: 9
+    description: "Input validation vulnerabilities in Express routes"
+    patterns:
+      - "req.body"
+      - "req.query"
+      - "req.params"
+      - "body-parser"
+      - "express.json()"
+      - "express.urlencoded()"
+      - "multer"
+      - "express-validator"
+      - "validation middleware"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure in Express responses"
+    patterns:
+      - "error.stack"
+      - "console.error"
+      - "debug logs"
+      - "process.env"
+      - "config files"
+      - "stack traces"
+      - "error handling"
+      - "sensitive headers"
+
+  session:
+    score: 8
+    description: "Session management issues in Express"
+    patterns:
+      - "express-session"
+      - "cookie-session"
+      - "session options"
+      - "session store"
+      - "connect-redis"
+      - "session.destroy"
+      - "session.regenerate"
+      - "session fixation"
+      - "session timeout"
+
+  config:
+    score: 7
+    description: "Security misconfigurations in Express"
+    patterns:
+      - "app.disable('x-powered-by')"
+      - "helmet missing"
+      - "cors options"
+      - "security headers"
+      - "trust proxy"
+      - "environment variables"
+      - "debug mode"
+      - "error handling"
+      - "production config"
+
+  logging:
+    score: 6
+    description: "Sensitive data logging"
+    patterns:
+      - "morgan"
+      - "winston"
+      - "console.log"
+      - "debug"
+      - "log4js"
+      - "pino"
+      - "bunyan"
+      - "sensitive data in logs"
+
+  crypto:
+    score: 7
+    description: "Cryptographic issues in Express applications"
+    patterns:
+      - "crypto module"
+      - "bcrypt"
+      - "crypto.randomBytes"
+      - "hash function"
+      - "salt rounds"
+      - "encryption key"
+      - "JWT sign"
+      - "password hashing"
+
+  rce:
+    score: 8
+    description: "Remote code execution vulnerabilities"
+    patterns:
+      - "eval("
+      - "exec("
+      - "child_process"
+      - "vm module"
+      - "new Function("
+      - "template execution"
+      - "spawn("
+      - "serialization"
+      - "unsafe deserialization"
+
+  ssrf:
+    score: 7
+    description: "SSRF vulnerabilities in Express"
+    patterns:
+      - "axios"
+      - "node-fetch"
+      - "http.get"
+      - "request module"
+      - "got"
+      - "superagent"
+      - "webhook handling"
+      - "URL validation"
+
+  xxe:
+    score: 5
+    description: "XXE in Express XML processing"
+    patterns:
+      - "xml2js"
+      - "libxmljs"
+      - "express-xml-bodyparser"
+      - "xml parsing"
+      - "SOAP handling"
+      - "XML validation"
+      - "DTD processing"
+
+  pathtra:
+    score: 8
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "express.static"
+      - "sendFile"
+      - "fs.readFile"
+      - "path.join"
+      - "file operations"
+      - "directory traversal"
+      - "file download"
+      - "file upload"
+
+  idor:
+    score: 8
+    description: "IDOR vulnerabilities in routes"
+    patterns:
+      - "req.params.id"
+      - "findById"
+      - "user lookup"
+      - "authorization check"
+      - "access control"
+      - "resource access"
+      - "ownership validation"
+      - "permission check"
+
+  secrets:
+    score: 7
+    description: "Hardcoded secrets and sensitive data"
+    patterns:
+      - ".env"
+      - "config files"
+      - "API keys"
+      - "credentials"
+      - "connection strings"
+      - "tokens"
+      - "private keys"
+      - "certificates"
+
+  auth:
+    score: 9
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "passport.js"
+      - "jwt.verify"
+      - "session handling"
+      - "authentication middleware"
+      - "login route"
+      - "password reset"
+      - "token validation"
+      - "authorization header"
+      - "cookie authentication"
+
+  csrf:
+    score: 7
+    description: "CSRF vulnerabilities"
+    patterns:
+      - "csurf missing"
+      - "CSRF token"
+      - "cross-site request"
+      - "form handling"
+      - "state changing"
+      - "token validation"
+      - "same-origin"
+      - "csrf protection" 

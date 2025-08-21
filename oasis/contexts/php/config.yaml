@@ -1,0 +1,59 @@
+name: PHP
+extensions:
+  - php
+  - phtml
+  - php3
+  - php4
+  - php5
+  - php7
+  - phps
+
+frameworks:
+  laravel:
+    indicators:
+      - artisan
+      - composer.json
+    detection_patterns:
+      - app/Http/Kernel.php
+      - config/app.php
+  
+  symfony:
+    indicators:
+      - symfony.lock
+      - composer.json
+    detection_patterns:
+      - config/bundles.php
+      - src/Kernel.php
+  
+  wordpress:
+    indicators:
+      - wp-config.php
+      - wp-content/
+    detection_patterns:
+      - wp-includes/
+      - wp-admin/
+  
+  drupal:
+    indicators:
+      - core/lib/Drupal.php
+    detection_patterns:
+      - sites/default/
+      - modules/
+  
+  codeigniter:
+    indicators:
+      - system/core/CodeIgniter.php
+    detection_patterns:
+      - application/config/
+      - system/core/
+  
+  joomla:
+    indicators:
+      - configuration.php
+      - libraries/joomla
+      - administrator/
+    detection_patterns:
+      - components/com_content
+      - administrator/components
+      - libraries/src/Version.php
+      - includes/defines.php 

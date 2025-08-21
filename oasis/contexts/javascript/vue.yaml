@@ -1,0 +1,231 @@
+ignore_patterns:
+  - 'node_modules/**'
+  - 'dist/**'
+  - '.nuxt/**'
+  - '.output/**'
+
+security_context: |
+  Vue specific security considerations:
+  - XSS prevention in templates
+  - v-html directive risks
+  - Vue Router security
+  - Vuex state management security
+  - Props validation
+  - Template expression security
+
+vulnerability_patterns:
+  sqli:
+    score: 3
+    description: "SQL injection risks in frontend queries"
+    patterns:
+      - "raw query string"
+      - "dynamic query building"
+      - "graphql variables"
+      - "query concatenation"
+      - "database operations"
+      - "client-side query"
+
+  xss:
+    score: 9
+    description: "High risk of XSS through Vue directives and templates"
+    patterns:
+      - "v-html"
+      - "v-bind:href"
+      - "innerHTML"
+      - "domProps"
+      - "template injection"
+      - "computed HTML"
+      - "raw HTML rendering"
+      - "dynamic component"
+      - "slot content"
+      - "Vue.compile"
+
+  input:
+    score: 8
+    description: "Input validation vulnerabilities in Vue forms"
+    patterns:
+      - "v-model"
+      - "form validation"
+      - "user input"
+      - "vee-validate"
+      - "custom validators"
+      - "input sanitization"
+      - "form submission"
+      - "data binding"
+      - "input events"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure in Vue components"
+    patterns:
+      - "Vuex store"
+      - "localStorage"
+      - "sessionStorage"
+      - "API keys"
+      - "sensitive props"
+      - "computed properties"
+      - "debug data"
+      - "error messages"
+      - "environment variables"
+
+  session:
+    score: 6
+    description: "Client-side session management issues"
+    patterns:
+      - "Vuex persistence"
+      - "session storage"
+      - "token handling"
+      - "auth state"
+      - "remember me"
+      - "session timeout"
+      - "cookie handling"
+      - "state management"
+
+  config:
+    score: 7
+    description: "Security misconfigurations in Vue apps"
+    patterns:
+      - "vue.config.js"
+      - "production mode"
+      - "devtools enabled"
+      - "debug mode"
+      - "security headers"
+      - "CSP settings"
+      - "build configuration"
+      - "environment setup"
+
+  logging:
+    score: 5
+    description: "Sensitive data in Vue logs"
+    patterns:
+      - "console.log"
+      - "Vue.config.errorHandler"
+      - "error tracking"
+      - "debug logging"
+      - "performance monitoring"
+      - "vue-logger"
+      - "error boundaries"
+      - "log exposure"
+
+  crypto:
+    score: 4
+    description: "Client-side cryptographic operations"
+    patterns:
+      - "crypto-js"
+      - "web crypto API"
+      - "hashing functions"
+      - "encryption"
+      - "random generation"
+      - "key handling"
+      - "client-side crypto"
+      - "secure random"
+
+  rce:
+    score: 5
+    description: "Code execution risks in Vue"
+    patterns:
+      - "eval"
+      - "new Function"
+      - "dynamic imports"
+      - "render functions"
+      - "dynamic components"
+      - "template compilation"
+      - "script injection"
+      - "unsafe eval"
+
+  ssrf:
+    score: 4
+    description: "SSRF through frontend requests"
+    patterns:
+      - "axios requests"
+      - "fetch API"
+      - "dynamic URLs"
+      - "API calls"
+      - "resource loading"
+      - "external requests"
+      - "URL validation"
+      - "proxy bypass"
+
+  xxe:
+    score: 2
+    description: "XML processing in frontend"
+    patterns:
+      - "XML parsing"
+      - "DOMParser"
+      - "XML HTTP request"
+      - "SOAP requests"
+      - "document processing"
+      - "XML data"
+      - "parser configuration"
+
+  pathtra:
+    score: 4
+    description: "Path manipulation in Vue router"
+    patterns:
+      - "vue-router"
+      - "dynamic routes"
+      - "route params"
+      - "navigation guards"
+      - "path manipulation"
+      - "resource loading"
+      - "file paths"
+      - "asset URLs"
+
+  idor:
+    score: 5
+    description: "IDOR in frontend routes and requests"
+    patterns:
+      - "route parameters"
+      - "user ID exposure"
+      - "resource access"
+      - "API requests"
+      - "data fetching"
+      - "authorization check"
+      - "access control"
+      - "user data"
+
+  secrets:
+    score: 7
+    description: "Hardcoded secrets in Vue code"
+    patterns:
+      - "API keys"
+      - ".env variables"
+      - "hardcoded credentials"
+      - "configuration secrets"
+      - "tokens"
+      - "sensitive constants"
+      - "private keys"
+      - "client secrets"
+
+  auth:
+    score: 7
+    description: "Client-side authentication issues"
+    patterns:
+      - "auth guards"
+      - "token handling"
+      - "login flow"
+      - "authentication state"
+      - "route protection"
+      - "permission checks"
+      - "role management"
+      - "session handling"
+
+  csrf:
+    score: 6
+    description: "CSRF in Vue applications"
+    patterns:
+      - "form submission"
+      - "CSRF token"
+      - "axios interceptors"
+      - "request headers"
+      - "state changing"
+      - "cross-origin"
+      - "token validation"
+      - "secure forms"
+
+  state:
+    - "$store"
+    - "vuex"
+  routing:
+    - "router.push"
+    - "beforeEach" 

@@ -1,0 +1,53 @@
+name: JavaScript
+extensions:
+  - js
+  - jsx
+  - ts
+  - tsx
+  - mjs
+  - cjs
+
+frameworks:
+  react:
+    indicators:
+      - package.json
+      - react
+    detection_patterns:
+      - src/App.js
+      - src/index.js
+  
+  angular:
+    indicators:
+      - angular.json
+    detection_patterns:
+      - src/app/
+      - src/main.ts
+  
+  vue:
+    indicators:
+      - vue.config.js
+    detection_patterns:
+      - src/App.vue
+      - src/main.js
+  
+  next:
+    indicators:
+      - next.config.js
+    detection_patterns:
+      - pages/
+      - public/
+  
+  nuxt:
+    indicators:
+      - nuxt.config.js
+    detection_patterns:
+      - pages/
+      - components/
+  
+  express:
+    indicators:
+      - express
+      - app.js
+    detection_patterns:
+      - routes/
+      - middleware/ 

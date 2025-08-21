@@ -1,0 +1,223 @@
+ignore_patterns:
+  - '*.pyc'
+  - '__pycache__/**'
+  - 'data/**'
+  - '*.egg-info/**'
+
+security_context: |
+  Pyramid specific security considerations:
+  - Authentication policies
+  - Authorization policies
+  - CSRF protection
+  - Session security
+  - Request factory security
+  - View security
+
+vulnerability_patterns:
+  sqli:
+    score: 7
+    description: "SQL injection in Pyramid database operations"
+    patterns:
+      - "execute()"
+      - "raw SQL"
+      - "text()"
+      - "session.query"
+      - "db.query"
+      - "direct query"
+      - "filter string"
+      - "database operations"
+
+  xss:
+    score: 7
+    description: "XSS through template rendering and responses"
+    patterns:
+      - "Response()"
+      - "template rendering"
+      - "chameleon templates"
+      - "jinja2 templates"
+      - "mako templates"
+      - "safe filter"
+      - "structure:"
+      - "raw HTML"
+
+  input:
+    score: 7
+    description: "Input validation vulnerabilities"
+    patterns:
+      - "request.params"
+      - "request.POST"
+      - "request.GET"
+      - "request.json_body"
+      - "matchdict"
+      - "request.body"
+      - "colander validation"
+      - "schema validation"
+
+  data:
+    score: 6
+    description: "Sensitive data exposure"
+    patterns:
+      - "configuration settings"
+      - "ini files"
+      - "debug toolbar"
+      - "error pages"
+      - "development.ini"
+      - "production.ini"
+      - "sensitive info"
+      - "debug mode"
+
+  session:
+    score: 7
+    description: "Session management issues"
+    patterns:
+      - "session factory"
+      - "pyramid_session"
+      - "session data"
+      - "cookie session"
+      - "session security"
+      - "session interface"
+      - "session storage"
+      - "session config"
+
+  config:
+    score: 7
+    description: "Security misconfigurations"
+    patterns:
+      - "security policies"
+      - "authentication policy"
+      - "authorization policy"
+      - "security settings"
+      - "configurator"
+      - "registry settings"
+      - "middleware config"
+      - "CORS settings"
+
+  logging:
+    score: 6
+    description: "Sensitive data logging"
+    patterns:
+      - "pyramid.debug"
+      - "logging config"
+      - "debug logging"
+      - "error logging"
+      - "log handlers"
+      - "sensitive data"
+      - "request logging"
+      - "exception logging"
+
+  crypto:
+    score: 6
+    description: "Cryptographic issues"
+    patterns:
+      - "auth ticket"
+      - "secret key"
+      - "hash algorithm"
+      - "password hashing"
+      - "token generation"
+      - "random values"
+      - "encryption"
+      - "secure tokens"
+
+  rce:
+    score: 7
+    description: "Remote code execution risks"
+    patterns:
+      - "eval usage"
+      - "exec function"
+      - "subprocess"
+      - "shell commands"
+      - "template injection"
+      - "code execution"
+      - "unsafe deserialization"
+      - "dynamic imports"
+
+  ssrf:
+    score: 6
+    description: "SSRF vulnerabilities"
+    patterns:
+      - "requests usage"
+      - "urllib calls"
+      - "http client"
+      - "remote content"
+      - "URL handling"
+      - "external requests"
+      - "remote resources"
+      - "URL validation"
+
+  xxe:
+    score: 5
+    description: "XXE in XML processing"
+    patterns:
+      - "XML parsing"
+      - "ElementTree"
+      - "lxml usage"
+      - "XML handling"
+      - "document parsing"
+      - "feed parsing"
+      - "external entities"
+      - "DTD processing"
+
+  pathtra:
+    score: 7
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "static views"
+      - "file response"
+      - "static assets"
+      - "file operations"
+      - "path handling"
+      - "resource location"
+      - "file access"
+      - "directory traversal"
+
+  idor:
+    score: 7
+    description: "IDOR vulnerabilities"
+    patterns:
+      - "resource fetching"
+      - "direct references"
+      - "object access"
+      - "traversal"
+      - "resource location"
+      - "context finding"
+      - "model access"
+      - "data retrieval"
+
+  secrets:
+    score: 7
+    description: "Hardcoded secrets"
+    patterns:
+      - "ini settings"
+      - "configuration"
+      - "secret keys"
+      - "API keys"
+      - "credentials"
+      - "passwords"
+      - "connection strings"
+      - "sensitive data"
+
+  auth:
+    score: 7
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "authentication policy"
+      - "auth tickets"
+      - "permission check"
+      - "security policy"
+      - "access control"
+      - "user validation"
+      - "authorization"
+      - "identity checks"
+
+  csrf:
+    score: 6
+    description: "CSRF vulnerabilities"
+    patterns:
+      - "csrf token"
+      - "csrf protection"
+      - "token validation"
+      - "form handling"
+      - "request verification"
+      - "state changing"
+      - "cross-site request"
+      - "secure forms" 

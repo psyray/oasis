@@ -1,0 +1,226 @@
+ignore_patterns:
+  - 'application/cache/**'
+  - 'application/logs/**'
+  - 'vendor/**'
+  - '.env'
+
+security_context: |
+  CodeIgniter specific security considerations:
+  - Input class security
+  - Query builder security
+  - Form validation security
+  - Session security
+  - File upload security
+  - XSS filtering
+
+vulnerability_patterns:
+  sqli:
+    score: 8
+    description: "SQL injection in CodeIgniter database operations"
+    patterns:
+      - "$this->db->query"
+      - "query builder"
+      - "raw queries"
+      - "$this->db->simple_query"
+      - "escape() missing"
+      - "where clauses"
+      - "like clauses"
+      - "join operations"
+      - "custom SQL"
+
+  xss:
+    score: 8
+    description: "XSS vulnerabilities in views and output"
+    patterns:
+      - "html_escape()"
+      - "xss_clean()"
+      - "raw output"
+      - "form_prep()"
+      - "view data"
+      - "echo statements"
+      - "template variables"
+      - "unescaped data"
+      - "CI_Output"
+
+  input:
+    score: 7
+    description: "Input validation vulnerabilities"
+    patterns:
+      - "$this->input"
+      - "post()"
+      - "get()"
+      - "request()"
+      - "form validation"
+      - "filter_var"
+      - "sanitize input"
+      - "raw input"
+      - "file uploads"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure"
+    patterns:
+      - "config files"
+      - "database.php"
+      - "debug output"
+      - "error display"
+      - "log files"
+      - "sensitive data"
+      - "environment vars"
+      - "credentials"
+
+  session:
+    score: 7
+    description: "Session management issues"
+    patterns:
+      - "$this->session"
+      - "session handling"
+      - "userdata()"
+      - "session config"
+      - "session security"
+      - "session storage"
+      - "session fixation"
+      - "session timeout"
+
+  config:
+    score: 8
+    description: "Security misconfigurations"
+    patterns:
+      - "config.php"
+      - "database.php"
+      - "routes.php"
+      - "autoload.php"
+      - "security settings"
+      - "environment"
+      - "debug mode"
+      - "error reporting"
+
+  logging:
+    score: 6
+    description: "Sensitive data logging"
+    patterns:
+      - "log_message()"
+      - "error logging"
+      - "debug logs"
+      - "application logs"
+      - "sensitive info"
+      - "log level"
+      - "log paths"
+      - "error handling"
+
+  crypto:
+    score: 7
+    description: "Cryptographic issues"
+    patterns:
+      - "encryption key"
+      - "password hash"
+      - "encrypt()"
+      - "decrypt()"
+      - "random bytes"
+      - "hash functions"
+      - "salt generation"
+      - "crypto config"
+
+  rce:
+    score: 7
+    description: "Remote code execution risks"
+    patterns:
+      - "eval()"
+      - "exec()"
+      - "shell_exec"
+      - "system()"
+      - "unsafe includes"
+      - "dynamic execution"
+      - "code injection"
+      - "command execution"
+
+  ssrf:
+    score: 6
+    description: "SSRF vulnerabilities"
+    patterns:
+      - "curl functions"
+      - "http requests"
+      - "remote files"
+      - "URL validation"
+      - "external content"
+      - "file_get_contents"
+      - "remote URLs"
+      - "HTTP client"
+
+  xxe:
+    score: 5
+    description: "XXE in XML processing"
+    patterns:
+      - "XML parsing"
+      - "simplexml"
+      - "DOM parsing"
+      - "XML config"
+      - "feed parsing"
+      - "XML input"
+      - "external entities"
+      - "XML processing"
+
+  pathtra:
+    score: 7
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "file handling"
+      - "directory access"
+      - "file operations"
+      - "path manipulation"
+      - "file inclusion"
+      - "directory traversal"
+      - "file uploads"
+      - "file downloads"
+
+  idor:
+    score: 8
+    description: "IDOR vulnerabilities"
+    patterns:
+      - "user access"
+      - "record access"
+      - "direct references"
+      - "ID parameters"
+      - "access control"
+      - "user separation"
+      - "authorization check"
+      - "permission check"
+
+  secrets:
+    score: 7
+    description: "Hardcoded secrets"
+    patterns:
+      - "database config"
+      - "API keys"
+      - "encryption keys"
+      - "credentials"
+      - "passwords"
+      - "secret keys"
+      - "tokens"
+      - "sensitive constants"
+
+  auth:
+    score: 8
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "authentication"
+      - "user login"
+      - "password verify"
+      - "session handling"
+      - "access control"
+      - "user roles"
+      - "permissions"
+      - "authorization"
+
+  csrf:
+    score: 7
+    description: "CSRF vulnerabilities"
+    patterns:
+      - "csrf_token()"
+      - "csrf_verify()"
+      - "form tokens"
+      - "csrf protection"
+      - "form validation"
+      - "security tokens"
+      - "request validation"
+      - "cross-site request" 

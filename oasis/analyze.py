@@ -1,9 +1,10 @@
 import argparse
-from typing import List, Dict, Tuple, Any, Union
+from typing import List, Dict, Tuple, Any, Union, Optional
 from pathlib import Path
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 import re
+from dataclasses import dataclass
 
 # Import from configuration
 from .config import CHUNK_ANALYZE_TIMEOUT, MODEL_EMOJIS, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS, MAX_CHUNK_SIZE, DEFAULT_ARGS
@@ -15,11 +16,69 @@ from .report import Report
 from .embedding import EmbeddingManager, build_vulnerability_embedding_prompt
 from .cache import CacheManager
 from .enums import AnalysisMode, AnalysisType
+from .context_manager import TechnologyContextManager
+
+@dataclass
+class AnalysisContext:
+    """Data class to hold analysis context information"""
+    language: Optional[str]
+    framework: Optional[str]
+    vulnerability_patterns: Dict[str, Dict]
+    security_context: str
+    ignore_patterns: List[str]
+
+class AnalysisContextManager:
+    """Manages the analysis context and technology stack"""
+    
+    def __init__(self, tech_context_manager: TechnologyContextManager):
+        self.tech_context = tech_context_manager
+        self.current_context: Optional[AnalysisContext] = None
+
+    def setup_context(self, language: Optional[str] = None, framework: Optional[str] = None) -> AnalysisContext:
+        """Setup analysis context with given or detected technology stack"""
+        if not language:
+            language, framework = self.tech_context.detect_technology_stack()
+
+        if language:
+            context_data = self.tech_context.load_context(language, framework)
+            self.current_context = AnalysisContext(
+                language=language,
+                framework=framework,
+                vulnerability_patterns=context_data.get('vulnerability_patterns', {}),
+                security_context=context_data.get('security_context', ''),
+                ignore_patterns=context_data.get('ignore_patterns', [])
+            )
+            return self.current_context
+        return None
+
+    def get_vulnerability_patterns(self, vuln_type: str) -> List[str]:
+        """Get vulnerability patterns for specific type"""
+        if not self.current_context:
+            return []
+        return self.tech_context.get_vulnerability_patterns(
+            self.current_context.language,
+            self.current_context.framework,
+            vuln_type
+        )
+
+    def get_vulnerability_score(self, vuln_type: str) -> int:
+        """Get vulnerability score for specific type"""
+        if not self.current_context:
+            return 5  # Default score
+        return self.tech_context.get_vulnerability_score(
+            self.current_context.language,
+            self.current_context.framework,
+            vuln_type
+        )
+
+    def get_security_context(self) -> str:
+        """Get current security context"""
+        return self.current_context.security_context if self.current_context else ""
 
 # Define analysis modes and types
 class SecurityAnalyzer:
     def __init__(self, args, llm_model: str, embedding_manager: EmbeddingManager, ollama_manager: OllamaManager,
-                 scan_model: str = None):
+                 scan_model: str = None, technology_context: TechnologyContextManager = None):
         """
         Initialize the security analyzer with support for tiered model analysis
 
@@ -70,6 +129,7 @@ class SecurityAnalyzer:
             cache_days=self.cache_days
         )
         
+        # Initialize adaptive analysis pipeline
         self.analysis_pipeline = AdaptiveAnalysisPipeline(self)
 
         # Clear scan cache if requested
@@ -77,6 +137,18 @@ class SecurityAnalyzer:
             analysis_type = AnalysisType.ADAPTIVE if self.analyze_by_function else AnalysisType.STANDARD
             self.cache_manager.clear_scan_cache(analysis_type)
         
+        # Initialize technology context manager
+        self.tech_context = technology_context or TechnologyContextManager(args=args)
+        self.current_tech_stack = None
+
+        # Initialize analysis context manager
+        self.context_manager = AnalysisContextManager(self.tech_context)
+        self.current_context = None
+
+    def set_technology_context(self, language: str, framework: Optional[str] = None):
+        """Set the technology context for analysis"""
+        self.current_context = self.context_manager.setup_context(language, framework)
+
     def _get_vulnerability_details(self, vulnerability: Union[str, Dict]) -> Tuple[str, str, list, str, str]:
         """
         Extract vulnerability details from dict or return empty strings if invalid.
@@ -96,7 +168,7 @@ class SecurityAnalyzer:
     def _build_analysis_prompt(self, vuln_name: str, vuln_desc: str, vuln_patterns: list,
                                vuln_impact: str, vuln_mitigation: str, chunk_text: str, i: int, total_chunks: int) -> str:
         """
-        Construct the prompt for the LLM analysis.
+        Build analysis prompt with framework-specific patterns
         
         Args:
             vuln_name: Name of the vulnerability
@@ -111,11 +183,21 @@ class SecurityAnalyzer:
         Returns:
             Formatted prompt for LLM analysis
         """
-        # Format vulnerability info section
+        # Get framework-specific patterns if available
+        framework_patterns = self.context_manager.get_vulnerability_patterns(vuln_name)
+        
+        # Combine general and framework-specific patterns
+        all_patterns = list(set(vuln_patterns + framework_patterns))
+        
+        # Get framework-adjusted score
+        risk_score = self.context_manager.get_vulnerability_score(vuln_name)
+
+        # Format vulnerability info section with framework context
         vuln_info = (
             f"- Name: {vuln_name}\n"
             f"- Description: {vuln_desc}\n"
-            f"- Common patterns: {', '.join(vuln_patterns[:5]) if vuln_patterns else 'N/A'}\n"
+            f"- Risk Score: {risk_score}/10\n"
+            f"- Common patterns: {', '.join(all_patterns[:5]) if all_patterns else 'N/A'}\n"
             f"- Security impact: {vuln_impact}\n"
             f"- Mitigation: {vuln_mitigation}"
         )
@@ -123,8 +205,21 @@ class SecurityAnalyzer:
         # Get common format requirements
         common_prompt = _get_common_prompt(vuln_name)
         
+        # Add technology context if available
+        tech_context = ""
+        if self.current_tech_stack:
+            tech_context = f"""
+TECHNOLOGY CONTEXT:
+- Language: {self.current_tech_stack['language']}
+- Framework: {self.current_tech_stack['framework'] or 'None'}
+
+{self.context_manager.get_security_context()}
+"""
+        
         # Build the complete prompt with clear sections and strict instructions
-        return f"""You are a cybersecurityy expert specialized in {vuln_name} vulnerabilities ONLY. 
+        return f"""You are a cybersecurity expert specialized in {vuln_name} vulnerabilities ONLY.
+
+{tech_context}
 
 CRITICAL INSTRUCTION: You must ONLY analyze the code for {vuln_name} vulnerabilities.
 DO NOT mention, describe, or analyze ANY other type of vulnerability.
