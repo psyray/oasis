@@ -1,5 +1,40 @@
 """
-Configuration constants for OASIS
+Configuration constants and defaults for OASIS.
+
+This module contains all configuration constants, default values, vulnerability
+mappings, and supported file extensions used throughout the OASIS scanner.
+
+Key Configuration Sections:
+    - ANALYSIS_VERSION: Cache compatibility version
+    - DEFAULT_ARGS: Default command-line argument values
+    - SUPPORTED_EXTENSIONS: File types that can be analyzed
+    - VULNERABILITY_MAPPING: Complete vulnerability type definitions with patterns
+    - REPORT: Report generation settings
+    - MAX_CHUNK_SIZE: Maximum size for code chunks during analysis
+    - VULNERABILITY_PROMPT_EXTENSION: System prompts for LLM analysis
+
+Constants:
+    ANALYSIS_VERSION (str): Version string for cache compatibility
+    DEFAULT_ARGS (dict): Default values for CLI arguments
+    SUPPORTED_EXTENSIONS (Set[str]): Set of supported file extensions
+    VULNERABILITY_MAPPING (dict): Vulnerability definitions with patterns and descriptions
+    REPORT (dict): Report generation configuration
+    MAX_CHUNK_SIZE (int): Maximum characters per code chunk
+    VULNERABILITY_PROMPT_EXTENSION (str): LLM system prompt for analysis
+
+Example:
+    >>> from oasis.config import DEFAULT_ARGS, VULNERABILITY_MAPPING
+    >>> print(DEFAULT_ARGS['THRESHOLD'])
+    0.5
+    >>> print(list(VULNERABILITY_MAPPING.keys()))
+    ['sqli', 'xss', 'rce', ...]
+
+Note:
+    ANALYSIS_VERSION must be incremented when changes are made to:
+    - Prompt generation logic (_build_analysis_prompt)
+    - Result interpretation logic
+    - Chunking logic
+    - VULNERABILITY_PROMPT_EXTENSION content
 """
 from typing import Set
 

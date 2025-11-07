@@ -1,3 +1,40 @@
+"""
+Cache management module for OASIS security scanner.
+
+This module provides caching functionality for both embeddings and analysis results,
+implementing a dual-layer caching system with model-specific and analysis-type-aware
+storage. Caching dramatically improves performance for repeated analyses.
+
+Key Features:
+    - Model-specific cache directories
+    - Analysis type awareness (standard vs adaptive)
+    - Automatic cache expiration based on age
+    - Separate caching for scan and deep analysis phases
+    - MD5-based cache key generation
+
+Cache Structure:
+    .oasis_cache/
+    ├── [model_name]/
+    │   ├── standard/
+    │   │   ├── analysis/
+    │   │   └── embeddings/
+    │   └── adaptive/
+    │       ├── analysis/
+    │       └── embeddings/
+    └── [scan_model_name]/
+        └── standard/
+            ├── analysis/
+            └── embeddings/
+
+Classes:
+    CacheManager: Main cache management class
+
+Example:
+    >>> cache_mgr = CacheManager('/path/to/code', 'gemma3:27b', 'gemma3:4b', cache_days=7)
+    >>> cache_mgr.clear_cache(analysis_type=AnalysisType.STANDARD)
+    >>> result = cache_mgr.get_from_cache('file_path', 'vuln_type')
+"""
+
 from pathlib import Path
 from typing import Union, Dict
 from datetime import datetime
@@ -7,9 +44,36 @@ import pickle
 from .enums import AnalysisMode, AnalysisType
 from .tools import create_cache_dir, sanitize_name, logger
 
+
 class CacheManager:
     """
-    Manages caching operations for security analysis results
+    Manages dual-layer caching for security analysis results and embeddings.
+
+    This class handles all caching operations for OASIS, including:
+    - Model-specific cache directory management
+    - Cache key generation and validation
+    - Cache retrieval and storage
+    - Automatic expiration of old cache files
+    - Support for different analysis types and modes
+
+    The cache is organized hierarchically by model, analysis type, and data type
+    (embeddings vs analysis results), allowing for fine-grained cache management
+    and invalidation.
+
+    Attributes:
+        cache_days (int): Number of days to keep cache files before expiration
+        cache_dir (Path): Root cache directory path
+        model_cache_dir (Path): Cache directory for main analysis model
+        scan_model_cache_dir (Path): Cache directory for scan model
+        standard_cache_dirs (dict): Cache directories for standard analysis
+        adaptive_cache_dirs (dict): Cache directories for adaptive analysis
+
+    Example:
+        >>> cache = CacheManager('/path/to/code', 'gemma3:27b', 'gemma3:4b', 7)
+        >>> # Save analysis result
+        >>> cache.save_to_cache('file.py', 'sqli', result_data)
+        >>> # Retrieve cached result
+        >>> cached = cache.get_from_cache('file.py', 'sqli')
     """
     def __init__(self, input_path: Union[str, Path], llm_model: str, scan_model: str, cache_days: int):
         """

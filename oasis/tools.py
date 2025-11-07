@@ -1,3 +1,39 @@
+"""
+Utility functions and helpers for OASIS security scanner.
+
+This module provides a collection of utility functions used throughout OASIS,
+including logging configuration, file operations, path handling, text processing,
+and date/time utilities.
+
+Key Components:
+    - EmojiFormatter: Custom logging formatter with contextual emojis
+    - File operations: Safe file reading, path handling, cache management
+    - Text processing: Chunking, sanitization, formatting
+    - Date utilities: ISO date parsing, timestamp generation
+    - Path utilities: Clean path extraction, input parsing
+
+Functions:
+    create_cache_dir: Create and manage cache directories
+    sanitize_name: Sanitize filenames and model names
+    chunk_content: Split text into manageable chunks
+    extract_clean_path: Extract clean file paths from analysis results
+    parse_input: Parse various input path formats
+    open_file: Safely open and read files with encoding detection
+    generate_timestamp: Generate formatted timestamps
+    parse_iso_date: Parse ISO 8601 date strings
+    cosine_similarity: Calculate cosine similarity between vectors
+
+Classes:
+    EmojiFormatter: Custom logging formatter with emoji support
+
+Example:
+    >>> from oasis.tools import logger, chunk_content
+    >>> logger.info("Starting analysis")
+    🔍 Starting analysis
+    >>> chunks = chunk_content("long text...", max_size=1000)
+    >>> print(f"Split into {len(chunks)} chunks")
+"""
+
 from datetime import datetime
 import logging
 from pathlib import Path

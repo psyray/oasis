@@ -1,3 +1,36 @@
+"""
+Web interface module for OASIS security scanner.
+
+This module provides a Flask-based web interface for interactive exploration of
+security scan results. It includes password protection, session management, and
+a user-friendly dashboard for viewing and filtering vulnerabilities.
+
+Key Features:
+    - Password-protected web interface
+    - Interactive vulnerability dashboard
+    - Filtering by severity, type, and model
+    - Detailed code views with line numbers
+    - Model comparison capabilities
+    - Configurable network exposure (local/all)
+    - Session-based authentication
+    - Responsive design
+
+Classes:
+    WebServer: Main web server class for serving security reports
+
+Example:
+    >>> from oasis.report import Report
+    >>> from oasis.web import WebServer
+    >>> report = Report(input_path='/path/to/code', output_format=['html'])
+    >>> web = WebServer(report, web_expose='local', web_password='secret', web_port=5000)
+    >>> web.run()
+    Web interface available at: http://localhost:5000
+
+Note:
+    The web interface requires that security reports have already been generated.
+    It reads from the security_reports/ directory adjacent to the input path.
+"""
+
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -12,7 +45,36 @@ from .config import VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS
 from .report import Report
 from .tools import parse_iso_date, parse_report_date
 
+
 class WebServer:
+    """
+    Flask-based web server for interactive security report exploration.
+
+    This class creates and manages a Flask web application that serves security
+    scan results through an interactive dashboard. It includes authentication,
+    session management, and various filtering capabilities.
+
+    Attributes:
+        report (Report): Report instance containing scan information
+        debug (bool): Enable Flask debug mode
+        web_expose (str): Network exposure setting ('local' or 'all')
+        web_password (str): Password for web interface authentication
+        web_port (int): Port number for web server
+        report_data (dict): Cached report data
+        input_path (Path): Path to scanned code
+        security_dir (Path): Path to security reports directory
+
+    Example:
+        >>> report = Report('/code', ['html'], models=['gemma3:27b'])
+        >>> server = WebServer(report, web_expose='local', web_port=5000)
+        >>> server.run()  # Starts web server
+
+    Security:
+        - Password protection with session management
+        - Configurable network exposure
+        - No authentication bypasses
+        - Session-based access control
+    """
     def __init__(self, report, debug=False, web_expose='local', web_password=None, web_port=5000):
         self.report = report
         self.debug = debug

@@ -1,3 +1,28 @@
+"""
+Ollama model management module for OASIS.
+
+This module provides the OllamaManager class which handles all interactions with
+the Ollama API, including model installation, availability checks, and inference
+requests. It manages client connections, model caching, and provides utility
+functions for model selection and parameter detection.
+
+Key Features:
+    - Thread-safe Ollama client management
+    - Automatic model installation with progress tracking
+    - Model parameter size detection for intelligent recommendations
+    - Model information caching to reduce API calls
+    - Support for embeddings and chat completions
+    - Configurable API endpoint
+
+Classes:
+    OllamaManager: Main class for Ollama API interactions
+
+Example:
+    >>> manager = OllamaManager(api_url='http://localhost:11434')
+    >>> models = manager.get_available_models()
+    >>> response = manager.generate('gemma3:27b', 'Analyze this code...')
+"""
+
 import contextlib
 import threading
 import ollama
@@ -6,17 +31,45 @@ from tqdm import tqdm
 import logging
 
 # Import from configuration
-from .config import MODEL_EMOJIS,OLLAMA_URL, EXCLUDED_MODELS, DEFAULT_MODELS, MAX_CHUNK_SIZE
+from .config import MODEL_EMOJIS, OLLAMA_URL, EXCLUDED_MODELS, DEFAULT_MODELS, MAX_CHUNK_SIZE
 
 # Import from other modules
 from .tools import logger
 
+
 class OllamaManager:
     """
-    Class for managing Ollama interactions and model operations
+    Manages interactions with the Ollama API for model operations and inference.
 
-    Args:
-        api_url: URL for Ollama API
+    This class provides a thread-safe interface to the Ollama API, handling:
+    - Client connection management
+    - Model availability and installation
+    - Model parameter size detection
+    - Inference requests (chat and embeddings)
+    - Model information caching
+
+    The manager maintains a thread-safe client connection and caches model
+    information to minimize API calls during analysis.
+
+    Attributes:
+        client (ollama.Client): Ollama API client instance
+        api_url (str): URL of the Ollama API endpoint
+        excluded_models (List[str]): Models to exclude from listings
+        default_models (List[str]): Recommended default models
+        formatted_models (List[dict]): Cached formatted model information
+        _model_info_cache (dict): Cache of model metadata
+        _client_lock (threading.Lock): Lock for thread-safe client access
+        _cache_lock (threading.Lock): Lock for thread-safe cache access
+
+    Example:
+        >>> manager = OllamaManager()
+        >>> # Check if model is available
+        >>> if manager.is_model_available('gemma3:27b'):
+        ...     response = manager.chat('gemma3:27b', 'Analyze code...')
+        >>>
+        >>> # Get model parameters
+        >>> params = manager.detect_model_parameters('gemma3:27b')
+        >>> print(f"Model has {params}B parameters")
     """
     
     def __init__(self, api_url: str = OLLAMA_URL):
