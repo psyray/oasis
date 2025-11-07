@@ -1,3 +1,15 @@
+## 🚀 [0.4.1] - 2025-11-07
+
+### ✨ Added
+- 🔧 Implemented fallback function extraction when LLM extraction fails to match function names
+- 🎯 Added regex-based fallback extraction for multiple languages (Python, JavaScript, TypeScript, Java, C/C++, Go, Ruby, PHP)
+- ✅ Added validation to check if extracted content appears to be valid function code
+- 📝 Improved error handling and logging for function extraction failures
+
+### ⚡ Changed
+- 🔍 Enhanced function extraction reliability with multi-tier fallback strategy
+- 📊 Better diagnostic logging for function extraction mismatches
+
 ## 🚀 [0.4.0] - 2025-03-21
 
 ### ✨ Added

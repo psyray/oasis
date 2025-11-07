@@ -797,7 +797,18 @@ class EmbeddingManager:
                             functions[f"{file_path}::{name}"] = func_content
                         else:
                             logger.warning(f"Function extraction mismatch for {name} in {file_path}")
-                            # TODO: implement a fallback or more advanced validation
+                            # Fallback: Try to find the function using regex patterns
+                            fallback_content = self._try_fallback_function_extraction(name, content, extension)
+                            if fallback_content:
+                                logger.debug(f"Successfully extracted {name} using fallback method")
+                                functions[f"{file_path}::{name}"] = fallback_content
+                            else:
+                                # If fallback fails, use the LLM-extracted content anyway if it looks like code
+                                if self._looks_like_function_code(func_content):
+                                    logger.debug(f"Using LLM-extracted content for {name} despite name mismatch")
+                                    functions[f"{file_path}::{name}"] = func_content
+                                else:
+                                    logger.warning(f"Skipping {name} - extracted content doesn't appear to be valid")
 
                 return functions
 
@@ -813,6 +824,99 @@ class EmbeddingManager:
             return self.extract_functions_with_regex(file_path, content, extension)
 
         return {}
+
+    def _try_fallback_function_extraction(self, func_name: str, content: str, extension: str) -> Optional[str]:
+        """
+        Fallback method to extract a function using regex patterns when LLM extraction fails.
+
+        Args:
+            func_name: Name of the function to extract
+            content: Full file content
+            extension: File extension
+
+        Returns:
+            Extracted function content or None if not found
+        """
+        try:
+            # Define regex patterns for different languages
+            patterns = {
+                'py': rf'^\s*(?:async\s+)?def\s+{re.escape(func_name)}\s*\([^)]*\)(?:\s*->\s*[^:]+)?:\s*(?:\n(?:    |\t).*)*',
+                'js': rf'(?:function\s+{re.escape(func_name)}\s*\([^)]*\)|(?:const|let|var)\s+{re.escape(func_name)}\s*=\s*(?:async\s*)?\([^)]*\)\s*=>)\s*\{{[^}}]*\}}',
+                'ts': rf'(?:function\s+{re.escape(func_name)}\s*\([^)]*\)|(?:const|let|var)\s+{re.escape(func_name)}\s*=\s*(?:async\s*)?\([^)]*\)\s*=>)\s*\{{[^}}]*\}}',
+                'java': rf'(?:public|private|protected)?\s*(?:static)?\s*(?:\w+)\s+{re.escape(func_name)}\s*\([^)]*\)\s*\{{[^}}]*\}}',
+                'cpp': rf'(?:\w+)\s+{re.escape(func_name)}\s*\([^)]*\)\s*\{{[^}}]*\}}',
+                'c': rf'(?:\w+)\s+{re.escape(func_name)}\s*\([^)]*\)\s*\{{[^}}]*\}}',
+                'go': rf'func\s+{re.escape(func_name)}\s*\([^)]*\)(?:\s*\([^)]*\))?\s*\{{[^}}]*\}}',
+                'rb': rf'^\s*def\s+{re.escape(func_name)}\s*(?:\([^)]*\))?\s*(?:\n(?:  |\t).*)*\n\s*end',
+                'php': rf'(?:public|private|protected)?\s*function\s+{re.escape(func_name)}\s*\([^)]*\)\s*\{{[^}}]*\}}',
+            }
+
+            pattern = patterns.get(extension)
+            if not pattern:
+                return None
+
+            # Try to find the function
+            match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
+            if match:
+                return match.group(0)
+
+            # For Python, try a more lenient approach with proper indentation handling
+            if extension == 'py':
+                lines = content.split('\n')
+                func_start = None
+                for i, line in enumerate(lines):
+                    if re.match(rf'^\s*(?:async\s+)?def\s+{re.escape(func_name)}\s*\(', line):
+                        func_start = i
+                        break
+
+                if func_start is not None:
+                    # Find the end of the function by checking indentation
+                    base_indent = len(lines[func_start]) - len(lines[func_start].lstrip())
+                    func_lines = [lines[func_start]]
+
+                    for i in range(func_start + 1, len(lines)):
+                        line = lines[i]
+                        if line.strip():  # Non-empty line
+                            current_indent = len(line) - len(line.lstrip())
+                            if current_indent <= base_indent:
+                                break  # End of function
+                        func_lines.append(line)
+
+                    return '\n'.join(func_lines)
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Error in fallback extraction for {func_name}: {e}")
+            return None
+
+    def _looks_like_function_code(self, content: str) -> bool:
+        """
+        Validate if the extracted content appears to be valid function code.
+
+        Args:
+            content: Content to validate
+
+        Returns:
+            True if content looks like function code
+        """
+        if not content or len(content.strip()) < 10:
+            return False
+
+        # Check for common function indicators
+        function_indicators = [
+            r'^\s*(?:def|function|func|fn|sub|proc)',  # Function declarations
+            r'\(.*\)',  # Parameter lists
+            r'{\s*$',  # Opening braces
+            r':\s*$',  # Python colon
+            r'return\s+',  # Return statements
+            r'=>',  # Arrow functions
+            r'\bif\b|\bfor\b|\bwhile\b',  # Control structures
+        ]
+
+        # Content should match at least 2 indicators
+        matches = sum(1 for pattern in function_indicators if re.search(pattern, content, re.MULTILINE))
+        return matches >= 2
 
     def get_vulnerability_embedding(self, vulnerability: Union[str, Dict]) -> List[float]:
         """
