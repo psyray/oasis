@@ -280,6 +280,9 @@ def load_vulnerability_definitions() -> Dict[str, Any]:
     for json_file in vuln_dir.glob("*.json"):
         try:
             vuln_key = json_file.stem  # filename without extension
+            if vuln_key in vulnerabilities:
+                print(f"Warning: Duplicate vulnerability key '{vuln_key}' found in {json_file}. Skipping this file to avoid overwriting existing entry.")
+                continue
             with open(json_file, 'r', encoding='utf-8') as f:
                 vuln_data = json.load(f)
                 vulnerabilities[vuln_key] = vuln_data
