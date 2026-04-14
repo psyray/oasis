@@ -1,0 +1,12 @@
+---
+description: Commit and release conventions inferred from OASIS history
+alwaysApply: true
+---
+
+# OASIS Git Conventions
+
+- Use Conventional Commit prefixes seen in history: `feat`, `fix`, `refactor`, `docs`, `release`, `version`.
+- Keep commit subjects short and scoped to user-visible intent (why), not low-level implementation detail.
+- For release-oriented changes, keep version, changelog, and docs aligned in the same working session.
+- When a CLI flag or behavior changes, update `README.md` in the same change to avoid drift.
+- Prefer incremental commits focused on one concern (e.g., caching, web UI bugfixes, model integration).
