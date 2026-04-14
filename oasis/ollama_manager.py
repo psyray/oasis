@@ -114,14 +114,22 @@ class OllamaManager:
         """
         return self._model_thinking_overrides.get(model)
 
-    def chat(self, model: str, messages: List[dict], options: Optional[dict] = None, **kwargs):
+    def _call_with_thinking(
+        self,
+        method_name: str,
+        model: str,
+        payload_key: str,
+        payload_value: Any,
+        options: Optional[dict] = None,
+        **kwargs: Any
+    ):
         """
-        Chat completion wrapper with per-model thinking support.
+        Execute an Ollama client call with optional per-model thinking behavior.
         """
         client = self.get_client()
         request_kwargs = {
             "model": model,
-            "messages": messages
+            payload_key: payload_value
         }
         if options is not None:
             request_kwargs["options"] = options
@@ -131,8 +139,9 @@ class OllamaManager:
         if thinking is not None:
             request_kwargs["think"] = thinking
 
+        method = getattr(client, method_name)
         try:
-            return client.chat(**request_kwargs)
+            return method(**request_kwargs)
         except TypeError as error:
             # Backward compatibility with ollama clients not supporting think=
             error_message = error.args[0] if error.args else ""
@@ -141,38 +150,34 @@ class OllamaManager:
                 and "unexpected keyword argument 'think'" in str(error_message)
             ):
                 request_kwargs.pop("think", None)
-                return client.chat(**request_kwargs)
+                return method(**request_kwargs)
             raise
+
+    def chat(self, model: str, messages: List[dict], options: Optional[dict] = None, **kwargs):
+        """
+        Chat completion wrapper with per-model thinking support.
+        """
+        return self._call_with_thinking(
+            method_name="chat",
+            model=model,
+            payload_key="messages",
+            payload_value=messages,
+            options=options,
+            **kwargs
+        )
 
     def generate(self, model: str, prompt: str, options: Optional[dict] = None, **kwargs):
         """
         Text generation wrapper with per-model thinking support.
         """
-        client = self.get_client()
-        request_kwargs = {
-            "model": model,
-            "prompt": prompt
-        }
-        if options is not None:
-            request_kwargs["options"] = options
-        request_kwargs.update(kwargs)
-
-        thinking = self._resolve_model_thinking(model)
-        if thinking is not None:
-            request_kwargs["think"] = thinking
-
-        try:
-            return client.generate(**request_kwargs)
-        except TypeError as error:
-            # Backward compatibility with ollama clients not supporting think=
-            error_message = error.args[0] if error.args else ""
-            if (
-                "think" in request_kwargs
-                and "unexpected keyword argument 'think'" in str(error_message)
-            ):
-                request_kwargs.pop("think", None)
-                return client.generate(**request_kwargs)
-            raise
+        return self._call_with_thinking(
+            method_name="generate",
+            model=model,
+            payload_key="prompt",
+            payload_value=prompt,
+            options=options,
+            **kwargs
+        )
     
     def get_available_models(self, show_formatted: bool = False) -> List[str]:
         """
