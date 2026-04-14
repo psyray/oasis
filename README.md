@@ -37,7 +37,8 @@
 
 ## 🌟 Features
 
-- 🔍 **Multi-Model Analysis**: Leverage multiple Ollama models for comprehensive security scanning
+- 🔍 **Technology Auto-Detection**: Smart detection of programming languages and frameworks with manual override options
+- 🔄 **Multi-Model Analysis**: Leverage multiple Ollama models for comprehensive security scanning
 - 🔄 **Two-Phase Scanning**: Use lightweight models for initial scanning and powerful models for deep analysis
 - 🧠 **Adaptive Analysis**: Smart multi-level scanning that adjusts depth based on risk assessment
 - 🔄 **Interactive Model Selection**: Guided selection of scan and analysis models with parameter-based filtering
@@ -187,8 +188,47 @@ oasis -i [path_to_analyze] -v sqli,xss --clear-cache-scan -sm gemma3:4b -m gemma
 Full production scan:
 ```bash
 # Comprehensive scan of a large codebase
-oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:lates -t 0.7 --vulns all
+oasis -i [path_to_analyze] -sm qwen2.5-coder:3b -m qwen2.5-coder:32b,gemma3:27b -t 0.7 --vulns all
 ```
+
+
+## 🔍 Technology Detection
+
+OASIS can automatically detect the technology stack of your codebase or use manual configuration:
+
+### Auto-Detection
+By default, OASIS will:
+- Detect up to 3 most used programming languages
+- Identify frameworks for each detected language
+- Apply appropriate security patterns and rules
+
+```bash
+# Auto-detect everything
+oasis -i ./src
+
+# Limit to 2 languages
+oasis -i ./src --max-languages 2
+```
+
+### Manual Configuration
+Auto-detection is automatically disabled when using:
+- `--no-autodetect`: Explicitly disable detection
+- `--language`: Specify programming language
+- `--framework`: Specify framework
+- `--extensions`: Specify file extensions
+
+```bash
+# Manual language and framework
+oasis -i ./src --language python --framework django
+
+# Manual extensions only
+oasis -i ./src --extensions py,js,html
+
+# Explicitly disable auto-detection
+oasis -i ./src --no-autodetect
+```
+
+When auto-detection is disabled without manual configuration, OASIS will run without technology-specific context.
 
 ## 🎮 Command Line Arguments
 
@@ -207,6 +247,10 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:lates -t 0.7
 - `--threshold` `-t`: Similarity threshold (default: 0.5)
 - `--vulns` `-v`: Vulnerability types to check (comma-separated or 'all')
 - `--chunk-size` `-ch`: Maximum size of text chunks for embedding (default: auto-detected)
+- `--no-autodetect` `-na`: Disable automatic technology stack detection
+- `--language` `-l`: Specify the programming language for context-aware analysis
+- `--framework` `-f`: Specify the framework for additional context
+- `--max-languages` `-ml`: Maximum number of languages to detect and analyze (default: 3)
 
 ### Model Selection
 - `--models` `-m`: Comma-separated list of models to use for deep analysis

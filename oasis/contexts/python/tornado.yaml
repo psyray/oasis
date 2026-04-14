@@ -1,0 +1,232 @@
+ignore_patterns:
+  - '*.pyc'
+  - '__pycache__/**'
+  - 'static/**'
+  - 'log/**'
+
+security_context: |
+  Tornado specific security considerations:
+  - XSRF protection
+  - Cookie security
+  - User authentication
+  - SSL/HTTPS configuration
+  - WebSocket security
+  - Request handling security
+
+vulnerability_patterns:
+  xsrf:
+    - "check_xsrf_cookie"
+    - "_xsrf"
+  auth:
+    - "get_current_user"
+    - "get_secure_cookie"
+  websocket:
+    - "WebSocketHandler"
+    - "on_message"
+  sqli:
+    score: 7
+    description: "SQL injection in Tornado database operations"
+    patterns:
+      - "execute_query"
+      - "torndb query"
+      - "momoko execute"
+      - "aiopg execute"
+      - "raw SQL"
+      - "query format"
+      - "dynamic query"
+      - "database operations"
+
+  xss:
+    score: 8
+    description: "XSS through template rendering and responses"
+    patterns:
+      - "self.write"
+      - "template.generate"
+      - "xhtml_escape"
+      - "raw HTML"
+      - "escape.json_encode"
+      - "UIModule render"
+      - "template syntax"
+      - "dynamic content"
+
+  input:
+    score: 7
+    description: "Input validation vulnerabilities"
+    patterns:
+      - "self.get_argument"
+      - "get_query_argument"
+      - "get_body_argument"
+      - "request.arguments"
+      - "request.body"
+      - "request.files"
+      - "raw input"
+      - "parameter handling"
+
+  data:
+    score: 7
+    description: "Sensitive data exposure"
+    patterns:
+      - "debug mode"
+      - "settings exposure"
+      - "error handling"
+      - "stack traces"
+      - "config data"
+      - "sensitive info"
+      - "debug output"
+      - "error pages"
+
+  session:
+    score: 8
+    description: "Session management issues"
+    patterns:
+      - "secure_cookie"
+      - "set_secure_cookie"
+      - "get_secure_cookie"
+      - "session handling"
+      - "cookie secret"
+      - "session security"
+      - "cookie options"
+      - "session storage"
+
+  config:
+    score: 7
+    description: "Security misconfigurations"
+    patterns:
+      - "Application settings"
+      - "debug=True"
+      - "cookie_secret"
+      - "ssl_options"
+      - "xsrf_cookies"
+      - "static_path"
+      - "server config"
+      - "security options"
+
+  logging:
+    score: 6
+    description: "Sensitive data logging"
+    patterns:
+      - "gen_log"
+      - "app_log"
+      - "access_log"
+      - "logging.error"
+      - "debug logging"
+      - "log handlers"
+      - "sensitive data"
+      - "error output"
+
+  crypto:
+    score: 7
+    description: "Cryptographic issues"
+    patterns:
+      - "create_signed_value"
+      - "decode_signed_value"
+      - "cookie_secret"
+      - "hash_password"
+      - "random generation"
+      - "encryption"
+      - "hash functions"
+      - "secure tokens"
+
+  rce:
+    score: 7
+    description: "Remote code execution risks"
+    patterns:
+      - "eval usage"
+      - "exec function"
+      - "subprocess"
+      - "shell execution"
+      - "command running"
+      - "template injection"
+      - "code execution"
+      - "dynamic imports"
+
+  ssrf:
+    score: 8
+    description: "SSRF vulnerabilities in async HTTP client"
+    patterns:
+      - "AsyncHTTPClient"
+      - "HTTPClient"
+      - "fetch()"
+      - "async http"
+      - "remote requests"
+      - "URL validation"
+      - "external calls"
+      - "HTTP requests"
+
+  xxe:
+    score: 5
+    description: "XXE in XML processing"
+    patterns:
+      - "XML parsing"
+      - "xml handlers"
+      - "document parsing"
+      - "external entities"
+      - "DTD processing"
+      - "XML input"
+      - "feed parsing"
+      - "XML handling"
+
+  pathtra:
+    score: 7
+    description: "Path traversal vulnerabilities"
+    patterns:
+      - "static_path"
+      - "StaticFileHandler"
+      - "path validation"
+      - "file operations"
+      - "directory access"
+      - "file handling"
+      - "path manipulation"
+      - "resource access"
+
+  idor:
+    score: 7
+    description: "IDOR vulnerabilities"
+    patterns:
+      - "get_object_or_404"
+      - "database queries"
+      - "object access"
+      - "direct references"
+      - "ID parameters"
+      - "resource fetch"
+      - "user data"
+      - "access control"
+
+  secrets:
+    score: 7
+    description: "Hardcoded secrets"
+    patterns:
+      - "cookie_secret"
+      - "api_keys"
+      - "credentials"
+      - "passwords"
+      - "secret_key"
+      - "tokens"
+      - "connection strings"
+      - "sensitive config"
+
+  auth:
+    score: 8
+    description: "Authentication vulnerabilities"
+    patterns:
+      - "authenticated"
+      - "current_user"
+      - "get_current_user"
+      - "auth_wrapper"
+      - "login handler"
+      - "authentication"
+      - "user validation"
+      - "access control"
+
+  csrf:
+    score: 6
+    description: "CSRF vulnerabilities"
+    patterns:
+      - "xsrf_token"
+      - "check_xsrf_cookie"
+      - "xsrf_form_html"
+      - "_xsrf"
+      - "xsrf_cookies"
+      - "csrf protection"
+      - "form security"
+      - "request validation" 

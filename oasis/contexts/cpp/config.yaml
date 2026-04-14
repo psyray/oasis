@@ -1,0 +1,36 @@
+name: C++
+extensions:
+  - cpp
+  - cxx
+  - cc
+  - hpp
+  - hxx
+  - h
+  - ipp
+  - tpp
+  - inl
+
+frameworks:
+  qt:
+    indicators:
+      - CMakeLists.txt
+      - .pro
+    detection_patterns:
+      - src/main.cpp
+      - include/Qt
+      - ui/*.ui
+
+  boost:
+    indicators:
+      - CMakeLists.txt
+      - conanfile.txt
+    detection_patterns:
+      - boost/
+      - include/boost/
+
+  opencv:
+    indicators:
+      - CMakeLists.txt
+    detection_patterns:
+      - opencv2/
+      - cv.hpp 

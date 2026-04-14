@@ -1,0 +1,22 @@
+name: Ruby
+extensions:
+  - rb
+  - erb
+  - gemspec
+  - rake
+
+frameworks:
+  rails:
+    indicators:
+      - config/application.rb
+    detection_patterns:
+      - app/
+      - config/routes.rb
+  
+  sinatra:
+    indicators:
+      - Gemfile
+      - sinatra
+    detection_patterns:
+      - config.ru
+      - app.rb 
