@@ -1,0 +1,13 @@
+---
+description: Dashboard JavaScript patterns inferred from web UI bugfix commits
+globs: oasis/static/js/dashboard/**/*.js
+alwaysApply: false
+---
+
+# OASIS Dashboard JS Patterns
+
+- Keep dashboard code modular by concern (`api`, `filters`, `interactions`, `modal`, `views`, `utils`).
+- Extend the shared `DashboardApp` namespace instead of introducing parallel globals.
+- Centralize formatting and display helpers in utility modules to avoid duplicated logic.
+- When fixing UI bugs, update both interaction scripts and matching templates if the issue spans behavior and markup.
+- Prefer compatibility-safe fixes that preserve existing dashboard data contracts (`report` fields and optional defaults).

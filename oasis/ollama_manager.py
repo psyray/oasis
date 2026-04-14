@@ -1,7 +1,7 @@
 import contextlib
 import threading
 import ollama
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 from tqdm import tqdm
 import logging
 
@@ -35,6 +35,7 @@ class OllamaManager:
         self.formatted_models = []
         # Cache for storing model information to avoid repeated API calls
         self._model_info_cache = {}
+        self._model_thinking_overrides: Dict[str, bool] = {}
     
     def get_client(self) -> ollama.Client:
         """
@@ -69,6 +70,114 @@ class OllamaManager:
             return True
         except ConnectionError:
             return False
+
+    def set_model_thinking(self, model: str, thinking: bool) -> None:
+        """
+        Set thinking behavior override for a given model.
+
+        Args:
+            model: Model name
+            thinking: Whether thinking is enabled for this model
+        """
+        self._model_thinking_overrides[model] = thinking
+
+    def configure_analysis_model_thinking(
+        self,
+        scan_model: str,
+        main_models: List[str],
+        scan_model_thinking: bool,
+        main_model_thinking: bool
+    ) -> None:
+        """
+        Configure thinking behavior for selected scan and deep analysis models.
+
+        Args:
+            scan_model: Model used for quick scanning
+            main_models: Models used for deep analysis
+            scan_model_thinking: Thinking flag for scan model
+            main_model_thinking: Thinking flag for deep models
+        """
+        if scan_model:
+            self.set_model_thinking(scan_model, scan_model_thinking)
+        for model in main_models or []:
+            self.set_model_thinking(model, main_model_thinking)
+
+    def _resolve_model_thinking(self, model: str) -> Optional[bool]:
+        """
+        Resolve whether thinking should be sent for a model.
+
+        Args:
+            model: Model name
+
+        Returns:
+            Thinking override, or None if no override is configured
+        """
+        return self._model_thinking_overrides.get(model)
+
+    def _call_with_thinking(
+        self,
+        method_name: str,
+        model: str,
+        payload_key: str,
+        payload_value: Any,
+        options: Optional[dict] = None,
+        **kwargs: Any
+    ):
+        """
+        Execute an Ollama client call with optional per-model thinking behavior.
+        """
+        client = self.get_client()
+        request_kwargs = {
+            "model": model,
+            payload_key: payload_value
+        }
+        if options is not None:
+            request_kwargs["options"] = options
+        request_kwargs.update(kwargs)
+
+        thinking = self._resolve_model_thinking(model)
+        if thinking is not None:
+            request_kwargs["think"] = thinking
+
+        method = getattr(client, method_name)
+        try:
+            return method(**request_kwargs)
+        except TypeError as error:
+            # Backward compatibility with ollama clients not supporting think=
+            error_message = error.args[0] if error.args else ""
+            if (
+                "think" in request_kwargs
+                and "unexpected keyword argument 'think'" in str(error_message)
+            ):
+                request_kwargs.pop("think", None)
+                return method(**request_kwargs)
+            raise
+
+    def chat(self, model: str, messages: List[dict], options: Optional[dict] = None, **kwargs):
+        """
+        Chat completion wrapper with per-model thinking support.
+        """
+        return self._call_with_thinking(
+            method_name="chat",
+            model=model,
+            payload_key="messages",
+            payload_value=messages,
+            options=options,
+            **kwargs
+        )
+
+    def generate(self, model: str, prompt: str, options: Optional[dict] = None, **kwargs):
+        """
+        Text generation wrapper with per-model thinking support.
+        """
+        return self._call_with_thinking(
+            method_name="generate",
+            model=model,
+            payload_key="prompt",
+            payload_value=prompt,
+            options=options,
+            **kwargs
+        )
     
     def get_available_models(self, show_formatted: bool = False) -> List[str]:
         """
