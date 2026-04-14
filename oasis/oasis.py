@@ -28,6 +28,24 @@ class OasisScanner:
         self.embedding_manager = None
         self.output_dir = None
 
+    @staticmethod
+    def _parse_yes_no_flag(value: str) -> bool:
+        """
+        Parse yes/no CLI values into booleans.
+
+        Args:
+            value: String value provided by user
+
+        Returns:
+            True for yes, False for no
+        """
+        normalized_value = value.strip().lower()
+        if normalized_value == "yes":
+            return True
+        if normalized_value == "no":
+            return False
+        raise argparse.ArgumentTypeError("Expected 'yes' or 'no'")
+
     def setup_argument_parser(self):
         """
         Configure and return argument parser
@@ -76,6 +94,10 @@ class OasisScanner:
                                 help='Comma-separated list of models to use (bypasses interactive selection - use `all` to use all models)')
         model_group.add_argument('-sm', '--scan-model', dest='scan_model', type=str,
                                 help='Model to use for quick scanning (default: same as main model)')
+        model_group.add_argument('-mt', '--model-thinking', dest='model_thinking', type=self._parse_yes_no_flag, default=False, metavar='yes|no',
+                                help='Enable/disable thinking for deep analysis models [yes,no] (default: no)')
+        model_group.add_argument('-smt', '--small-model-thinking', dest='small_model_thinking', type=self._parse_yes_no_flag, default=False, metavar='yes|no',
+                                help='Enable/disable thinking for the quick scan model [yes,no] (default: no)')
         model_group.add_argument('-em', '--embed-model', type=str, default=DEFAULT_ARGS['EMBED_MODEL'],
                                 help=f'Model to use for embeddings (default: {DEFAULT_ARGS["EMBED_MODEL"]})')
         model_group.add_argument('-lm', '--list-models', action='store_true',
@@ -444,6 +466,20 @@ class OasisScanner:
             logger.info(f"{MODEL_EMOJIS['default']}Using '{display_scan_model}' for both scanning and deep analysis")
         else:
             logger.info(f"{MODEL_EMOJIS['default']}Using '{display_scan_model}' for scanning and {display_main_models} for deep analysis")
+
+        self.ollama_manager.configure_analysis_model_thinking(
+            scan_model=scan_model,
+            main_models=main_models,
+            scan_model_thinking=self.args.small_model_thinking,
+            main_model_thinking=self.args.model_thinking
+        )
+        if scan_model in main_models and self.args.small_model_thinking != self.args.model_thinking:
+            logger.warning(
+                "Scan and deep analysis share the same model; applying deep analysis thinking setting for that model."
+            )
+        logger.info(
+            f"{MODEL_EMOJIS['default']}Model thinking: scan={self.args.small_model_thinking}, deep={self.args.model_thinking}"
+        )
         
         # Create the report directories for all main models
         self.report.models = main_models

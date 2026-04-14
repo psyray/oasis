@@ -179,7 +179,7 @@ Analyze this code segment ({i + 1}/{total_chunks}) for {vuln_name} vulnerabiliti
             logger.debug(f"Analyzing chunk with {model_display}")
 
             # Make the API call with timeout
-            response = self.client.chat(
+            response = self.ollama_manager.chat(
                 model=model,
                 messages=[{'role': 'user', 'content': prompt}],
                 options={"timeout": timeout * 1000}  # Convert to milliseconds if API supports it

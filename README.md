@@ -211,6 +211,8 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:lates -t 0.7
 ### Model Selection
 - `--models` `-m`: Comma-separated list of models to use for deep analysis
 - `--scan-model` `-sm`: Model to use for quick scanning (default: same as main model)
+- `--model-thinking` `-mt`: Enable/disable thinking for deep analysis models [yes,no] (default: no)
+- `--small-model-thinking` `-smt`: Enable/disable thinking for the quick scan model [yes,no] (default: no)
 - `--embed-model` `-em`: Model to use for embeddings (default: nomic-embed-text:latest)
 - `--list-models` `-lm`: List available models and exit
 

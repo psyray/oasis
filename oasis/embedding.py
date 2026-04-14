@@ -754,11 +754,8 @@ class EmbeddingManager:
             """
 
         try:
-            # Get client from existing function
-            client = self.ollama_client
-
             # Generate response with a short context model
-            response = client.generate(
+            response = self.ollama_manager.generate(
                 model=extraction_model,
                 prompt=prompt,
             )
@@ -994,9 +991,6 @@ def extract_functions_from_file(file_path: str, content: str, extraction_model: 
     normalized_content = content.replace('\r\n', '\n')
     
     try:
-        # Get client 
-        client = ollama_manager.get_client()
-        
         # Ensure model is available
         if not ollama_manager.ensure_model_available(extraction_model):
             return {}
@@ -1012,7 +1006,7 @@ def extract_functions_from_file(file_path: str, content: str, extraction_model: 
             """
             
         # Generate response
-        response = client.generate(
+        response = ollama_manager.generate(
             model=extraction_model,
             prompt=prompt,
         )
