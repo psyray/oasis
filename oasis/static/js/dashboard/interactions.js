@@ -99,6 +99,8 @@ DashboardApp.filterDatesByModel = function(modelElement) {
 
 DashboardApp.updateDatesForModel = function(card, modelName, vulnType) {
     DashboardApp.debug("Updating dates for model:", modelName, "vulnerability:", vulnType);
+    const h = DashboardApp._escapeHtml;
+    const jsq = DashboardApp._escapeJsSingleQuote;
     
     // Show loading in the dates container
     const datesContainer = card.querySelector('.dates-list');
@@ -136,8 +138,8 @@ DashboardApp.updateDatesForModel = function(card, modelName, vulnType) {
                             
                             datesHtml += `
                                 <span class="date-tag clickable" 
-                                    onclick="DashboardApp.openReport('${path}', '${format}')" 
-                                    data-model="${modelName}">
+                                    onclick="DashboardApp.openReport('${jsq(path)}', '${jsq(format)}')" 
+                                    data-model="${h(modelName)}">
                                     <div class="date-main">${formattedDate}</div>
                                     <div class="date-time">${formattedTime}</div>
                                 </span>
@@ -149,8 +151,8 @@ DashboardApp.updateDatesForModel = function(card, modelName, vulnType) {
                             
                             datesHtml += `
                                 <span class="date-tag clickable" 
-                                    onclick="DashboardApp.openReport('${path}', '${format}')" 
-                                    data-model="${modelName}">
+                                    onclick="DashboardApp.openReport('${jsq(path)}', '${jsq(format)}')" 
+                                    data-model="${h(modelName)}">
                                     <div class="date-main">No date</div>
                                 </span>
                             `;
@@ -165,13 +167,15 @@ DashboardApp.updateDatesForModel = function(card, modelName, vulnType) {
         .catch(error => {
             console.error('Error fetching dates:', error);
             if (datesContainer) {
-                datesContainer.innerHTML = `<span class="error-message">Error loading dates: ${error.message}</span>`;
+                datesContainer.innerHTML = `<span class="error-message">Error loading dates: ${h(error.message)}</span>`;
             }
         });
 };
 
 DashboardApp.updateDatesForVulnerability = function(vulnElement, vulnType) {
     DashboardApp.debug("Updating dates for vulnerability:", vulnType);
+    const h = DashboardApp._escapeHtml;
+    const jsq = DashboardApp._escapeJsSingleQuote;
     
     // Get the containing section
     const section = vulnElement.closest('.tree-section');
@@ -213,9 +217,9 @@ DashboardApp.updateDatesForVulnerability = function(vulnElement, vulnType) {
                             
                             datesHtml += `
                                 <span class="date-tag clickable" 
-                                    onclick="DashboardApp.openReport('${path}', '${format}')" 
-                                    data-model="${modelName}">
-                                    <div class="date-label">${modelName}:</div>
+                                    onclick="DashboardApp.openReport('${jsq(path)}', '${jsq(format)}')" 
+                                    data-model="${h(modelName)}">
+                                    <div class="date-label">${h(modelName)}:</div>
                                     <div class="date-main">${formattedDate}</div>
                                     <div class="date-time">${formattedTime}</div>
                                 </span>
@@ -228,9 +232,9 @@ DashboardApp.updateDatesForVulnerability = function(vulnElement, vulnType) {
                             
                             datesHtml += `
                                 <span class="date-tag clickable" 
-                                    onclick="DashboardApp.openReport('${path}', '${format}')" 
-                                    data-model="${modelName}">
-                                    <div class="date-label">${modelName}:</div>
+                                    onclick="DashboardApp.openReport('${jsq(path)}', '${jsq(format)}')" 
+                                    data-model="${h(modelName)}">
+                                    <div class="date-label">${h(modelName)}:</div>
                                     <div class="date-main">No date</div>
                                 </span>
                             `;
@@ -245,7 +249,7 @@ DashboardApp.updateDatesForVulnerability = function(vulnElement, vulnType) {
         .catch(error => {
             console.error('Error fetching dates:', error);
             if (datesContainer) {
-                datesContainer.innerHTML = `<span class="error-message">Error loading dates: ${error.message}</span>`;
+                datesContainer.innerHTML = `<span class="error-message">Error loading dates: ${h(error.message)}</span>`;
             }
         });
 };

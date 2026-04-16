@@ -1,3 +1,124 @@
+DashboardApp.renderJsonReportPreview = function(doc) {
+    const lines = [];
+    const files = Array.isArray(doc.files) ? doc.files : [];
+    const stats = doc.stats || {};
+
+    lines.push(`# ${doc.title || 'Security Analysis Report'}`);
+    lines.push('');
+    if (doc.generated_at) {
+        lines.push(`Date: ${doc.generated_at}`);
+    }
+    if (doc.model_name) {
+        lines.push(`Model: ${doc.model_name}`);
+    }
+    if (doc.vulnerability_name) {
+        lines.push(`Vulnerability: ${doc.vulnerability_name}`);
+    }
+
+    lines.push('');
+    lines.push('## Summary');
+    lines.push('');
+    lines.push(`Analyzed ${files.length} file(s).`);
+    lines.push('');
+    lines.push(`- Total findings: ${stats.total_findings || 0}`);
+    lines.push(`- Critical: ${stats.critical_risk || 0}`);
+    lines.push(`- High: ${stats.high_risk || 0}`);
+    lines.push(`- Medium: ${stats.medium_risk || 0}`);
+    lines.push(`- Low: ${stats.low_risk || 0}`);
+    lines.push('');
+
+    lines.push('| File | Similarity |');
+    lines.push('|------|------------|');
+    files.forEach(fileEntry => {
+        const score = typeof fileEntry.similarity_score === 'number'
+            ? fileEntry.similarity_score.toFixed(3)
+            : '0.000';
+        lines.push(`| \`${fileEntry.file_path || 'unknown'}\` | ${score} |`);
+    });
+
+    lines.push('');
+    lines.push('## Detailed Analysis');
+    lines.push('');
+
+    files.forEach(fileEntry => {
+        lines.push(`### ${fileEntry.file_path || 'unknown file'}`);
+        if (typeof fileEntry.similarity_score === 'number') {
+            lines.push(`Similarity score: ${fileEntry.similarity_score.toFixed(3)}`);
+        }
+        lines.push('');
+
+        if (fileEntry.error) {
+            lines.push(`**Error:** ${fileEntry.error}`);
+            lines.push('');
+        }
+
+        const chunkAnalyses = Array.isArray(fileEntry.chunk_analyses) ? fileEntry.chunk_analyses : [];
+        chunkAnalyses.forEach(chunk => {
+            if (chunk.notes && (!chunk.findings || chunk.findings.length === 0)) {
+                lines.push(`_Notes_: ${chunk.notes}`);
+                lines.push('');
+            }
+
+            const findings = Array.isArray(chunk.findings) ? chunk.findings : [];
+            findings.forEach((finding, idx) => {
+                lines.push(`#### Finding ${idx + 1}: ${finding.title || 'Vulnerability found'} (${finding.severity || 'Unknown'})`);
+                lines.push('');
+                if (finding.vulnerable_code) {
+                    lines.push('```');
+                    lines.push(finding.vulnerable_code);
+                    lines.push('```');
+                    lines.push('');
+                }
+                if (finding.explanation) {
+                    lines.push(finding.explanation);
+                    lines.push('');
+                }
+                if (finding.impact) {
+                    lines.push(`**Impact:** ${finding.impact}`);
+                }
+                if (finding.remediation) {
+                    lines.push(`**Remediation:** ${finding.remediation}`);
+                }
+                lines.push('');
+            });
+        });
+    });
+
+    const markdownPreview = lines.join('\n');
+    return (
+        '<div class="json-report-preview">' +
+        DashboardApp.convertMarkdownToHtml(markdownPreview) +
+        '</div>'
+    );
+};
+
+DashboardApp.getAvailableFormatsForPath = function(path, currentFormat) {
+    const byPath = DashboardApp.reportFormatsByPath || {};
+    if (byPath[path] && Array.isArray(byPath[path].formats)) {
+        return byPath[path].formats;
+    }
+
+    const report = (DashboardApp.reportData || []).find(item => {
+        if (item.path === path) {
+            return true;
+        }
+        const alternativeFormats = item.alternative_formats || {};
+        return Object.values(alternativeFormats).some(candidatePath => candidatePath === path);
+    });
+    if (!report) {
+        return currentFormat ? [currentFormat] : [];
+    }
+
+    const available = new Set();
+    const alternativeFormats = report.alternative_formats || {};
+    Object.keys(alternativeFormats).forEach(fmt => available.add(fmt.toLowerCase()));
+    if (report.format) {
+        available.add(String(report.format).toLowerCase());
+    }
+
+    return Array.from(available);
+};
+
 DashboardApp.ensureModalStyles = function() {
     // Check if styles already exist
     if (document.getElementById('modal-dynamic-styles')) {
@@ -19,6 +140,7 @@ DashboardApp.ensureModalStyles = function() {
 
 DashboardApp.openReport = function(path, format) {
     DashboardApp.debug("Opening report:", path, format);
+    const jsq = DashboardApp._escapeJsSingleQuote;
     if (!path) {
         console.error("No path provided for report");
         return;
@@ -67,29 +189,91 @@ DashboardApp.openReport = function(path, format) {
         .join(' ');
     
     modalTitle.textContent = vulnType;
-    
-    // Fetch report content based on format
-    if (format === 'md') {
-        // Use the API endpoint for markdown content
-        fetch(`/api/report-content/${encodeURIComponent(path)}`)
-            .then(response => {
+
+    if (format === 'json') {
+        // Prefer canonical JSON rendered via server-side Jinja HTML.
+        const markdownPath = path
+            .replace('/json/', '/md/')
+            .replace(/\.json$/i, '.md');
+
+        fetch(`/api/report-html?path=${encodeURIComponent(path)}`)
+            .then(async (response) => {
+                const data = await response.json();
                 if (!response.ok) {
-                    throw new Error(`HTTP error: ${response.status}`);
+                    throw new Error(data.error || `HTTP error: ${response.status}`);
                 }
-                return response.json();
+                return data;
             })
-            .then(data => {
+            .then((data) => {
                 if (data.content) {
-                    // The content is already HTML, just insert it
+                    const htmlContainer = document.createElement('div');
+                    htmlContainer.className = 'html-content-container';
+                    htmlContainer.innerHTML = data.content;
+
+                    const elementsToRemove = htmlContainer.querySelectorAll('html, head, body, script, style, link');
+                    elementsToRemove.forEach(el => {
+                        if (el.tagName.toLowerCase() === 'body') {
+                            const bodyContent = el.innerHTML;
+                            el.parentNode.innerHTML = bodyContent;
+                        } else {
+                            el.remove();
+                        }
+                    });
+
+                    modalContent.innerHTML = '';
+                    modalContent.appendChild(htmlContainer);
+                } else {
+                    modalContent.innerHTML = '<div class="error-message">Unable to load report content.</div>';
+                }
+                DashboardApp.hideLoading('report-modal-content');
+            })
+            .catch((error) => {
+                console.error('Error fetching canonical HTML preview for JSON path:', error);
+                // Legacy fallback: render markdown companion when canonical JSON HTML preview fails.
+                fetch(`/api/report-content/${encodeURIComponent(markdownPath)}?allow_canonical_json_preview=1`)
+                    .then(async (response) => {
+                        const data = await response.json();
+                        if (!response.ok) {
+                            throw new Error(data.error || `HTTP error: ${response.status}`);
+                        }
+                        return data;
+                    })
+                    .then((data) => {
+                        if (data.content) {
+                            modalContent.innerHTML = data.content;
+                        } else {
+                            modalContent.innerHTML = '<div class="error-message">Unable to load report content.</div>';
+                        }
+                        DashboardApp.hideLoading('report-modal-content');
+                    })
+                    .catch((markdownError) => {
+                        console.error('Error fetching markdown fallback for JSON path:', markdownError);
+                        const errorMessage = DashboardApp._errorMessage(markdownError);
+                        modalContent.innerHTML = `<div class="error-message">Error loading report content: ${DashboardApp._escapeHtml(errorMessage)}</div>`;
+                        DashboardApp.hideLoading('report-modal-content');
+                    });
+            });
+    } else if (format === 'md') {
+        fetch(`/api/report-content/${encodeURIComponent(path)}`)
+            .then(async (response) => {
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || `HTTP error: ${response.status}`);
+                }
+                return data;
+            })
+            .then((data) => {
+                if (data.content) {
                     modalContent.innerHTML = data.content;
                 } else {
                     modalContent.innerHTML = '<div class="error-message">Unable to load report content.</div>';
                 }
                 DashboardApp.hideLoading('report-modal-content');
             })
-            .catch(error => {
+            .catch((error) => {
                 console.error('Error fetching report content:', error);
-                modalContent.innerHTML = `<div class="error-message">Error loading report content: ${error.message}</div>`;
+                const errorMessage = DashboardApp._errorMessage(error);
+                modalContent.innerHTML = `<div class="error-message">Error loading report content: ${DashboardApp._escapeHtml(errorMessage)}</div>`;
                 DashboardApp.hideLoading('report-modal-content');
             });
     } else if (format === 'html') {
@@ -108,7 +292,7 @@ DashboardApp.openReport = function(path, format) {
                 htmlContainer.innerHTML = htmlContent;
                 
                 // Remove elements that could break the layout
-                const elementsToRemove = htmlContainer.querySelectorAll('html, head, body, script');
+                const elementsToRemove = htmlContainer.querySelectorAll('html, head, body, script, style, link');
                 elementsToRemove.forEach(el => {
                     if (el.tagName.toLowerCase() === 'body') {
                         // For body, we want to keep its content
@@ -138,7 +322,8 @@ DashboardApp.openReport = function(path, format) {
             })
             .catch(error => {
                 console.error('Error fetching HTML content:', error);
-                modalContent.innerHTML = `<div class="error-message">Error loading HTML content: ${error.message}</div>`;
+                const errorMessage = DashboardApp._errorMessage(error);
+                modalContent.innerHTML = `<div class="error-message">Error loading HTML content: ${DashboardApp._escapeHtml(errorMessage)}</div>`;
                 DashboardApp.hideLoading('report-modal-content');
             });
     } else if (format === 'pdf') {
@@ -171,7 +356,7 @@ DashboardApp.openReport = function(path, format) {
         
         DashboardApp.hideLoading('report-modal-content');
     } else {
-        modalContent.innerHTML = `<div class="format-message">This format (${format.toUpperCase()}) cannot be displayed directly. Use the download option.</div>`;
+        modalContent.innerHTML = `<div class="format-message">This format (${DashboardApp._escapeHtml(String(format).toUpperCase())}) cannot be displayed directly. Use the download option.</div>`;
         DashboardApp.hideLoading('report-modal-content');
     }
     
@@ -179,7 +364,7 @@ DashboardApp.openReport = function(path, format) {
     if (downloadOptions) {
         const basePath = path.substring(0, path.lastIndexOf('.'));
         // Extract the base path without the current format
-        const formatPattern = /\/(md|html|pdf)\//;
+        const formatPattern = /\/(md|html|pdf|json)\//;
         const match = path.match(formatPattern);
         let currentFormat = 'md';
         
@@ -187,19 +372,23 @@ DashboardApp.openReport = function(path, format) {
             currentFormat = match[1];
         }
         
-        // Create the buttons with the correct paths
-        let downloadHtml = '';
-        const formats = {
-            '📝': 'MD',
-            '🌐': 'HTML',
-            '📄': 'PDF'
+        const availableFormats = DashboardApp.getAvailableFormatsForPath(path, currentFormat);
+        const formatLabels = {
+            json: '📋',
+            md: '📝',
+            html: '🌐',
+            pdf: '📄'
         };
-        
-        Object.keys(formats).forEach(fmt => {
-            // Replace the format in the path
-            const formattedPath = basePath.replace(`/${currentFormat}/`, `/${formats[fmt].toLowerCase()}/`) + `.${formats[fmt].toLowerCase()}`;
-            downloadHtml += `<button class="btn btn-format" onclick="downloadReportFile('${formattedPath}', '${fmt}')">
-                           ${fmt} ${formats[fmt]}</button>`;
+
+        let downloadHtml = '';
+        availableFormats.forEach(ext => {
+            const icon = formatLabels[ext];
+            if (!icon) {
+                return;
+            }
+            const formattedPath = basePath.replace(`/${currentFormat}/`, `/${ext}/`) + `.${ext}`;
+            downloadHtml += `<button class="btn btn-format" onclick="downloadReportFile('${jsq(formattedPath)}', '${jsq(ext)}')">
+                           ${icon} ${ext.toUpperCase()}</button>`;
         });
         
         downloadOptions.innerHTML = downloadHtml;

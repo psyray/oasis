@@ -104,6 +104,7 @@ const DashboardApp = {
         return new Promise((resolve, reject) => {
             // Define modules to load in order
             const modules = [
+                'bootstrap.js',
                 'utils.js',
                 'filters.js',
                 'views.js',

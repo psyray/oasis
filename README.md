@@ -43,7 +43,7 @@
 - 🔄 **Interactive Model Selection**: Guided selection of scan and analysis models with parameter-based filtering
 - 💾 **Dual-Layer Caching**: Efficient caching for both embeddings and analysis results to dramatically speed up repeated scans
 - 🔧 **Scan Result Caching**: Store and reuse vulnerability analysis results with model-specific caching
-- 📊 **Rich Reporting**: Detailed reports in multiple formats (Markdown, PDF, HTML)
+- 📊 **Rich Reporting**: Canonical JSON reports plus derived HTML, PDF, and Markdown exports
 - 🔄 **Parallel Processing**: Optimized performance through parallel vulnerability analysis
 - 📝 **Executive Summaries**: Clear overview of all detected vulnerabilities
 - 🎯 **Customizable Scans**: Support for specific vulnerability types and file extensions
@@ -362,19 +362,31 @@ For the best results with OASIS:
 
 ## 📁 Output Structure
 
+Vulnerability runs are stored under a timestamped directory. For each model, per-format folders include a **canonical JSON** report (`json/*.json`) used by the web dashboard for statistics and previews. HTML and PDF are rendered from that JSON via Jinja2; Markdown is an additional human-readable export.
+
 ```
 security_reports/
-├── [model_name]/
-│   ├── markdown/
-│   │   ├── vulnerability_type.md
-│   │   └── executive_summary.md
-│   ├── pdf/
-│   │   ├── vulnerability_type.pdf
-│   │   └── executive_summary.pdf
-│   └── html/
-│       ├── vulnerability_type.html
-│       └── executive_summary.html
+└── [input_basename]_YYYYMMDD_HHMMSS/
+    └── [sanitized_model_name]/
+        ├── json/
+        │   └── vulnerability_type.json
+        ├── md/
+        │   └── vulnerability_type.md
+        ├── html/
+        │   └── vulnerability_type.html
+        └── pdf/
+            └── vulnerability_type.pdf
 ```
+
+### Ollama structured outputs
+
+Deep and scan analysis calls use Ollama **structured outputs** (`format` with a JSON schema). Use a recent Ollama server; model quality still varies by GGUF. If structured validation fails, the analyzer falls back to safe defaults or regex (function extraction only).
+
+### Web dashboard and Reload
+
+- Statistics and risk summaries are read from **`json/*.json`**.
+- **Reload** refreshes both `/api/stats?force=1` and `/api/reports?force=1` so listings stay in sync with the filesystem.
+- Markdown preview (`/api/report-content/...`) remains available **only when no `json/<same-stem>.json` exists** for that report (legacy scans). Otherwise use JSON preview (`/api/report-json/...`).
 
 ## 💾 Cache Management
 

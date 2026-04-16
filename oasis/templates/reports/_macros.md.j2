@@ -1,0 +1,119 @@
+{% macro render_header(document) -%}
+# {{ document.title }}
+
+Date: {{ document.generated_at }}  
+Model: {{ document.model_name }}  
+Vulnerability: {{ document.vulnerability_name }}
+{%- endmacro %}
+
+{% macro render_table_of_contents() -%}
+## Table of contents
+
+1. [Summary](#summary)
+2. [Statistics](#statistics)
+3. [Files](#files)
+4. [Detailed Analysis](#detailed-analysis)
+5. [Errors & Notes](#errors--notes)
+{%- endmacro %}
+
+{% macro render_statistics(stats) -%}
+## Statistics
+
+- Files analyzed: {{ stats.files_analyzed }}
+- Total findings: {{ stats.total_findings }}
+- Critical: {{ stats.critical_risk }}
+- High: {{ stats.high_risk }}
+- Medium: {{ stats.medium_risk }}
+- Low: {{ stats.low_risk }}
+{%- endmacro %}
+
+{% macro render_file_summary(files) -%}
+## Files
+
+| File | Similarity |
+|------|------------|
+{% for file in files -%}
+| `{{ file.file_path }}` | {{ "%.3f"|format(file.similarity_score) }} |
+{% endfor %}
+{%- endmacro %}
+
+{% macro render_chunk_notes(chunk, file_index, chunk_index) -%}
+#### Chunk {{ file_index }}.{{ chunk_index }} Notes
+
+{{ chunk.notes }}
+{%- endmacro %}
+
+{% macro render_finding(finding, file_index, finding_index) -%}
+#### Finding {{ file_index }}.{{ finding_index }}: {{ finding.title }} ({{ finding.severity }})
+
+{% if finding.vulnerable_code %}
+##### Vulnerable Code
+
+```text
+{{ finding.vulnerable_code }}
+```
+{% endif %}
+
+##### Explanation
+
+{{ finding.explanation }}
+
+{% if finding.impact %}
+##### Impact
+
+{{ finding.impact }}
+{% endif %}
+{% if finding.entry_point %}
+##### Entry Point
+
+{{ finding.entry_point }}
+{% endif %}
+{% if finding.execution_path_diagram %}
+##### Execution Path
+
+```text
+{{ finding.execution_path_diagram }}
+```
+{% endif %}
+{% if finding.http_methods %}
+##### HTTP Methods
+
+{{ finding.http_methods | join(", ") }}
+{% endif %}
+{% if finding.manipulable_parameters %}
+##### Parameters
+
+{{ finding.manipulable_parameters | join(", ") }}
+{% endif %}
+{% if finding.exploitation_steps %}
+##### Exploitation Steps
+
+{% for step in finding.exploitation_steps %}
+- {{ step }}
+{% endfor %}
+{% endif %}
+{% if finding.example_payloads %}
+##### Example Payloads
+
+{% for payload in finding.example_payloads %}
+- `{{ payload }}`
+{% endfor %}
+{% endif %}
+{% if finding.exploitation_conditions %}
+##### Conditions
+
+{{ finding.exploitation_conditions }}
+{% endif %}
+{% if finding.remediation %}
+##### Remediation
+
+{{ finding.remediation }}
+{% endif %}
+{% if finding.secure_code_example %}
+##### Secure Example
+
+```text
+{{ finding.secure_code_example }}
+```
+{% endif %}
+{%- endmacro %}

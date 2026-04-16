@@ -841,7 +841,7 @@ EXTRACT_FUNCTIONS = {
 
 # Report configuration
 REPORT = {
-    'OUTPUT_FORMATS': ['pdf', 'html', 'md'],
+    'OUTPUT_FORMATS': ['json', 'pdf', 'html', 'md'],
     'OUTPUT_DIR': 'security_reports',
     'BACKGROUND_COLOR': '#F5F2E9',
     'EXPLAIN_ANALYSIS': """

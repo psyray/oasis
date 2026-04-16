@@ -1,4 +1,5 @@
 // Utility functions for the dashboard
+
 DashboardApp.groupReportsByModelAndVuln = function(reports) {
     DashboardApp.debug("Grouping reports by model and vulnerability");
     return reports.map(report => {
@@ -13,10 +14,40 @@ DashboardApp.groupReportsByModelAndVuln = function(reports) {
             date,
             format,
             date_visible: date_visible !== undefined ? date_visible : true,
-            stats: stats || { high_risk: 0, medium_risk: 0, low_risk: 0, total: 0 },
+            stats: stats || { high_risk: 0, medium_risk: 0, low_risk: 0, total_findings: 0, files_analyzed: 0 },
             alternative_formats: alternative_formats || {}
         };
     });
+};
+
+DashboardApp.buildReportFormatsByPathMap = function(reports) {
+    const byPath = {};
+
+    (reports || []).forEach(report => {
+        const available = new Set();
+        const alternatives = report.alternative_formats || {};
+        Object.keys(alternatives).forEach(fmt => available.add(String(fmt).toLowerCase()));
+        if (report.format) {
+            available.add(String(report.format).toLowerCase());
+        }
+
+        const payload = {
+            formats: Array.from(available),
+            report: report
+        };
+
+        if (report.path) {
+            byPath[report.path] = payload;
+        }
+        Object.values(alternatives).forEach(path => {
+            if (path) {
+                byPath[path] = payload;
+            }
+        });
+    });
+
+    DashboardApp.reportFormatsByPath = byPath;
+    return byPath;
 };
 
 DashboardApp.formatDisplayName = function(name, type, emoji = true) {

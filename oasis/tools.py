@@ -2,6 +2,7 @@ from datetime import datetime
 import logging
 from pathlib import Path
 import re
+import sys
 import numpy as np
 from typing import List, Dict
 from weasyprint.logger import LOGGER as weasyprint_logger
@@ -116,27 +117,43 @@ def setup_logging(debug=False, silent=False, error_log_file=None):
     # Set root logger level
     root_logger = logging.getLogger()
 
-    # Avoid adding duplicate handlers if they already exist.
-    if root_logger.handlers:
-        return
-
     if debug:
         root_logger.setLevel(logging.DEBUG)
     else:
         root_logger.setLevel(logging.INFO)
 
     # Configure handlers based on silent mode
-    if not silent:
+    has_console_handler = any(
+        isinstance(handler, logging.StreamHandler)
+        and getattr(handler, "stream", None) is sys.stderr
+        for handler in logger.handlers
+    )
+    if not silent and not has_console_handler:
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(EmojiFormatter())
         logger.addHandler(console_handler)
 
-    # Add file handler for errors in silent mode
-    if silent and error_log_file:
-        file_handler = logging.FileHandler(error_log_file)
+    # Replace existing error file handler when a new path is provided.
+    existing_error_file_handlers = [
+        handler
+        for handler in logger.handlers
+        if getattr(handler, "_oasis_handler_name", "") == "error_file"
+    ]
+    for handler in existing_error_file_handlers:
+        logger.removeHandler(handler)
+        try:
+            handler.close()
+        except Exception:
+            pass
+
+    if error_log_file:
+        error_log_file = Path(error_log_file)
+        error_log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(error_log_file, encoding="utf-8")
         file_handler.setLevel(logging.ERROR)  # Only log errors and above
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
         file_handler.setFormatter(formatter)
+        file_handler._oasis_handler_name = "error_file"
         logger.addHandler(file_handler)
 
     logger.propagate = False  # Prevent duplicate logging

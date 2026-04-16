@@ -1,18 +1,25 @@
 import base64
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional
+
 from bs4 import BeautifulSoup
 import markdown
 from markdown.extensions import Extension
 from markdown.preprocessors import Preprocessor
-from weasyprint import HTML
-from pathlib import Path
-from typing import List, Dict, Optional
-import logging
 from jinja2 import Environment, FileSystemLoader
+from weasyprint import HTML
 
 # Import from configuration
 from .config import REPORT
 
 # Import from other modules
+from .schemas.analysis import (
+    ChunkDeepAnalysis,
+    FileReportEntry,
+    VulnerabilityReportDocument,
+    build_dashboard_stats,
+)
 from .tools import extract_clean_path, logger, sanitize_name, generate_timestamp
 
 class Report:
@@ -117,73 +124,146 @@ class Report:
             
         return header
     
-    def generate_vulnerability_report(self, vulnerability: Dict, results: List[Dict], 
-                                     model_name: str) -> Dict[str, Path]:
-        """
-        Generate a report for a specific vulnerability type
-        
-        Args:
-            vulnerability: Vulnerability (Dict - VULNERABILITY_MAPPING element)
-            results: Analysis results
-            model_name: Model name used for analysis
-            
-        Returns:
-            Dictionary of report file paths
-        """
-        # Clean vulnerability name for filenames
-        vuln_name = vulnerability['name']
-        safe_name = vuln_name.lower().replace(' ', '_')
-        
-        # Set output file paths and filter by output format in one step
-        output_files = self.filter_output_files(safe_name)
-
-        # Create report content
-        report = self.create_header(f"{vuln_name} Security Analysis", model_name)
-        
-        # Add summary section
-        report.extend([
-            "\n## Summary",
-            f"\nAnalyzed {len(results)} files for {vuln_name} vulnerabilities.",
-            "\n| File | Similarity Score |",
-            "|------|-----------------|"
-        ])
-        
-        # Add each file with its score
+    def _results_to_file_entries(self, results: List[Dict]) -> List[FileReportEntry]:
+        analysis_notes_max_len = 2000
+        truncation_suffix = " [truncated]"
+        entries: List[FileReportEntry] = []
         for result in results:
-            score = result.get('similarity_score', 0.0)
-            file_path = result.get('file_path', 'Unknown file')
-            report.append(f"| `{file_path}` | {score:.3f} |")
-        
-        # Add detailed analysis section
-        report.append('\n<div class="page-break"></div>\n')
-        report.append("\n## Detailed Analysis\n")
-        
-        for i, result in enumerate(results):
-            file_path = result.get('file_path', 'Unknown file')
-            score = result.get('similarity_score', 0.0)
-            
-            # Add page break between files except for the first one
-            if i > 0:
-                report.append('\n<div class="page-break"></div>\n')
-            
-            # Check if analysis key exists
-            if 'analysis' in result:
-                # Normalize the heading levels in the analysis
-                analysis = result['analysis']
-            elif 'error' in result:
-                analysis = f"**Error during analysis:** {result['error']}"
-            else:
-                analysis = "No detailed analysis available"
-            
-            report.extend([
-                f"### File: {file_path}",
-                f"Similarity Score: {score:.3f}",
-                "\n#### Analysis Results\n",
-                analysis
-            ])
-        
-        self._generate_and_save_report(output_files, report, report_type='Vulnerability')
-        
+            chunk_models: List[ChunkDeepAnalysis] = []
+            for raw in result.get("structured_chunks") or []:
+                try:
+                    if isinstance(raw, dict):
+                        raw_copy = dict(raw)
+                        notes = raw_copy.get("notes")
+                        truncated = bool(raw_copy.get("truncated", False))
+                        if isinstance(notes, str) and len(notes) > analysis_notes_max_len:
+                            raw_copy["notes"] = (
+                                notes[: analysis_notes_max_len - len(truncation_suffix)]
+                                + truncation_suffix
+                            )
+                            truncated = True
+                        raw_copy["truncated"] = truncated
+                        chunk_models.append(ChunkDeepAnalysis.model_validate(raw_copy))
+                    else:
+                        chunk_models.append(ChunkDeepAnalysis.model_validate(raw))
+                except Exception:
+                    raw_str = str(raw)
+                    truncated = False
+                    if len(raw_str) > analysis_notes_max_len:
+                        raw_str = (
+                            raw_str[: analysis_notes_max_len - len(truncation_suffix)]
+                            + truncation_suffix
+                        )
+                        truncated = True
+                    chunk_models.append(
+                        ChunkDeepAnalysis(findings=[], notes=raw_str, truncated=truncated)
+                    )
+            if not chunk_models and result.get("analysis"):
+                analysis_str = str(result["analysis"])
+                truncated = False
+                if len(analysis_str) > analysis_notes_max_len:
+                    analysis_str = (
+                        analysis_str[: analysis_notes_max_len - len(truncation_suffix)]
+                        + truncation_suffix
+                    )
+                    truncated = True
+                chunk_models.append(
+                    ChunkDeepAnalysis(findings=[], notes=analysis_str, truncated=truncated)
+                )
+            entries.append(
+                FileReportEntry(
+                    file_path=result.get("file_path", "Unknown file"),
+                    similarity_score=float(result.get("similarity_score", 0.0)),
+                    chunk_analyses=chunk_models,
+                    error=result.get("error"),
+                )
+            )
+        return entries
+
+    def _build_vulnerability_document(
+        self, vulnerability: Dict, results: List[Dict], model_name: str
+    ) -> VulnerabilityReportDocument:
+        vuln_name = vulnerability["name"]
+        file_entries = self._results_to_file_entries(results)
+        stats = self._compute_document_stats(file_entries)
+        return VulnerabilityReportDocument(
+            title=f"{vuln_name} Security Analysis",
+            generated_at=generate_timestamp(),
+            model_name=model_name,
+            vulnerability_name=vuln_name,
+            vulnerability=dict(vulnerability),
+            files=file_entries,
+            stats=stats,
+        )
+
+    @staticmethod
+    def _compute_document_stats(file_entries: List[FileReportEntry]):
+        """Single source of truth for dashboard statistics aggregation."""
+        return build_dashboard_stats(file_entries)
+
+    def _render_vulnerability_inner_html(self, doc: VulnerabilityReportDocument) -> str:
+        template = self.template_env.get_template("reports/vulnerability_from_json.html.j2")
+        return template.render(document=doc.model_dump(mode="json"))
+
+    def _render_vulnerability_markdown_export(self, doc: VulnerabilityReportDocument) -> str:
+        template = self.template_env.get_template("reports/vulnerability_export.md.j2")
+        return template.render(document=doc.model_dump(mode="json"))
+
+    def render_report_html_from_json_payload(self, payload: Dict) -> str:
+        """
+        Render report HTML directly from canonical JSON payload.
+        """
+        report_type = payload.get("report_type")
+        if report_type != "vulnerability":
+            raise ValueError(f"Unsupported canonical report type: {report_type}")
+
+        doc = VulnerabilityReportDocument.model_validate(payload)
+        # Keep JSON payload and template rendering aligned on one stats helper.
+        doc.stats = self._compute_document_stats(doc.files)
+        inner_html = self._render_vulnerability_inner_html(doc)
+        return self.render_template(inner_html)
+
+    def generate_vulnerability_report(
+        self, vulnerability: Dict, results: List[Dict], model_name: str
+    ) -> Dict[str, Path]:
+        """
+        Generate vulnerability report: canonical JSON plus Jinja-derived HTML/PDF and optional MD export.
+        """
+        vuln_name = vulnerability["name"]
+        safe_name = vuln_name.lower().replace(" ", "_")
+        output_files = self.filter_output_files(safe_name)
+        doc = self._build_vulnerability_document(vulnerability, results, model_name)
+
+        logger.debug("--------------------------------")
+        logger.debug(f"Generating Vulnerability report for {', '.join(self.output_format)}, please wait...")
+
+        if "json" in output_files:
+            self.ensure_directory(output_files["json"].parent)
+            output_files["json"].write_text(doc.model_dump_json(indent=2), encoding="utf-8")
+
+        inner_html = self._render_vulnerability_inner_html(doc)
+        rendered_html = self.render_template(inner_html)
+
+        if "html" in output_files:
+            self.ensure_directory(output_files["html"].parent)
+            with open(output_files["html"], "w", encoding="utf-8") as f:
+                f.write(rendered_html)
+
+        if "pdf" in output_files:
+            self.ensure_directory(output_files["pdf"].parent)
+            try:
+                HTML(string=rendered_html, media_type="print").write_pdf(output_files["pdf"])
+            except Exception as e:
+                logger.exception(f"PDF conversion failed for {safe_name}: {e.__class__.__name__}: {e}")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"HTML (first 500 chars): {rendered_html[:500]}")
+
+        if "md" in output_files:
+            self.ensure_directory(output_files["md"].parent)
+            md_body = self._render_vulnerability_markdown_export(doc)
+            with open(output_files["md"], "w", encoding="utf-8") as f:
+                f.write(md_body)
+
         return output_files
     
     def _generate_and_save_report(self, output_files, report_content, report_type: str = None):

@@ -69,7 +69,7 @@ class OasisScanner:
         io_group.add_argument('-i', '--input', dest='input_path', type=str, 
                             help='Path to file, directory, or .txt file containing paths to analyze')
         io_group.add_argument('-of', '--output-format', type=str, default=DEFAULT_ARGS['OUTPUT_FORMAT'],
-                            help=f'Output format [pdf, html, md] (default: {DEFAULT_ARGS["OUTPUT_FORMAT"]})')
+                            help=f'Output format [json, pdf, html, md] (default: {DEFAULT_ARGS["OUTPUT_FORMAT"]})')
         io_group.add_argument('-x', '--extensions', type=str,
                             help='Comma-separated list of file extensions to analyze (e.g., "py,js,java")')
         
@@ -484,6 +484,8 @@ class OasisScanner:
         # Create the report directories for all main models
         self.report.models = main_models
         self.report.create_report_directories(self.args.input_path, models=main_models)
+        self.args.run_id = getattr(self.report, "output_dir_name", None)
+        self._configure_run_error_logging()
 
         # Run analysis with all main models
         result = self.run_analysis_mode(main_models, scan_model, vuln_mapping)
@@ -515,13 +517,21 @@ class OasisScanner:
         Args:
             None
         """
-        if self.args.silent:
-            logs_dir = Path(self.args.input_path).resolve().parent / REPORT['OUTPUT_DIR'] / "logs" if self.args.input_path else Path(REPORT['OUTPUT_DIR']) / "logs"
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            log_file = logs_dir / f"oasis_errors_{generate_timestamp(for_file=True)}.log"
-        else:
-            log_file = None
-            
+        # Base logging initialization (console behavior, levels).
+        # Run-specific error file logging is configured once report output_dir is known.
+        setup_logging(debug=self.args.debug, silent=self.args.silent, error_log_file=None)
+
+    def _configure_run_error_logging(self):
+        """
+        Configure run-specific error log file in security_reports/<run>/logs.
+        """
+        if not hasattr(self, "report") or not getattr(self.report, "output_dir", None):
+            return
+
+        logs_dir = self.report.output_dir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        run_id = getattr(self.report, "output_dir_name", generate_timestamp(for_file=True))
+        log_file = logs_dir / f"oasis_errors_{run_id}.log"
         setup_logging(debug=self.args.debug, silent=self.args.silent, error_log_file=log_file)
 
     def _handle_argument_errors(self, arg0):
