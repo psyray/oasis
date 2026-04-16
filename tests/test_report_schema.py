@@ -4,6 +4,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -49,6 +50,32 @@ except ModuleNotFoundError:
 
 
 class TestReportSchema(unittest.TestCase):
+    @unittest.skipIf(SecurityAnalyzer is None, "oasis.analyze dependencies are unavailable")
+    def test_deep_analysis_updates_main_progress_by_one_per_vulnerability(self):
+        analyzer = SecurityAnalyzer.__new__(SecurityAnalyzer)
+        analyzer.llm_model = "test-model"
+        analyzer.ollama_manager = SimpleNamespace(get_model_display_name=lambda _model: "test-model")
+        vulnerabilities = [{"name": "SQL Injection"}, {"name": "XSS"}]
+        suspicious_files_by_vuln = {
+            "sql": {"vuln_data": vulnerabilities[0], "files": [("app.py", 0.9)]},
+            "xss": {"vuln_data": vulnerabilities[1], "files": [("app.py", 0.8)]},
+        }
+        suspicious_data = {"suspicious_data": {}, "files_by_vuln": suspicious_files_by_vuln}
+
+        analyzer._analyze_vulnerability_deep = lambda *args, **kwargs: []
+
+        updates = []
+        main_pbar = SimpleNamespace(
+            set_postfix_str=lambda _text: None,
+            update=lambda value: updates.append(value),
+        )
+        report = SimpleNamespace(generate_vulnerability_report=lambda **kwargs: None)
+        args = SimpleNamespace(silent=True)
+
+        analyzer._perform_deep_analysis(suspicious_data, args, report, main_pbar)
+
+        self.assertEqual(updates, [1, 1])
+
     def test_build_dashboard_stats_counts_severities(self):
         files = [
             FileReportEntry(
@@ -245,6 +272,11 @@ class TestReportSchema(unittest.TestCase):
     @unittest.skipIf(AdaptiveAnalysisPipeline is None, "oasis.analyze dependencies are unavailable")
     def test_combine_adaptive_results_escapes_backticks_and_truncates_unparseable_notes(self):
         pipeline = AdaptiveAnalysisPipeline.__new__(AdaptiveAnalysisPipeline)
+        pipeline.analyzer = SimpleNamespace(
+            _log_structured_output_error=lambda **kwargs: None,
+            ollama_manager=SimpleNamespace(get_model_display_name=lambda _model: "test-model"),
+            llm_model="test-model",
+        )
         raw = "```" + ("A" * 450)
         combined = pipeline._combine_adaptive_results(
             file_path="demo.py",

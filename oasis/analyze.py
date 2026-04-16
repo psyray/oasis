@@ -1,6 +1,8 @@
 import argparse
 import json
+import logging
 import re
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
@@ -24,6 +26,18 @@ from .schemas.analysis import (
     MediumRiskAnalysis,
     ScanVerdict,
     chunk_analysis_to_markdown,
+)
+from .structured_output.deep import (
+    chunk_deep_normalization_change_samples,
+    chunk_deep_prompt_output_constraint_block,
+    chunk_deep_structured_retry_suffix,
+    generic_structured_retry_suffix,
+    normalize_chunk_deep_payload_dict,
+    validation_detail_is_exploitation_conditions_retryable,
+)
+from .structured_output.json_repair import (
+    build_safe_minimal_chunk_json,
+    repair_chunk_deep_structured_json_raw,
 )
 
 STRUCTURED_OUTPUT_RAW_PREVIEW_MAX_LEN = 500
@@ -151,16 +165,43 @@ class SecurityAnalyzer:
         - Scan models return a plain verdict string.
         - Non-scan models return JSON serialized by the target Pydantic schema.
         - Validation failures are converted through the structured fallback strategy.
+
+        **Raw variables (ChunkDeep / scan JSON path):**
+
+        - ``original_raw``: immutable copy of the model string for logging and for the
+          structured failure handler (so diagnostics always show what the API returned).
+        - ``candidate_raw``: text passed to ``model_validate_json`` — starts as
+          normalized output (e.g. list→string coercion for ChunkDeep); may be replaced by
+          ``repaired_raw`` when JSON repair succeeds after a repairable parse error.
+        - ``repaired_raw``: optional output of ``_repair_structured_json_raw`` when the
+          first validation error looks like broken JSON (not a field-type mismatch);
+          used only to retry validation, not as the logged ``original_raw``.
         """
+        original_raw = raw
+        candidate_raw = self._normalize_structured_output_raw(
+            raw=raw,
+            response_model=response_model,
+            model_display=model_display,
+        )
         try:
-            parsed = response_model.model_validate_json(raw)
+            parsed = response_model.model_validate_json(candidate_raw)
         except ValidationError as exc:
+            candidate_raw, repaired_parsed = self._attempt_structured_json_repair_after_validation_error(
+                candidate_raw=candidate_raw,
+                response_model=response_model,
+                model_display=model_display,
+                error=exc,
+            )
+            if repaired_parsed is not None:
+                if issubclass(response_model, ScanVerdict):
+                    return repaired_parsed.verdict
+                return repaired_parsed.model_dump_json()
             phase_name = "scan" if issubclass(response_model, ScanVerdict) else "deep"
             self._log_structured_output_error(
                 phase=phase_name,
                 response_model=response_model,
                 model_display=model_display,
-                raw=raw,
+                raw=original_raw,
                 error=exc,
                 file_path=file_path,
                 vuln_name=vuln_name,
@@ -168,15 +209,15 @@ class SecurityAnalyzer:
                 retry_max=retry_max,
             )
             logger.warning(f"Structured output validation failed ({model_display}): {exc}")
-            raw_preview = (raw or "")[:STRUCTURED_OUTPUT_RAW_PREVIEW_MAX_LEN]
-            if len(raw or "") > STRUCTURED_OUTPUT_RAW_PREVIEW_MAX_LEN:
+            raw_preview = (original_raw or "")[:STRUCTURED_OUTPUT_RAW_PREVIEW_MAX_LEN]
+            if len(original_raw or "") > STRUCTURED_OUTPUT_RAW_PREVIEW_MAX_LEN:
                 raw_preview += "... [truncated]"
             logger.debug(f"Structured output raw preview ({model_display}): {raw_preview}")
             if raise_validation_error:
                 raise
             return self._resolve_structured_output_failure(
                 response_model=response_model,
-                raw=raw,
+                raw=original_raw,
                 error=exc,
                 model_display=model_display,
             )
@@ -184,6 +225,147 @@ class SecurityAnalyzer:
         if issubclass(response_model, ScanVerdict):
             return parsed.verdict
         return parsed.model_dump_json()
+
+    def _attempt_structured_json_repair_after_validation_error(
+        self,
+        *,
+        candidate_raw: str,
+        response_model: Type[BaseModel],
+        model_display: str,
+        error: ValidationError,
+    ) -> Tuple[str, Optional[BaseModel]]:
+        """
+        When validation failed, optionally run JSON repair and re-parse.
+
+        Returns ``(candidate_raw, None)`` if repair is not applicable or did not help.
+        On success returns ``(repaired_raw, parsed_model)`` so the caller can serialize
+        the repaired object without re-running repair.
+        """
+        if not self._is_repairable_structured_error(error=error):
+            return candidate_raw, None
+        repaired_raw = self._repair_structured_json_raw(
+            raw=candidate_raw,
+            response_model=response_model,
+            model_display=model_display,
+        )
+        if repaired_raw == candidate_raw:
+            return candidate_raw, None
+        with suppress(ValidationError):
+            repaired_parsed = response_model.model_validate_json(repaired_raw)
+            return repaired_raw, repaired_parsed
+        return candidate_raw, None
+
+    def _normalize_structured_output_raw(
+        self,
+        *,
+        raw: str,
+        response_model: Type[BaseModel],
+        model_display: str,
+    ) -> str:
+        """Normalize frequent non-breaking type drifts before schema validation."""
+        if not raw or not issubclass(response_model, ChunkDeepAnalysis):
+            return raw
+
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.debug(
+                "Structured output normalization skipped: JSON parse failed (%s): %s",
+                model_display,
+                exc,
+            )
+            return raw
+        except (TypeError, ValueError) as exc:
+            logger.debug(
+                "Structured output normalization skipped: not valid JSON input (%s): %s",
+                model_display,
+                exc,
+            )
+            return raw
+
+        if not isinstance(payload, dict):
+            logger.debug(
+                "Structured output normalization skipped: payload is %s, not a dict (%s)",
+                type(payload).__name__,
+                model_display,
+            )
+            return raw
+
+        normalized_fields = normalize_chunk_deep_payload_dict(payload)
+        if not normalized_fields:
+            return raw
+
+        if logger.isEnabledFor(logging.DEBUG):
+            # Second parse of ``raw`` avoids a deep copy of the mutated tree; ``raw`` is the
+            # canonical pre-normalization snapshot (same as the initial ``json.loads`` source).
+            payload_before = json.loads(raw)
+            samples = chunk_deep_normalization_change_samples(
+                payload_before, payload, max_items=5
+            )
+            sample_json = json.dumps(samples, ensure_ascii=True, default=str)
+            if len(sample_json) > 800:
+                sample_json = sample_json[:800] + "... [truncated]"
+            logger.debug(
+                "Normalized structured output fields (%s): %s; sample_changes=%s",
+                model_display,
+                ", ".join(normalized_fields),
+                sample_json,
+            )
+        else:
+            logger.debug(
+                "Normalized structured output fields (%s): %s",
+                model_display,
+                ", ".join(normalized_fields),
+            )
+        return json.dumps(payload)
+
+    @staticmethod
+    def _is_repairable_structured_error(error: Exception) -> bool:
+        """
+        Return True when JSON repair heuristics are worth attempting.
+
+        We only treat Pydantic ``ValidationError`` details that indicate the *payload*
+        failed JSON decoding (not a mere schema field mismatch). Examples:
+        - ``{"type": "json_invalid", ...}`` from ``model_validate_json`` on bad syntax.
+        - ``msg`` containing ``eof while parsing`` (truncated JSON).
+        - ``msg`` mentioning ``trailing comma`` (invalid JSON extension some models emit).
+        """
+        if not isinstance(error, ValidationError):
+            return False
+        for detail in error.errors():
+            err_type = str(detail.get("type", ""))
+            # Example: model_validate_json('{"a":') -> json_invalid
+            if "json_invalid" in err_type:
+                return True
+            message = str(detail.get("msg", "")).lower()
+            if "eof while parsing" in message or "trailing comma" in message:
+                return True
+        return False
+
+    def _repair_structured_json_raw(
+        self,
+        *,
+        raw: str,
+        response_model: Type[BaseModel],
+        model_display: str,
+    ) -> str:
+        """
+        Repair ChunkDeepAnalysis JSON only; other response models are returned unchanged.
+
+        Low-level parsing lives in :mod:`oasis.structured_output.json_repair`.
+        """
+        if not raw or not issubclass(response_model, ChunkDeepAnalysis):
+            return raw
+        return repair_chunk_deep_structured_json_raw(raw, model_display=model_display)
+
+    @staticmethod
+    def _build_safe_minimal_chunk_json(raw: str) -> Optional[str]:
+        """
+        Thin wrapper for tests; delegates to ``oasis.structured_output.json_repair``.
+
+        Intended only for ChunkDeepAnalysis fallback payloads.
+        """
+        return build_safe_minimal_chunk_json(raw)
 
     def _log_structured_output_error(
         self,
@@ -233,11 +415,18 @@ class SecurityAnalyzer:
         message = str(error)
         if issubclass(response_model, ScanVerdict):
             return "Field required" in message and "verdict" in message
+        if issubclass(response_model, ChunkDeepAnalysis) and isinstance(error, ValidationError):
+            for detail in error.errors():
+                if validation_detail_is_exploitation_conditions_retryable(detail):
+                    return True
         return "json_invalid" in message or "EOF while parsing" in message
 
     def _get_structured_retry_limit(self, response_model: Type[BaseModel]) -> int:
         """Bound retry count per structured model type."""
-        return 2 if issubclass(response_model, ScanVerdict) else 1
+        return 2 if (
+            issubclass(response_model, ScanVerdict)
+            or issubclass(response_model, ChunkDeepAnalysis)
+        ) else 1
 
     def _build_structured_retry_suffix(self, response_model: Type[BaseModel]) -> str:
         """Build minimal correction reminder appended to the prompt on retry."""
@@ -248,12 +437,9 @@ class SecurityAnalyzer:
                 "Do NOT output schema keys (description/properties/required/title/type).\n"
                 "Do NOT use markdown code fences.\n"
             )
-        return (
-            "\n\nCORRECTION: Return valid JSON only (single object matching the required schema).\n"
-            "Do NOT use markdown code fences.\n"
-            "Return compact JSON with no explanations, no repeated filler tokens, and no trailing commentary.\n"
-            "Ensure every quote/bracket is closed and output ends with the final '}' of the JSON object.\n"
-        )
+        if issubclass(response_model, ChunkDeepAnalysis):
+            return chunk_deep_structured_retry_suffix()
+        return generic_structured_retry_suffix()
         
     def _get_vulnerability_details(self, vulnerability: Union[str, Dict]) -> Tuple[str, str, list, str, str]:
         """
@@ -623,9 +809,6 @@ Code to analyze:
                         file_pbar.update(1)
 
                 vuln_scan_pbar.update(1)
-                
-                if main_pbar:
-                    main_pbar.update(0.5)
 
         return {
             'suspicious_data': all_suspicious_data,
@@ -752,7 +935,7 @@ Code to analyze:
                 # Update progress bars
                 deep_vuln_pbar.update(1)
                 if main_pbar:
-                    main_pbar.update(0.5)
+                    main_pbar.update(1)
 
         return all_results
     
@@ -2623,11 +2806,7 @@ Respond with a single JSON object matching this JSON Schema (no markdown code fe
 
 Populate "findings" with one object per distinct {vuln_name} vulnerability in this chunk. If none, return {{"findings": [], "notes": "No issues"}}.
 
-Output constraints (strict):
-- Return JSON ONLY, exactly one object, no prose before or after.
-- Keep values concise to avoid truncation; prioritize complete valid JSON over verbosity.
-- Never repeat filler tokens (e.g. "the the the"), and never emit partial or unfinished strings.
-- Ensure the response ends with a fully closed JSON object (`}}` as appropriate).
+{chunk_deep_prompt_output_constraint_block()}
 
 For each finding:
 - title: short label (e.g. "Vulnerability found")
@@ -2648,4 +2827,8 @@ For each finding:
 Rules:
 - DO NOT mention any vulnerability type other than {vuln_name}.
 - If no {vuln_name} issues exist, return an empty findings array.
+
+Valid vs invalid typing examples:
+- valid: "exploitation_conditions": "Attacker can reach POST /transfer while authenticated."
+- invalid: "exploitation_conditions": ["User is authenticated", "Endpoint is reachable"]
 """
