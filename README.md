@@ -367,6 +367,8 @@ Vulnerability runs are stored under a timestamped directory. For each model, per
 ```
 security_reports/
 └── [input_basename]_YYYYMMDD_HHMMSS/
+    ├── logs/
+    │   └── oasis_errors_[run_id].log
     └── [sanitized_model_name]/
         ├── json/
         │   └── vulnerability_type.json
@@ -382,11 +384,41 @@ security_reports/
 
 Deep and scan analysis calls use Ollama **structured outputs** (`format` with a JSON schema). Use a recent Ollama server; model quality still varies by GGUF. If structured validation fails, the analyzer falls back to safe defaults or regex (function extraction only).
 
+### Structured output hardening
+
+Use this priority order to reduce invalid JSON responses (`Field required`, `json_invalid`, `EOF while parsing a string`):
+
+1. **Model selection first**
+   - Choose a scan model that is stable with strict JSON outputs.
+   - Keep a deep model only if it stays stable across repeated runs on the same corpus.
+   - Compare candidates with the same target files and track invalid JSON rate + average chunk latency.
+2. **Ollama generation settings**
+   - Keep conservative generation settings for structured scan/deep calls.
+   - Keep thinking disabled for strict JSON runs unless a model explicitly requires it.
+   - Ensure chunk size and model context window are compatible to avoid truncated outputs.
+3. **Targeted retry policy**
+   - Retry only known structured failures: missing required `verdict` (scan) and invalid/truncated JSON (`json_invalid`, `EOF while parsing`) for deep responses.
+   - Keep retries bounded (scan: up to 2 retries, deep: up to 1 retry) and append a strict JSON correction reminder on retries.
+   - Keep final fallback behavior deterministic when retries fail.
+4. **Operational safeguards**
+   - Track invalid JSON ratio per run and alert when it exceeds your acceptance threshold.
+   - Review `security_reports/<run_id>/logs/oasis_errors_<run_id>.log` after each scan to identify the failing model/phase/chunk quickly.
+
+Each structured-output error log line includes context fields such as run identifier, model, phase, vulnerability (if available), file path, chunk index, exception type, and a truncated raw preview.
+Retry-aware logs also include `retry_attempt` and `retry_max` so you can distinguish first failure from final fallback.
+
+Example hardened command:
+
+```bash
+oasis -i ./critical-service -sm qwen2.5-coder:7b -m bugtraceai-apex-q4 --adaptive -t 0.6 -smt no -mt no
+```
+
 ### Web dashboard and Reload
 
 - Statistics and risk summaries are read from **`json/*.json`**.
 - **Reload** refreshes both `/api/stats?force=1` and `/api/reports?force=1` so listings stay in sync with the filesystem.
-- Markdown preview (`/api/report-content/...`) remains available **only when no `json/<same-stem>.json` exists** for that report (legacy scans). Otherwise use JSON preview (`/api/report-json/...`).
+- Canonical JSON reports are previewed in the Web UI by rendering HTML from the JSON via the Jinja template, so the modal matches the HTML/PDF structure as closely as possible.
+- Markdown preview (`/api/report-content/...`) remains the fallback for legacy reports that do not have a sibling `json/<same-stem>.json`, or when canonical JSON HTML preview cannot be generated.
 
 ## 💾 Cache Management
 

@@ -6,7 +6,7 @@ alwaysApply: false
 
 # OASIS Python Architecture
 
-- Keep responsibilities split by module: orchestration in `oasis/oasis.py`, analysis in `oasis/analyze.py`, model lifecycle in `oasis/ollama_manager.py`, and shared utilities in dedicated helper modules.
+- Keep responsibilities split by module: orchestration in `oasis/oasis.py`, analysis in `oasis/analyze.py`, structured schemas in `oasis/schemas/`, canonical JSON + Jinja report rendering in `oasis/report.py`, dashboard indexing in `oasis/web.py`, model lifecycle in `oasis/ollama_manager.py`, and shared utilities in dedicated helper modules.
 - Favor small manager/service classes over monolithic procedural flows when adding features.
 - Preserve CLI backward compatibility when possible (short and long flags); if a rename is required, mirror it in docs.
 - Route logs through centralized project logging helpers; avoid ad-hoc print statements in production paths.

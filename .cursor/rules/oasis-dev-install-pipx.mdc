@@ -1,0 +1,30 @@
+---
+description: Local OASIS CLI install and refresh via pipx editable mode
+alwaysApply: true
+---
+
+# OASIS development install (pipx)
+
+- Install or refresh the `oasis` CLI from the repository root using **pipx** with an editable install:
+
+```bash
+pipx uninstall oasis && pipx install -e .
+```
+
+- Use this flow after dependency or entrypoint changes so the isolated venv matches the working tree.
+- Do not assume a global `pip install`; the project standard for local tooling is **pipx**.
+---
+description: Local OASIS CLI install via pipx (editable dev workflow)
+alwaysApply: true
+---
+
+# OASIS development install (pipx)
+
+- Install or refresh the `oasis` CLI from the repository root using **pipx** with an editable install:
+
+```bash
+pipx uninstall oasis && pipx install -e .
+```
+
+- Use this flow after dependency or entrypoint changes so the isolated venv matches the working tree.
+- Do not assume a global `pip install`; the project standard for local tooling is **pipx**.
