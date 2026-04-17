@@ -102,6 +102,8 @@ class SecurityAnalyzer:
             logger.exception(f"Initialization error: {str(e)}")
             raise RuntimeError("Could not connect to Ollama server") from e
 
+        self.args = args
+
         # Set up primary (deep) model
         self.llm_model = llm_model
         

@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Dict, Any
 
+logger = logging.getLogger("oasis")
+
 # Analysis version (used for cache compatibility)
 # This constant must be incremented manually ONLY when the analysis behavior changes in a way that would make cached results obsolete.
 #
@@ -258,40 +260,139 @@ VULN_EMOJIS = {
     "unclassified": "❓ "
 }
 
+
+def _vulnerability_definition_shape_error(data: Any) -> Optional[str]:
+    """
+    Return a short error message if ``data`` is not a usable vulnerability definition dict,
+    otherwise None.
+    """
+    if not isinstance(data, dict):
+        return "root value must be a JSON object"
+    for key in ("name", "description", "impact", "mitigation"):
+        if key not in data:
+            return f"missing required key {key!r}"
+        val = data[key]
+        if not isinstance(val, str):
+            return f"{key!r} must be a string, got {type(val).__name__}"
+    if "patterns" not in data:
+        return "missing required key 'patterns'"
+    patterns = data["patterns"]
+    if not isinstance(patterns, list):
+        return f"'patterns' must be a list, got {type(patterns).__name__}"
+    if not patterns:
+        return "'patterns' must be a non-empty list"
+    for i, item in enumerate(patterns):
+        if not isinstance(item, str):
+            return f"'patterns'[{i}] must be a string, got {type(item).__name__}"
+    return None
+
+
 def load_vulnerability_definitions() -> Dict[str, Any]:
     """
-    Load vulnerability definitions from JSON files in the vulnerability/ directory.
-    Falls back to built-in definitions if files are not found.
-    
+    Load vulnerability definitions from JSON files in a vulnerability/ directory.
+
+    Resolution order for the directory path:
+        1. ``OASIS_VULNERABILITY_DIR`` environment variable (expanded path), if set.
+           If that value cannot be resolved (invalid path, I/O errors), a warning is logged
+           and resolution continues with (2).
+        2. ``<repository root>/vulnerability`` (parent of the ``oasis`` package directory).
+
+    If the directory is missing, not a directory, or no definitions load successfully
+    (empty directory or only unreadable/invalid JSON), returns the legacy built-in mapping.
+
+    Partial loads are returned when at least one file succeeds; failures are logged.
+
+    Each JSON file must define an object with string fields ``name``, ``description``,
+    ``impact``, ``mitigation``, and a non-empty ``patterns`` list of strings. Invalid
+    shapes are rejected (logged, counted as failures) and are not stored.
+
     Returns:
-        Dict containing vulnerability definitions
+        Dict containing vulnerability definitions.
     """
-    vulnerabilities = {}
-    
-    # Get the directory containing this config.py file
-    config_dir = Path(__file__).parent
-    # Look for vulnerability directory relative to the project root
-    vuln_dir = config_dir.parent / "vulnerability"
-    
-    if not vuln_dir.exists():
-        # Fallback to legacy hardcoded definitions if directory doesn't exist
-        return _get_legacy_vulnerability_mapping()
-    
-    # Load all JSON files from vulnerability directory
-    for json_file in vuln_dir.glob("*.json"):
+    vulnerabilities: Dict[str, Any] = {}
+    package_dir = Path(__file__).resolve().parent
+    default_vuln_dir = package_dir.parent / "vulnerability"
+    env_dir = os.environ.get("OASIS_VULNERABILITY_DIR")
+    if env_dir:
         try:
-            vuln_key = json_file.stem  # filename without extension
-            if vuln_key in vulnerabilities:
-                print(f"Warning: Duplicate vulnerability key '{vuln_key}' found in {json_file}. Skipping this file to avoid overwriting existing entry.")
-                continue
-            with open(json_file, 'r', encoding='utf-8') as f:
-                vuln_data = json.load(f)
-                vulnerabilities[vuln_key] = vuln_data
-        except (json.JSONDecodeError, FileNotFoundError, PermissionError) as e:
-            # Log error but continue loading other vulnerabilities
-            print(f"Warning: Could not load vulnerability definition from {json_file}: {e}")
+            vuln_dir = Path(env_dir).expanduser().resolve()
+        except (OSError, RuntimeError) as exc:
+            logger.warning(
+                "Invalid OASIS_VULNERABILITY_DIR %r (%s); trying default directory %s.",
+                env_dir,
+                exc,
+                default_vuln_dir,
+            )
+            vuln_dir = default_vuln_dir
+    else:
+        vuln_dir = default_vuln_dir
+
+    if not vuln_dir.exists() or not vuln_dir.is_dir():
+        logger.warning(
+            "Vulnerability definitions directory not found or not a directory (%s); "
+            "using built-in legacy definitions.",
+            vuln_dir,
+        )
+        return _get_legacy_vulnerability_mapping()
+
+    loaded_files = 0
+    failed_files = 0
+
+    for json_file in sorted(vuln_dir.glob("*.json")):
+        vuln_key = json_file.stem
+        if vuln_key in vulnerabilities:
+            logger.warning(
+                "Duplicate vulnerability key '%s' in %s; skipping to preserve the first entry.",
+                vuln_key,
+                json_file,
+            )
+            failed_files += 1
             continue
-    
+        try:
+            with json_file.open("r", encoding="utf-8") as f:
+                vuln_data = json.load(f)
+            shape_err = _vulnerability_definition_shape_error(vuln_data)
+            if shape_err is not None:
+                failed_files += 1
+                logger.warning(
+                    "Vulnerability definition in %s has invalid shape (%s); skipping.",
+                    json_file,
+                    shape_err,
+                )
+                continue
+            vulnerabilities[vuln_key] = vuln_data
+            loaded_files += 1
+        except json.JSONDecodeError as exc:
+            failed_files += 1
+            logger.warning(
+                "Failed to decode vulnerability definition file %s: %s",
+                json_file,
+                exc,
+            )
+        except OSError as exc:
+            failed_files += 1
+            logger.warning(
+                "Failed to read vulnerability definition file %s: %s",
+                json_file,
+                exc,
+            )
+
+    if loaded_files == 0:
+        logger.warning(
+            "No vulnerability definitions could be loaded from %s; "
+            "using built-in legacy definitions.",
+            vuln_dir,
+        )
+        return _get_legacy_vulnerability_mapping()
+
+    if failed_files > 0:
+        logger.warning(
+            "Loaded vulnerability definitions from %d file(s) in %s, but %d file(s) failed or were skipped.",
+            loaded_files,
+            vuln_dir,
+            failed_files,
+        )
+
     return vulnerabilities
 
 def _get_legacy_vulnerability_mapping() -> Dict[str, Any]:
