@@ -1,19 +1,33 @@
 import base64
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional
+
 from bs4 import BeautifulSoup
 import markdown
 from markdown.extensions import Extension
 from markdown.preprocessors import Preprocessor
-from weasyprint import HTML
-from pathlib import Path
-from typing import List, Dict, Optional
-import logging
 from jinja2 import Environment, FileSystemLoader
 
 # Import from configuration
 from .config import REPORT, LANGUAGES
 
 # Import from other modules
+from .export import artifact_filename
+from .export.vulnerability import write_vulnerability_artifacts
+from .export.markdown_outputs import write_rendered_markdown_formats
+from .export.writers import write_markdown_lines
+from .schemas.analysis import (
+    ChunkDeepAnalysis,
+    FileReportEntry,
+    VulnerabilityReportDocument,
+    build_dashboard_stats,
+)
 from .tools import extract_clean_path, logger, sanitize_name, generate_timestamp
+
+# Package metadata (process constant; avoid lazy imports in hot paths)
+from . import __version__ as oasis_version
+
 
 class Report:
     """
@@ -127,74 +141,141 @@ class Report:
             
         return header
     
-    def generate_vulnerability_report(self, vulnerability: Dict, results: List[Dict], 
-                                     model_name: str) -> Dict[str, Path]:
-        """
-        Generate a report for a specific vulnerability type
-        
-        Args:
-            vulnerability: Vulnerability (Dict - VULNERABILITY_MAPPING element)
-            results: Analysis results
-            model_name: Model name used for analysis
-            
-        Returns:
-            Dictionary of report file paths
-        """
-        # Clean vulnerability name for filenames
-        vuln_name = vulnerability['name']
-        safe_name = vuln_name.lower().replace(' ', '_')
-        
-        # Set output file paths and filter by output format in one step
-        output_files = self.filter_output_files(safe_name)
-
-        # Create report content
-        report = self.create_header(f"{vuln_name} Security Analysis", model_name)
-        
-        # Add summary section
-        report.extend([
-            "\n## Summary",
-            f"\nAnalyzed {len(results)} files for {vuln_name} vulnerabilities.",
-            "\n| File | Similarity Score |",
-            "|------|-----------------|"
-        ])
-        
-        # Add each file with its score
+    def _results_to_file_entries(self, results: List[Dict]) -> List[FileReportEntry]:
+        analysis_notes_max_len = 2000
+        truncation_suffix = " [truncated]"
+        entries: List[FileReportEntry] = []
         for result in results:
-            score = result.get('similarity_score', 0.0)
-            file_path = result.get('file_path', 'Unknown file')
-            report.append(f"| `{file_path}` | {score:.3f} |")
-        
-        # Add detailed analysis section
-        report.append('\n<div class="page-break"></div>\n')
-        report.append("\n## Detailed Analysis\n")
-        
-        for i, result in enumerate(results):
-            file_path = result.get('file_path', 'Unknown file')
-            score = result.get('similarity_score', 0.0)
-            
-            # Add page break between files except for the first one
-            if i > 0:
-                report.append('\n<div class="page-break"></div>\n')
-            
-            # Check if analysis key exists
-            if 'analysis' in result:
-                # Normalize the heading levels in the analysis
-                analysis = result['analysis']
-            elif 'error' in result:
-                analysis = f"**Error during analysis:** {result['error']}"
-            else:
-                analysis = "No detailed analysis available"
-            
-            report.extend([
-                f"### File: {file_path}",
-                f"Similarity Score: {score:.3f}",
-                "\n#### Analysis Results\n",
-                analysis
-            ])
-        
-        self._generate_and_save_report(output_files, report, report_type='Vulnerability')
-        
-        return output_files
+            chunk_models: List[ChunkDeepAnalysis] = []
+            for raw in result.get("structured_chunks") or []:
+                try:
+                    if isinstance(raw, dict):
+                        raw_copy = dict(raw)
+                        notes = raw_copy.get("notes")
+                        truncated = bool(raw_copy.get("truncated", False))
+                        if isinstance(notes, str) and len(notes) > analysis_notes_max_len:
+                            raw_copy["notes"] = (
+                                notes[: analysis_notes_max_len - len(truncation_suffix)]
+                                + truncation_suffix
+                            )
+                            truncated = True
+                        raw_copy["truncated"] = truncated
+                        chunk_models.append(ChunkDeepAnalysis.model_validate(raw_copy))
+                    else:
+                        chunk_models.append(ChunkDeepAnalysis.model_validate(raw))
+                except Exception:
+                    raw_str = str(raw)
+                    truncated = False
+                    if len(raw_str) > analysis_notes_max_len:
+                        raw_str = (
+                            raw_str[: analysis_notes_max_len - len(truncation_suffix)]
+                            + truncation_suffix
+                        )
+                        truncated = True
+                    chunk_models.append(
+                        ChunkDeepAnalysis(findings=[], notes=raw_str, truncated=truncated)
+                    )
+            if not chunk_models and result.get("analysis"):
+                analysis_str = str(result["analysis"])
+                truncated = False
+                if len(analysis_str) > analysis_notes_max_len:
+                    analysis_str = (
+                        analysis_str[: analysis_notes_max_len - len(truncation_suffix)]
+                        + truncation_suffix
+                    )
+                    truncated = True
+                chunk_models.append(
+                    ChunkDeepAnalysis(findings=[], notes=analysis_str, truncated=truncated)
+                )
+            entries.append(
+                FileReportEntry(
+                    file_path=result.get("file_path", "Unknown file"),
+                    similarity_score=float(result.get("similarity_score", 0.0)),
+                    chunk_analyses=chunk_models,
+                    error=result.get("error"),
+                )
+            )
+        return entries
+
+    def _build_vulnerability_document(
+        self, vulnerability: Dict, results: List[Dict], model_name: str
+    ) -> VulnerabilityReportDocument:
+        vuln_name = vulnerability["name"]
+        file_entries = self._results_to_file_entries(results)
+        stats = self._compute_document_stats(file_entries)
+        return VulnerabilityReportDocument(
+            title=f"{vuln_name} Security Analysis",
+            generated_at=generate_timestamp(),
+            model_name=model_name,
+            vulnerability_name=vuln_name,
+            vulnerability=dict(vulnerability),
+            files=file_entries,
+            stats=stats,
+        )
+
+    @staticmethod
+    def _compute_document_stats(file_entries: List[FileReportEntry]):
+        """Single source of truth for dashboard statistics aggregation."""
+        return build_dashboard_stats(file_entries)
+
+    def _render_vulnerability_inner_html(self, doc: VulnerabilityReportDocument) -> str:
+        template = self.template_env.get_template("reports/vulnerability_from_json.html.j2")
+        return template.render(document=doc.model_dump(mode="json"))
+
+    def _render_vulnerability_markdown_export(self, doc: VulnerabilityReportDocument) -> str:
+        template = self.template_env.get_template("reports/vulnerability_export.md.j2")
+        return template.render(document=doc.model_dump(mode="json"))
+
+    def render_report_html_from_json_payload(self, payload: Dict) -> str:
+        """
+        Render report HTML directly from canonical JSON payload.
+        """
+        report_type = payload.get("report_type")
+        if report_type != "vulnerability":
+            raise ValueError(f"Unsupported canonical report type: {report_type}")
+
+        doc = VulnerabilityReportDocument.model_validate(payload)
+        # Keep JSON payload and template rendering aligned on one stats helper.
+        doc.stats = self._compute_document_stats(doc.files)
+        inner_html = self._render_vulnerability_inner_html(doc)
+        return self.render_template(inner_html)
+
+    def generate_vulnerability_report(
+        self, vulnerability: Dict, results: List[Dict], model_name: str
+    ) -> Dict[str, Path]:
+        """
+        Generate vulnerability report: canonical JSON plus Jinja-derived HTML/PDF and optional MD export.
+        """
+        vuln_name = vulnerability["name"]
+        safe_name = vuln_name.lower().replace(" ", "_")
+        output_files = self.filter_output_files(safe_name)
+        doc = self._build_vulnerability_document(vulnerability, results, model_name)
+
+        logger.debug("--------------------------------")
+        logger.debug(f"Generating Vulnerability report for {', '.join(self.output_format)}, please wait...")
+
+        inner_html = self._render_vulnerability_inner_html(doc)
+        rendered_html = self.render_template(inner_html)
+        md_body = ""
+        if "md" in output_files:
+            md_body = self._render_vulnerability_markdown_export(doc)
+
+        written = write_vulnerability_artifacts(
+            output_files,
+            doc,
+            rendered_html=rendered_html,
+            md_body=md_body,
+            logger=logger,
+            safe_name_for_logs=safe_name,
+            tool_version=oasis_version,
+        )
+        if missing := [k for k, p in written.items() if p is None]:
+            logger.warning(
+                "Some vulnerability report artifacts failed for %s (formats: %s)",
+                safe_name,
+                ", ".join(missing),
+            )
+        return {k: p for k, p in written.items() if p is not None}
     
     def _generate_and_save_report(self, output_files, report_content, report_type: str = None):
         """
@@ -209,10 +290,10 @@ class Report:
         logger.debug(f"Generating {report_type} report for {', '.join(self.output_format)}, please wait...")
 
         # Write markdown
-        self.write_markdown(output_files['md'], report_content)
-        
+        write_markdown_lines(output_files["md"], report_content, logger)
+
         # Convert to PDF and HTML
-        self.convert_to_all_formats(output_files['md'])
+        self.convert_to_all_formats(output_files["md"])
 
     def report_generated(self, report_type: str = None, report_structure: bool = False):
         """
@@ -424,27 +505,6 @@ class Report:
         
         return output_files
     
-    def write_markdown(self, file_path: Path, content: List[str]) -> None:
-        """
-        Write content to markdown file
-        
-        Args:
-            file_path: Path to output file
-            content: List of content lines
-        """
-        try:
-            # Ensure parent directory exists
-            self.ensure_directory(file_path.parent)
-            
-            # Write content to file
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(content))
-                
-        except Exception as e:
-            logger.exception(f"Error writing markdown file: {str(e)}")
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug("Full error:", exc_info=True)
-    
     def convert_to_all_formats(self, markdown_file: Path) -> Dict[str, Path]:
         """
         Convert markdown file to PDF and HTML
@@ -459,36 +519,23 @@ class Report:
         output_files = self.filter_output_files(markdown_file.stem)
 
         try:
-            # Read and convert markdown to HTML
             html_content = self.read_and_convert_markdown(markdown_file)
-
-            # Render HTML using the template
             rendered_html = self.render_template(html_content)
-
-            # Write HTML file
-            with open(output_files['html'], 'w', encoding='utf-8') as f:
-                f.write(rendered_html)
-
-            # Convert to PDF
-            try:
-                HTML(string=rendered_html, media_type='print').write_pdf(output_files['pdf'])
-            except Exception as e:
-                logger.exception(f"PDF conversion failed for {markdown_file.name}: {e.__class__.__name__}: {str(e)}")
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"HTML content causing PDF conversion failure (first 500 chars): {rendered_html[:500]}")
-                output_files['pdf'] = None
-            
-            return output_files
-            
+            return write_rendered_markdown_formats(
+                output_files,
+                rendered_html,
+                logger=logger,
+                context_label=markdown_file.name,
+            )
         except Exception as e:
             logger.exception(f"Error converting {markdown_file.name} to other formats: {e.__class__.__name__}: {str(e)}")
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("Full error:", exc_info=True)
 
             return {
-                'md': markdown_file,
-                'pdf': None,
-                'html': None
+                "md": markdown_file,
+                "pdf": None,
+                "html": None,
             }
 
     def read_and_convert_markdown(self, markdown_file: Path) -> str:
@@ -502,8 +549,7 @@ class Report:
             HTML content
         """
         # Read markdown content
-        with open(markdown_file, 'r', encoding='utf-8') as f:
-            markdown_content = f.read()
+        markdown_content = markdown_file.read_text(encoding="utf-8")
 
         # Parse HTML with Beautiful Soup and fix any issues
         soup = BeautifulSoup(markdown.markdown(markdown_content, extensions=['tables', 'fenced_code', 'codehilite']), 'html.parser')
@@ -531,8 +577,7 @@ class Report:
             logo_path = images_dir / 'oasis-logo.jpg'
             
             # Encode the logo in base64
-            with open(logo_path, "rb") as image_file:
-                encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+            encoded_string = base64.b64encode(logo_path.read_bytes()).decode("utf-8")
             
             # Create a data URL for the image
             logo_data_url = f"data:image/jpeg;base64,{encoded_string}"
@@ -637,8 +682,9 @@ class Report:
         """
         model_name = sanitize_name(self.current_model)
         return {
-            fmt: self.report_dirs[model_name][fmt] / f"{safe_name}.{fmt}"
-            for fmt in self.output_format if fmt in self.report_dirs[model_name]
+            fmt: self.report_dirs[model_name][fmt] / artifact_filename(safe_name, fmt)
+            for fmt in self.output_format
+            if fmt in self.report_dirs[model_name]
         }
 
     def get_output_directory(self, input_path: str | Path, base_reports_dir: Path) -> Path:

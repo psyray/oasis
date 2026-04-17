@@ -1,4 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
+import logging
+import json
 from pathlib import Path
 import re
 import secrets
@@ -8,9 +10,47 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 from functools import wraps
 
 
-from .config import VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS, LANGUAGES
+from .config import REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS
+from .export.filenames import artifact_filename, report_dir_glob_for_format
 from .report import Report
 from .tools import parse_iso_date, parse_report_date
+
+logger = logging.getLogger(__name__)
+
+
+def _dashboard_format_display_order() -> list[str]:
+    """Ordered formats for dashboard chips, date-picker open preference, and /api/dates.
+
+    Matching between DASHBOARD_FORMAT_DISPLAY_ORDER and OUTPUT_FORMATS is
+    case-insensitive, but the returned list preserves the original casing
+    from OUTPUT_FORMATS.
+    """
+    preferred = REPORT.get("DASHBOARD_FORMAT_DISPLAY_ORDER") or []
+    allowed = list(REPORT.get("OUTPUT_FORMATS") or [])
+
+    normalized_to_original: dict[str, str] = {}
+    for fmt in allowed:
+        key = fmt.lower()
+        if key not in normalized_to_original:
+            normalized_to_original[key] = fmt
+
+    seen_normalized: set[str] = set()
+    out: list[str] = []
+
+    for fmt in preferred:
+        key = fmt.lower()
+        original = normalized_to_original.get(key)
+        if original is not None and key not in seen_normalized:
+            out.append(original)
+            seen_normalized.add(key)
+
+    for fmt in allowed:
+        key = fmt.lower()
+        if key not in seen_normalized:
+            out.append(fmt)
+            seen_normalized.add(key)
+
+    return out
 
 class WebServer:
     def __init__(self, report, debug=False, web_expose='local', web_password=None, web_port=5000):
@@ -100,6 +140,34 @@ class WebServer:
         """Render the login template"""
         return render_template('login.html', error=error)
 
+    def _is_within_security_root(self, path: Path, root: Path) -> bool:
+        """Compatibility-safe path containment check (Python 3.9+ and older).
+
+        Both inputs are resolved here so containment checks always operate on
+        normalized absolute paths, regardless of caller behavior.
+        """
+        path = path.resolve(strict=False)
+        root = root.resolve()
+        is_relative_to = getattr(path, "is_relative_to", None)
+        if callable(is_relative_to):
+            return path.is_relative_to(root)
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            return False
+
+    def _report_preview_error_response(self, logger_message: str):
+        logger.exception(logger_message)
+        return (
+            jsonify(
+                {
+                    'error': 'Failed to generate report preview. Please contact support if the problem persists.'
+                }
+            ),
+            500,
+        )
+
     def register_routes(self, app, server, login_required):
         # Logout route
         @app.route('/logout', methods=['GET'])
@@ -112,25 +180,51 @@ class WebServer:
         def dashboard():
             """Main dashboard page"""
             
-            return render_template('dashboard.html', 
-                                   model_emojis=MODEL_EMOJIS,
-                                   vuln_emojis=VULN_EMOJIS,
-                                   languages=LANGUAGES,
-                                   debug=self.debug)
+            return render_template(
+                'dashboard.html',
+                model_emojis=MODEL_EMOJIS,
+                vuln_emojis=VULN_EMOJIS,
+                debug=self.debug,
+                report_output_formats=REPORT.get('OUTPUT_FORMATS', []),
+                dashboard_format_display_order=_dashboard_format_display_order(),
+            )
             
         @app.route('/api/reports')
         @login_required
         def get_reports():
-           
+            # Get filter parameters
+            model_filter = request.args.get('model', '')
+            format_filter = request.args.get('format', '')
+            vuln_filter = request.args.get('vulnerability', '')
+            start_date = request.args.get('start_date', None)
+            end_date = request.args.get('end_date', None)
+            md_dates_only = request.args.get('md_dates_only', '1') == '1'
+
+            if request.args.get('force', '0') == '1':
+                self.collect_report_data()
             # Filter reports based on parameters
-            filtered_data = self.filter_reports()
+            filtered_data = self.filter_reports(
+                model_filter=model_filter,
+                format_filter=format_filter,
+                vuln_filter=vuln_filter,
+                start_date=start_date,
+                end_date=end_date,
+                md_dates_only=md_dates_only,
+            )
             return jsonify(filtered_data)
             
         @app.route('/api/stats')
         @login_required
         def get_stats():
             # Filter reports based on parameters
-            filtered_data = self.filter_reports()
+            filtered_data = self.filter_reports(
+                model_filter=request.args.get('model', ''),
+                format_filter=request.args.get('format', ''),
+                vuln_filter=request.args.get('vulnerability', ''),
+                start_date=request.args.get('start_date', None),
+                end_date=request.args.get('end_date', None),
+                md_dates_only=request.args.get('md_dates_only', '1') == '1',
+            )
             return jsonify(self.get_report_statistics(filtered_reports=filtered_data))
         
         @app.route('/reports/<path:filename>')
@@ -143,15 +237,94 @@ class WebServer:
         @app.route('/api/report-content/<path:filename>')
         @login_required
         def get_report_content(filename):
-            # Return content of markdown file for previewing
+            # Legacy markdown preview only when no canonical JSON exists for the same stem.
+            try:
+                allow_canonical_json_preview = request.args.get('allow_canonical_json_preview', '0') == '1'
+                file_path = self.security_dir / filename
+                security_root = self.security_dir.resolve()
+                resolved_path = file_path.resolve(strict=False)
+
+                if not self._is_within_security_root(resolved_path, security_root):
+                    return jsonify({'error': 'Invalid path'}), 403
+
+                if not resolved_path.exists() or resolved_path.suffix != '.md':
+                    return jsonify({'error': 'File not found or not a markdown file'}), 404
+
+                rel_path = resolved_path.relative_to(security_root)
+                rel_parts = rel_path.parts
+                if len(rel_parts) < 2:
+                    return jsonify({'error': 'Invalid report path'}), 400
+
+                json_rel_path = Path("json", *rel_parts[1:]).with_suffix(".json")
+                json_path = security_root / json_rel_path
+                if json_path.exists() and not allow_canonical_json_preview:
+                    return (
+                        jsonify(
+                            {
+                                'error': 'Canonical report is JSON; use JSON preview endpoint.',
+                            }
+                        ),
+                        409,
+                    )
+                html_content = self.report.read_and_convert_markdown(resolved_path)
+                return jsonify({'content': html_content})
+            except Exception:
+                return self._report_preview_error_response("Error while generating markdown report preview")
+
+        @app.route('/api/report-json/<path:filename>')
+        @login_required
+        def get_report_json(filename):
             try:
                 file_path = self.security_dir / filename
-                if file_path.exists() and file_path.suffix == '.md':
-                    html_content = self.report.read_and_convert_markdown(file_path)
-                    return jsonify({'content': html_content})
-                return jsonify({'error': 'File not found or not a markdown file'}), 404
-            except Exception as e:
-                return jsonify({'error': str(e)}), 500
+                security_root = self.security_dir.resolve()
+                resolved_path = file_path.resolve(strict=False)
+
+                if not self._is_within_security_root(resolved_path, security_root):
+                    return jsonify({'error': 'Invalid path'}), 403
+                if not resolved_path.exists() or resolved_path.suffix != '.json':
+                    return jsonify({'error': 'File not found or not JSON'}), 404
+                with open(resolved_path, 'r', encoding='utf-8') as f:
+                    payload = json.load(f)
+                if not isinstance(payload, dict):
+                    return jsonify({'error': 'Invalid JSON report payload'}), 422
+                return jsonify(payload)
+            except Exception:
+                return self._report_preview_error_response("Error while generating JSON report preview")
+
+        def _load_report_html_from_json_path(filename: str):
+            try:
+                file_path = self.security_dir / filename
+                security_root = self.security_dir.resolve()
+                resolved_path = file_path.resolve(strict=False)
+
+                if not self._is_within_security_root(resolved_path, security_root):
+                    return jsonify({'error': 'Invalid path'}), 403
+                if not resolved_path.exists() or resolved_path.suffix != '.json':
+                    return jsonify({'error': 'File not found or not JSON'}), 404
+
+                with open(resolved_path, 'r', encoding='utf-8') as f:
+                    payload = json.load(f)
+                if not isinstance(payload, dict):
+                    return jsonify({'error': 'Invalid JSON report payload'}), 422
+
+                html_content = self.report.render_report_html_from_json_payload(payload)
+                return jsonify({'content': html_content}), 200
+            except Exception:
+                return self._report_preview_error_response("Error while generating HTML preview from canonical JSON report")
+
+        @app.route('/api/report-html')
+        @login_required
+        def get_report_html_query():
+            filename = request.args.get('path', '')
+            if not filename:
+                return jsonify({'error': 'No path provided'}), 400
+            return _load_report_html_from_json_path(filename)
+
+        @app.route('/api/report-html/<path:filename>')
+        @login_required
+        def get_report_html(filename):
+            # Backward-compatible route for previous clients.
+            return _load_report_html_from_json_path(filename)
 
         @app.route('/api/download')
         @login_required
@@ -180,7 +353,9 @@ class WebServer:
                 content_types = {
                     '.md': 'text/markdown',
                     '.html': 'text/html',
-                    '.pdf': 'application/pdf'
+                    '.pdf': 'application/pdf',
+                    '.json': 'application/json',
+                    '.sarif': 'application/sarif+json',
                 }
                 content_type = content_types.get(abs_path.suffix, 'application/octet-stream')
                 
@@ -207,14 +382,21 @@ class WebServer:
                     # Create a dictionary date_info from the date string
                     date_info = {'date': report['date']}
                     
-                    # Add the path of the MD file if available
-                    if report.get('alternative_formats', {}).get('md'):
-                        date_info['path'] = report['alternative_formats']['md']
-
-                    # Add the language of the report if available
-                    if report.get('language'):  
-                        date_info['language'] = report['language']
-                    
+                    af = report.get('alternative_formats', {})
+                    open_path = None
+                    open_fmt = None
+                    # Prefer human-readable formats first (same order as dashboard)
+                    for fmt in _dashboard_format_display_order():
+                        if af.get(fmt):
+                            open_path = af[fmt]
+                            open_fmt = fmt
+                            break
+                    if open_path:
+                        date_info['path'] = open_path
+                        date_info['format'] = open_fmt
+                    elif report.get('path'):
+                        date_info['path'] = report['path']
+                        date_info['format'] = report.get('format', 'md')
                     dates.append(date_info)
             
             # Sort dates from newest to oldest
@@ -229,6 +411,29 @@ class WebServer:
         reports = self._collect_reports_from_directories()
         self.report_data = reports
         self.global_stats = self._calculate_global_statistics(reports)
+
+    @staticmethod
+    def _stats_from_json_report_file(report_file: Path) -> dict:
+        """Load dashboard stats from a canonical vulnerability JSON report."""
+        try:
+            with open(report_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            st = data.get('stats') or {}
+            return {
+                'files_analyzed': int(st.get('files_analyzed', 0)),
+                'high_risk': int(st.get('high_risk', 0)),
+                'medium_risk': int(st.get('medium_risk', 0)),
+                'low_risk': int(st.get('low_risk', 0)),
+                'critical_risk': int(st.get('critical_risk', 0)),
+                'total_findings': int(st.get('total_findings', 0)),
+            }
+        except Exception as exc:
+            logger.warning(
+                "Failed to load stats from JSON report '%s': %s",
+                report_file,
+                exc,
+            )
+            return {}
         
     def _collect_reports_from_directories(self):
         """Extract reports data from directory structure"""
@@ -259,10 +464,10 @@ class WebServer:
             fmt = fmt_dir.name
 
             # Check if it's a valid format
-            if fmt not in ['md', 'html', 'pdf']:
+            if fmt not in REPORT["OUTPUT_FORMATS"]:
                 continue
 
-            # Explore report files
+            globber = fmt_dir.glob(report_dir_glob_for_format(fmt))
             model_reports.extend(
                 self._process_report_file(
                     report_file,
@@ -272,7 +477,7 @@ class WebServer:
                     timestamp_dir,
                     model_dir,
                 )
-                for report_file in fmt_dir.glob('*.*')
+                for report_file in globber
             )
         return model_reports
         
@@ -281,8 +486,7 @@ class WebServer:
         # Extract vulnerability type from filename
         vulnerability_type = self._extract_vulnerability_type(report_file.stem)
         
-        # Extract report stats if it's a markdown
-        stats = self._parse_vulnerability_statistics(report_file) if fmt == 'md' else {}
+        stats = self._stats_from_json_report_file(report_file) if fmt == 'json' else {}
         
         # Build relative path for web access
         relative_path = report_file.relative_to(self.security_dir)
@@ -320,10 +524,9 @@ class WebServer:
             "formats": {},
             "dates": {},
             "risk_summary": {
-                "total_findings": 0,
-                "high": sum(report.get("stats", {}).get("high_risk", 0) for report in reports if report["format"] == "md"),
-                "medium": sum(report.get("stats", {}).get("medium_risk", 0) for report in reports if report["format"] == "md"),
-                "low": sum(report.get("stats", {}).get("low_risk", 0) for report in reports if report["format"] == "md")
+                "high": sum(report.get("stats", {}).get("high_risk", 0) for report in reports if report["format"] == "json"),
+                "medium": sum(report.get("stats", {}).get("medium_risk", 0) for report in reports if report["format"] == "json"),
+                "low": sum(report.get("stats", {}).get("low_risk", 0) for report in reports if report["format"] == "json")
             }
         }
         
@@ -334,9 +537,30 @@ class WebServer:
         
     def _update_stats_from_report(self, stats, report):
         """Update statistics based on a single report"""
-        # Count only markdown files for accurate statistics
-        if report["format"] == "md":
-            self._get_report_statistics(stats, report)
+        if report["format"] == "json":
+            stats["total_reports"] += 1
+
+            self._increment_stat_count(
+                report, "model", stats, "models"
+            )
+            self._increment_stat_count(
+                report, "vulnerability_type", stats, "vulnerabilities"
+            )
+            if report["date"]:
+                date_only = report["date"].split()[0]
+                if date_only not in stats["dates"]:
+                    stats["dates"][date_only] = 0
+                stats["dates"][date_only] += 1
+
+        self._increment_stat_count(
+            report, "format", stats, "formats"
+        )
+
+    def _increment_stat_count(self, report, arg1, stats, arg3):
+        model = report[arg1]
+        if model not in stats[arg3]:
+            stats[arg3][model] = 0
+        stats[arg3][model] += 1
 
     def _desanitize_name(self, sanitized_name):
         """Convert sanitized name back to display name"""
@@ -362,10 +586,10 @@ class WebServer:
         """Find all available formats for a specific report"""
         formats = {}
         
-        for fmt in ['md', 'html', 'pdf']:
+        for fmt in REPORT['OUTPUT_FORMATS']:
             fmt_dir = model_dir / fmt
             if fmt_dir.exists() and fmt_dir.is_dir():
-                file_path = fmt_dir / f"{report_stem}.{fmt}"
+                file_path = fmt_dir / artifact_filename(report_stem, fmt)
                 if file_path.exists():
                     # Include timestamp directory in the path
                     if timestamp_dir:
@@ -400,42 +624,6 @@ class WebServer:
             filename,
         )
     
-    def _parse_vulnerability_statistics(self, report_file):
-        """
-        Parse vulnerability statistics from a report file
-        
-        Args:
-            report_file: Path to the report file to parse
-            
-        Returns:
-            Dictionary containing extracted statistics (files analyzed, risk levels, findings)
-        """
-        with open(report_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        # Extract metrics using regex patterns
-        stats = {}
-
-        if findings_match := re.search(r'Analyzed\s+(\d+)\s+files', content):
-            stats['files_analyzed'] = int(findings_match[1])
-
-        # Extract risk levels
-        high_risk = len(re.findall(r'High Risk Findings', content))
-        medium_risk = len(re.findall(r'Medium Risk Findings', content))
-        low_risk = len(re.findall(r'Low Risk Findings', content))
-
-        # Count table rows as an estimation of vulnerabilities
-        table_rows = len(re.findall(r'\|\s+\`[^\`]+\`\s+\|\s+[\d\.]+\s+\|', content))
-
-        stats |= {
-            'high_risk': high_risk,
-            'medium_risk': medium_risk,
-            'low_risk': low_risk,
-            'total_findings': table_rows,
-        }
-
-        return stats
-
     def _apply_date_filter(self, reports, start_date, end_date):
         """
         Apply date filtering to reports
@@ -464,25 +652,31 @@ class WebServer:
                                
         return filtered_reports
 
-    def filter_reports(self, mandatory_filters=None):
+    @staticmethod
+    def _is_date_visible_for_report(report: dict) -> bool:
+        """Return True when report date should be displayed in md_dates_only mode."""
+        has_json = bool(report.get("alternative_formats", {}).get("json"))
+        report_format = report.get("format")
+        return report_format == "json" or (report_format == "md" and not has_json)
+
+    def filter_reports(self, model_filter='', format_filter='', vuln_filter='', start_date=None, end_date=None, md_dates_only=True, mandatory_filters=None):
         """Filter reports based on criteria"""
         if not self.report_data:
             self.collect_report_data()
 
         filtered = self.report_data
 
-        # Check if there are any filter parameters
-        model_filter = request.args.get('model', '')
-        format_filter = request.args.get('format', 'md')
-        vuln_filter = request.args.get('vulnerability', '')
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-
         if mandatory_filters:
-            for filter in mandatory_filters:
-                if not request.args.get(filter):
-                    return jsonify({'error': f'{filter} parameter is required'}), 400
-
+            values = {
+                "model": model_filter,
+                "format": format_filter,
+                "vulnerability": vuln_filter,
+                "start_date": start_date,
+                "end_date": end_date,
+            }
+            for filter_name in mandatory_filters:
+                if not values.get(filter_name):
+                    return []
 
         # Apply model filter (common to both branches)
         if model_filter:
@@ -500,6 +694,9 @@ class WebServer:
         if vuln_filter:
             vuln_filters = [v.lower() for v in vuln_filter.split(',')]
             filtered = [r for r in filtered if any(v in r['vulnerability_type'].lower() for v in vuln_filters)]
+
+        for report in filtered:
+            report["date_visible"] = self._is_date_visible_for_report(report) if md_dates_only else True
 
         return filtered
 
@@ -536,9 +733,35 @@ class WebServer:
 
         # Calculate statistics based on the provided reports
         for report in reports_to_analyze:
-            # Count only markdown files for accurate statistics
-            if report["format"] == "md":
-                stats = self._get_report_statistics(stats, report)
+            if report["format"] == "json":
+                stats["total_reports"] += 1
+
+                model = report["model"]
+                if model not in stats["models"]:
+                    stats["models"][model] = 0
+                stats["models"][model] += 1
+
+                vuln_type = report["vulnerability_type"]
+                if vuln_type not in stats["vulnerabilities"]:
+                    stats["vulnerabilities"][vuln_type] = 0
+                stats["vulnerabilities"][vuln_type] += 1
+
+                if report["date"]:
+                    date_only = report["date"].split()[0]
+                    if date_only not in stats["dates"]:
+                        stats["dates"][date_only] = 0
+                    stats["dates"][date_only] += 1
+
+                if "stats" in report and report["stats"]:
+                    stats["risk_summary"]["high"] += report["stats"].get("high_risk", 0)
+                    stats["risk_summary"]["medium"] += report["stats"].get("medium_risk", 0)
+                    stats["risk_summary"]["low"] += report["stats"].get("low_risk", 0)
+
+            # count all available formats
+            fmt = report["format"]
+            if fmt not in stats["formats"]:
+                stats["formats"][fmt] = 0
+            stats["formats"][fmt] += 1
 
         # Return the calculated statistics
         return stats

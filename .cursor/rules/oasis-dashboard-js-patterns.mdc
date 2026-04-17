@@ -1,0 +1,15 @@
+---
+description: Dashboard JavaScript patterns inferred from web UI bugfix commits
+globs: oasis/static/js/dashboard/**/*.js
+alwaysApply: false
+---
+
+# OASIS Dashboard JS Patterns
+
+- Keep dashboard code modular by concern (`bootstrap`, `api`, `filters`, `interactions`, `modal`, `views`, `utils`).
+- Extend the shared `DashboardApp` namespace instead of introducing parallel globals.
+- Centralize formatting and display helpers in utility modules to avoid duplicated logic.
+- When fixing UI bugs, update both interaction scripts and matching templates if the issue spans behavior and markup.
+- Prefer compatibility-safe fixes that preserve existing dashboard data contracts (`report` fields and optional defaults).
+- Vulnerability stats come from **`stats` on `format: "json"`** rows (`total_findings`, `high_risk`, etc.). Reload must pass **`force=1`** to both `/api/stats` and `/api/reports` when refreshing the filesystem-backed index.
+- Modal preview: **`json`** uses `/api/report-json/...`; **`md`** uses `/api/report-content/...` only for legacy reports (no sibling `json/<stem>.json`).

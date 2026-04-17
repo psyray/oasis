@@ -170,6 +170,21 @@ h3 {
     margin-top: 1em;
 }
 
+h4 {
+    color: var(--dark-blue);
+    font-size: 12pt;
+    margin-top: 0.9em;
+    margin-bottom: 0.4em;
+}
+
+h5 {
+    color: var(--dark-blue);
+    font-size: 11pt;
+    margin-top: 0.8em;
+    margin-bottom: 0.3em;
+    font-weight: 600;
+}
+
 p {
     margin: 0.7em 0;
 }
@@ -226,4 +241,14 @@ tr:nth-child(even) {
     padding: 15px;
     margin: 1em 0;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.report-file-block {
+    background-color: white;
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--turquoise);
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin: 14px 0 18px 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }

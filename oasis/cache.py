@@ -3,11 +3,28 @@ from typing import Union, Dict
 from datetime import datetime
 import hashlib
 import pickle
+import tempfile
 
 from .enums import AnalysisMode, AnalysisType
-from .tools import sanitize_name, logger
+from .schemas.analysis import ANALYSIS_SCHEMA_VERSION
+from .tools import create_cache_dir, sanitize_name, logger
 
 class CacheManager:
+    @staticmethod
+    def _atomic_pickle_write(target_path: Path, payload) -> None:
+        """Write pickle payload atomically to avoid partial file corruption."""
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target_path.parent,
+            delete=False,
+            prefix=f".{target_path.name}.",
+            suffix=".tmp",
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            pickle.dump(payload, tmp_file)
+        tmp_path.replace(target_path)
+
     """
     Manages caching operations for security analysis results
     """
@@ -23,14 +40,8 @@ class CacheManager:
         """
         self.cache_days = cache_days
         
-        # Create base cache directory
-        input_path = Path(input_path)
-        if input_path.is_dir():
-            self.cache_dir = input_path.parent / '.oasis_cache'
-        else:
-            self.cache_dir = input_path.parent / '.oasis_cache'
-            
-        self.cache_dir.mkdir(exist_ok=True)
+        # Create cache directory
+        self.cache_dir = create_cache_dir(input_path)
         
         # Create model-specific cache directories
         self.model_cache_dir = self.cache_dir / sanitize_name(llm_model)
@@ -72,7 +83,68 @@ class CacheManager:
         self.adaptive_analysis_cache = {}
         
         # Validate cache files and clean expired ones
+        self._cleanup_marker_file = self.cache_dir / f".schema_cleanup_v{ANALYSIS_SCHEMA_VERSION}.done"
+        self._run_schema_cleanup_once()
         self.validate_cache_expiration()
+
+    def _run_schema_cleanup_once(self) -> None:
+        """Run schema cleanup once per cache directory/version."""
+        if self._cleanup_marker_file.exists():
+            return
+        self.cleanup_stale_schema_entries()
+        try:
+            self._cleanup_marker_file.write_text(datetime.now().isoformat(), encoding="utf-8")
+        except OSError as exc:
+            logger.warning(f"Unable to persist schema cleanup marker {self._cleanup_marker_file}: {exc}")
+
+    def cleanup_stale_schema_entries(self) -> None:
+        """Remove stale schema-versioned keys from OASIS cache payloads only."""
+        version_prefix = f"v{ANALYSIS_SCHEMA_VERSION}_"
+        try:
+            cache_dirs = list(self.standard_cache_dir.values()) + list(self.adaptive_cache_dir.values())
+            removed_keys = 0
+            for cache_dir in cache_dirs:
+                if not cache_dir.exists():
+                    continue
+                for cache_file in cache_dir.glob("*.cache"):
+                    try:
+                        # Skip files that may still be written by another process.
+                        if (datetime.now().timestamp() - cache_file.stat().st_mtime) < 5:
+                            continue
+                    except OSError:
+                        continue
+                    try:
+                        with open(cache_file, "rb") as cache_handle:
+                            payload = pickle.load(cache_handle)
+                    except Exception:
+                        # Skip non-OASIS cache payloads or unreadable files.
+                        continue
+
+                    if not isinstance(payload, dict):
+                        continue
+
+                    stale_keys = [
+                        key for key in payload
+                        if isinstance(key, str) and key.startswith("v") and not key.startswith(version_prefix)
+                    ]
+                    if not stale_keys:
+                        continue
+
+                    for stale_key in stale_keys:
+                        payload.pop(stale_key, None)
+                    removed_keys += len(stale_keys)
+
+                    try:
+                        if payload:
+                            self._atomic_pickle_write(cache_file, payload)
+                        else:
+                            cache_file.unlink()
+                    except OSError as exc:
+                        logger.warning(f"Failed to update stale cache entry {cache_file}: {exc}")
+            if removed_keys:
+                logger.info(f"Removed {removed_keys} stale cache keys from previous schema versions")
+        except Exception as exc:
+            logger.warning(f"Error during stale cache cleanup: {exc}")
     
     def get_cache_path(self, file_path: str, mode: AnalysisMode, 
                      analysis_type: AnalysisType) -> Path:
@@ -154,10 +226,8 @@ class CacheManager:
                 return
             
             try:
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(cache_path, 'wb') as f:
-                    pickle.dump(cache_dict[file_path], f)
-                    logger.debug(f"Saved {mode.value} {analysis_type.value} chunk cache for {file_path}: {len(cache_dict[file_path])} entries")
+                self._atomic_pickle_write(cache_path, cache_dict[file_path])
+                logger.debug(f"Saved {mode.value} {analysis_type.value} chunk cache for {file_path}: {len(cache_dict[file_path])} entries")
             except Exception as e:
                 logger.exception(f"Error saving {mode.value} {analysis_type.value} chunk cache: {str(e)}")
     
@@ -278,13 +348,13 @@ class CacheManager:
         # For adaptive analysis (empty chunk)
         if not chunk:
             if file_path:
-                return f"{sanitize_name(file_path)}_{sanitize_name(vuln_name)}"
-            return sanitize_name(vuln_name)
+                return f"v{ANALYSIS_SCHEMA_VERSION}_{sanitize_name(file_path)}_{sanitize_name(vuln_name)}"
+            return f"v{ANALYSIS_SCHEMA_VERSION}_{sanitize_name(vuln_name)}"
             
         # For standard analysis
         chunk_hash = hashlib.md5(chunk.encode()).hexdigest()
         prompt_hash = hashlib.md5(prompt.encode()).hexdigest()
-        return f"{chunk_hash}_{prompt_hash}_{sanitize_name(vuln_name)}"
+        return f"v{ANALYSIS_SCHEMA_VERSION}_{chunk_hash}_{prompt_hash}_{sanitize_name(vuln_name)}"
     
     def clear_scan_cache(self, analysis_type: AnalysisType = None) -> None:
         """

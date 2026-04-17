@@ -131,6 +131,7 @@ const DashboardApp = {
         return new Promise((resolve, reject) => {
             // Define modules to load in order
             const modules = [
+                'bootstrap.js',
                 'utils.js',
                 'filters.js',
                 'views.js',
@@ -155,6 +156,9 @@ const DashboardApp = {
             // Load scripts sequentially
             const loadNextScript = (index) => {
                 if (index >= modules.length) {
+                    if (typeof DashboardApp.initFormatHelpers === 'function') {
+                        DashboardApp.initFormatHelpers();
+                    }
                     resolve();
                     return;
                 }
@@ -179,21 +183,27 @@ const DashboardApp = {
         // Load templates first
         this.initTemplates()
             .then(() => {
+                // Restore persisted vulnerability filters before first API calls.
+                if (typeof this.loadVulnerabilityFiltersFromStorage === 'function') {
+                    this.loadVulnerabilityFiltersFromStorage();
+                }
+
                 // Initialize the dashboard only after templates are loaded
                 this.fetchReports();
-                this.fetchStats();
+                // Keep vulnerability options complete on page reload.
+                this.fetchStats(false, { includeVulnerability: false });
                 this.initializeFilters();
-                
+
                 // Initialize modal events if available
                 if (this.initializeModalEvents) {
                     this.initializeModalEvents();
                 }
-                
+
                 // Setup mobile navigation
                 if (this.setupMobileNavigation) {
                     this.setupMobileNavigation();
                 }
-                
+
                 // Setup event listeners
                 this.setupEventListeners();
             })
@@ -219,6 +229,9 @@ const DashboardApp = {
                     vulnerabilities: [],
                     dateRange: null
                 };
+                if (typeof self.clearVulnerabilityFilterStorage === 'function') {
+                    self.clearVulnerabilityFilterStorage();
+                }
                 
                 // Reset checkboxes
                 document.querySelectorAll('.filter-checkbox').forEach(checkbox => {
