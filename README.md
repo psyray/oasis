@@ -194,7 +194,7 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:lates -t 0.7
 
 ### Input/Output Options
 - `--input` `-i`: Path to file, directory, or .txt file containing newline-separated paths to analyze
-- `--output-format` `-of`: Output format [pdf, html, md] (default: all)
+- `--output-format` `-of`: Comma-separated formats or `all` for json, sarif, pdf, html, md (default: all)
 - `--extensions` `-x`: Custom file extensions to analyze (e.g., "py,js,java")
 
 ### Analysis Configuration
@@ -362,7 +362,7 @@ For the best results with OASIS:
 
 ## 📁 Output Structure
 
-Vulnerability runs are stored under a timestamped directory. For each model, per-format folders include a **canonical JSON** report (`json/*.json`) used by the web dashboard for statistics and previews. HTML and PDF are rendered from that JSON via Jinja2; Markdown is an additional human-readable export.
+Vulnerability runs are stored under a timestamped directory. For each model, per-format folders include a **canonical JSON** report (`json/*.json`) used by the web dashboard for statistics and previews. **SARIF 2.1.0** (`sarif/*.sarif`) is generated from the same document for toolchains (DefectDojo, SonarQube, IDE SARIF viewers). HTML and PDF are rendered from that JSON via Jinja2; Markdown is an additional human-readable export.
 
 ```
 security_reports/
@@ -372,6 +372,8 @@ security_reports/
     └── [sanitized_model_name]/
         ├── json/
         │   └── vulnerability_type.json
+        ├── sarif/
+        │   └── vulnerability_type.sarif
         ├── md/
         │   └── vulnerability_type.md
         ├── html/

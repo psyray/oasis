@@ -129,6 +129,9 @@ const DashboardApp = {
             // Load scripts sequentially
             const loadNextScript = (index) => {
                 if (index >= modules.length) {
+                    if (typeof DashboardApp.initFormatHelpers === 'function') {
+                        DashboardApp.initFormatHelpers();
+                    }
                     resolve();
                     return;
                 }

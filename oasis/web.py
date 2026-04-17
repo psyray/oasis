@@ -10,11 +10,47 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 from functools import wraps
 
 
-from .config import VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS
+from .config import REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS
+from .export.filenames import artifact_filename, report_dir_glob_for_format
 from .report import Report
 from .tools import parse_iso_date, parse_report_date
 
 logger = logging.getLogger(__name__)
+
+
+def _dashboard_format_display_order() -> list[str]:
+    """Ordered formats for dashboard chips, date-picker open preference, and /api/dates.
+
+    Matching between DASHBOARD_FORMAT_DISPLAY_ORDER and OUTPUT_FORMATS is
+    case-insensitive, but the returned list preserves the original casing
+    from OUTPUT_FORMATS.
+    """
+    preferred = REPORT.get("DASHBOARD_FORMAT_DISPLAY_ORDER") or []
+    allowed = list(REPORT.get("OUTPUT_FORMATS") or [])
+
+    normalized_to_original: dict[str, str] = {}
+    for fmt in allowed:
+        key = fmt.lower()
+        if key not in normalized_to_original:
+            normalized_to_original[key] = fmt
+
+    seen_normalized: set[str] = set()
+    out: list[str] = []
+
+    for fmt in preferred:
+        key = fmt.lower()
+        original = normalized_to_original.get(key)
+        if original is not None and key not in seen_normalized:
+            out.append(original)
+            seen_normalized.add(key)
+
+    for fmt in allowed:
+        key = fmt.lower()
+        if key not in seen_normalized:
+            out.append(fmt)
+            seen_normalized.add(key)
+
+    return out
 
 class WebServer:
     def __init__(self, report, debug=False, web_expose='local', web_password=None, web_port=5000):
@@ -138,10 +174,14 @@ class WebServer:
         def dashboard():
             """Main dashboard page"""
             
-            return render_template('dashboard.html', 
-                                   model_emojis=MODEL_EMOJIS,
-                                   vuln_emojis=VULN_EMOJIS,
-                                   debug=self.debug)
+            return render_template(
+                'dashboard.html',
+                model_emojis=MODEL_EMOJIS,
+                vuln_emojis=VULN_EMOJIS,
+                debug=self.debug,
+                report_output_formats=REPORT.get('OUTPUT_FORMATS', []),
+                dashboard_format_display_order=_dashboard_format_display_order(),
+            )
             
         @app.route('/api/reports')
         @login_required
@@ -320,6 +360,7 @@ class WebServer:
                     '.html': 'text/html',
                     '.pdf': 'application/pdf',
                     '.json': 'application/json',
+                    '.sarif': 'application/sarif+json',
                 }
                 content_type = content_types.get(abs_path.suffix, 'application/octet-stream')
                 
@@ -362,12 +403,17 @@ class WebServer:
                     date_info = {'date': report['date']}
                     
                     af = report.get('alternative_formats', {})
-                    if af.get('json'):
-                        date_info['path'] = af['json']
-                        date_info['format'] = 'json'
-                    elif af.get('md'):
-                        date_info['path'] = af['md']
-                        date_info['format'] = 'md'
+                    open_path = None
+                    open_fmt = None
+                    # Prefer human-readable formats first (same order as dashboard)
+                    for fmt in _dashboard_format_display_order():
+                        if af.get(fmt):
+                            open_path = af[fmt]
+                            open_fmt = fmt
+                            break
+                    if open_path:
+                        date_info['path'] = open_path
+                        date_info['format'] = open_fmt
                     elif report.get('path'):
                         date_info['path'] = report['path']
                         date_info['format'] = report.get('format', 'md')
@@ -439,10 +485,10 @@ class WebServer:
             fmt = fmt_dir.name
 
             # Check if it's a valid format
-            if fmt not in ['json', 'md', 'html', 'pdf']:
+            if fmt not in REPORT["OUTPUT_FORMATS"]:
                 continue
 
-            globber = fmt_dir.glob('*.json') if fmt == 'json' else fmt_dir.glob('*.*')
+            globber = fmt_dir.glob(report_dir_glob_for_format(fmt))
             model_reports.extend(
                 self._process_report_file(
                     report_file,
@@ -506,27 +552,27 @@ class WebServer:
         if report["format"] == "json":
             stats["total_reports"] += 1
 
-            model = report["model"]
-            if model not in stats["models"]:
-                stats["models"][model] = 0
-            stats["models"][model] += 1
-
-            vuln_type = report["vulnerability_type"]
-            if vuln_type not in stats["vulnerabilities"]:
-                stats["vulnerabilities"][vuln_type] = 0
-            stats["vulnerabilities"][vuln_type] += 1
-
+            self._increment_stat_count(
+                report, "model", stats, "models"
+            )
+            self._increment_stat_count(
+                report, "vulnerability_type", stats, "vulnerabilities"
+            )
             if report["date"]:
                 date_only = report["date"].split()[0]
                 if date_only not in stats["dates"]:
                     stats["dates"][date_only] = 0
                 stats["dates"][date_only] += 1
 
-        # count all available formats
-        fmt = report["format"]
-        if fmt not in stats["formats"]:
-            stats["formats"][fmt] = 0
-        stats["formats"][fmt] += 1
+        self._increment_stat_count(
+            report, "format", stats, "formats"
+        )
+
+    def _increment_stat_count(self, report, arg1, stats, arg3):
+        model = report[arg1]
+        if model not in stats[arg3]:
+            stats[arg3][model] = 0
+        stats[arg3][model] += 1
 
     def _desanitize_name(self, sanitized_name):
         """Convert sanitized name back to display name"""
@@ -552,10 +598,10 @@ class WebServer:
         """Find all available formats for a specific report"""
         formats = {}
         
-        for fmt in ['json', 'md', 'html', 'pdf']:
+        for fmt in REPORT['OUTPUT_FORMATS']:
             fmt_dir = model_dir / fmt
             if fmt_dir.exists() and fmt_dir.is_dir():
-                file_path = fmt_dir / f"{report_stem}.{fmt}"
+                file_path = fmt_dir / artifact_filename(report_stem, fmt)
                 if file_path.exists():
                     # Include timestamp directory in the path
                     if timestamp_dir:

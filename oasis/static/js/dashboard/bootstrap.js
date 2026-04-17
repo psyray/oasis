@@ -1,4 +1,13 @@
 // Bootstrap helpers shared across dashboard modules.
+// Download-format iconography lives here (view/theme layer), not in utils.js.
+DashboardApp.FORMAT_DOWNLOAD_LABELS = {
+    json: '📋',
+    sarif: '🔶',
+    md: '📝',
+    html: '📃',
+    pdf: '📄'
+};
+
 DashboardApp._escapeHtml = function(text) {
     if (text === null || text === undefined) {
         return '';

@@ -1,30 +1,25 @@
 ---
-description: Local OASIS CLI install and refresh via pipx editable mode
+description: Local OASIS install and tests via pipx editable workflow
 alwaysApply: true
 ---
 
 # OASIS development install (pipx)
 
-- Install or refresh the `oasis` CLI from the repository root using **pipx** with an editable install:
+- Install or refresh the `oasis` CLI using **pipx** with an editable install:
 
 ```bash
 pipx uninstall oasis && pipx install -e .
 ```
 
+- If `pipx uninstall oasis` is interpreted as a local path (because an `oasis/` directory exists), run the command from outside the repository root.
 - Use this flow after dependency or entrypoint changes so the isolated venv matches the working tree.
 - Do not assume a global `pip install`; the project standard for local tooling is **pipx**.
----
-description: Local OASIS CLI install via pipx (editable dev workflow)
-alwaysApply: true
----
 
-# OASIS development install (pipx)
+# OASIS test execution (pipx)
 
-- Install or refresh the `oasis` CLI from the repository root using **pipx** with an editable install:
+- Run Python tests through the pipx environment, not the system Python.
+- Recommended command pattern:
 
 ```bash
-pipx uninstall oasis && pipx install -e .
+PYTHONPATH="$(pwd)" pipx run --spec . python -m unittest tests.<module_or_class>
 ```
-
-- Use this flow after dependency or entrypoint changes so the isolated venv matches the working tree.
-- Do not assume a global `pip install`; the project standard for local tooling is **pipx**.

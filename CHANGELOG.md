@@ -1,3 +1,24 @@
+## 🚀 [0.5.0] - 2026-04-17
+
+### ✨ Added
+- 🤔 Added Ollama thinking toggles for scan vs deep models (`--model-thinking` / `-mt`, `--small-model-thinking` / `-smt`)
+- 📋 Added structured vulnerability analysis (Pydantic) with JSON normalization and repair for flaky model output
+- 📄 Added canonical JSON reports (`report.json`) via `--output-format` (with `all` and comma-separated lists)
+- 🛡️ Added SARIF 2.1.0 export (`sarif/*.sarif`) and dashboard downloads for SARIF
+- 🧭 Added `.cursor/` rules and agent skills for implementation, releases, and git conventions
+
+### 🐛 Fixed
+- 🔧 Fixed missing `analyze_type` in the embedding analyzer
+- 📝 Fixed vulnerability cards: title/summary shown before the code snippet
+- 🔗 Fixed broken download links in the report modal
+- 🖥️ Fixed small dashboard issues (types display, parallel refresh, debug logging)
+
+### ⚡ Changed
+- 💾 Changed cache layout: per-project folders under `.oasis_cache`, schema-aware cleanup for structured outputs
+- 🗂️ Changed export writes into `oasis.export` to slim down `report.py`
+- 📚 Changed README: `--input` docs, structured-output notes, report folder layout
+- 🎨 Changed logo asset
+
 ## 🚀 [0.4.0] - 2025-03-21
 
 ### ✨ Added

@@ -8,12 +8,15 @@ import markdown
 from markdown.extensions import Extension
 from markdown.preprocessors import Preprocessor
 from jinja2 import Environment, FileSystemLoader
-from weasyprint import HTML
 
 # Import from configuration
 from .config import REPORT
 
 # Import from other modules
+from .export import artifact_filename
+from .export.vulnerability import write_vulnerability_artifacts
+from .export.markdown_outputs import write_rendered_markdown_formats
+from .export.writers import write_markdown_lines
 from .schemas.analysis import (
     ChunkDeepAnalysis,
     FileReportEntry,
@@ -21,6 +24,10 @@ from .schemas.analysis import (
     build_dashboard_stats,
 )
 from .tools import extract_clean_path, logger, sanitize_name, generate_timestamp
+
+# Package metadata (process constant; avoid lazy imports in hot paths)
+from . import __version__ as oasis_version
+
 
 class Report:
     """
@@ -237,34 +244,28 @@ class Report:
         logger.debug("--------------------------------")
         logger.debug(f"Generating Vulnerability report for {', '.join(self.output_format)}, please wait...")
 
-        if "json" in output_files:
-            self.ensure_directory(output_files["json"].parent)
-            output_files["json"].write_text(doc.model_dump_json(indent=2), encoding="utf-8")
-
         inner_html = self._render_vulnerability_inner_html(doc)
         rendered_html = self.render_template(inner_html)
-
-        if "html" in output_files:
-            self.ensure_directory(output_files["html"].parent)
-            with open(output_files["html"], "w", encoding="utf-8") as f:
-                f.write(rendered_html)
-
-        if "pdf" in output_files:
-            self.ensure_directory(output_files["pdf"].parent)
-            try:
-                HTML(string=rendered_html, media_type="print").write_pdf(output_files["pdf"])
-            except Exception as e:
-                logger.exception(f"PDF conversion failed for {safe_name}: {e.__class__.__name__}: {e}")
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"HTML (first 500 chars): {rendered_html[:500]}")
-
+        md_body = ""
         if "md" in output_files:
-            self.ensure_directory(output_files["md"].parent)
             md_body = self._render_vulnerability_markdown_export(doc)
-            with open(output_files["md"], "w", encoding="utf-8") as f:
-                f.write(md_body)
 
-        return output_files
+        written = write_vulnerability_artifacts(
+            output_files,
+            doc,
+            rendered_html=rendered_html,
+            md_body=md_body,
+            logger=logger,
+            safe_name_for_logs=safe_name,
+            tool_version=oasis_version,
+        )
+        if missing := [k for k, p in written.items() if p is None]:
+            logger.warning(
+                "Some vulnerability report artifacts failed for %s (formats: %s)",
+                safe_name,
+                ", ".join(missing),
+            )
+        return {k: p for k, p in written.items() if p is not None}
     
     def _generate_and_save_report(self, output_files, report_content, report_type: str = None):
         """
@@ -279,10 +280,10 @@ class Report:
         logger.debug(f"Generating {report_type} report for {', '.join(self.output_format)}, please wait...")
 
         # Write markdown
-        self.write_markdown(output_files['md'], report_content)
-        
+        write_markdown_lines(output_files["md"], report_content, logger)
+
         # Convert to PDF and HTML
-        self.convert_to_all_formats(output_files['md'])
+        self.convert_to_all_formats(output_files["md"])
 
     def report_generated(self, report_type: str = None, report_structure: bool = False):
         """
@@ -494,27 +495,6 @@ class Report:
         
         return output_files
     
-    def write_markdown(self, file_path: Path, content: List[str]) -> None:
-        """
-        Write content to markdown file
-        
-        Args:
-            file_path: Path to output file
-            content: List of content lines
-        """
-        try:
-            # Ensure parent directory exists
-            self.ensure_directory(file_path.parent)
-            
-            # Write content to file
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(content))
-                
-        except Exception as e:
-            logger.exception(f"Error writing markdown file: {str(e)}")
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug("Full error:", exc_info=True)
-    
     def convert_to_all_formats(self, markdown_file: Path) -> Dict[str, Path]:
         """
         Convert markdown file to PDF and HTML
@@ -529,36 +509,23 @@ class Report:
         output_files = self.filter_output_files(markdown_file.stem)
 
         try:
-            # Read and convert markdown to HTML
             html_content = self.read_and_convert_markdown(markdown_file)
-
-            # Render HTML using the template
             rendered_html = self.render_template(html_content)
-
-            # Write HTML file
-            with open(output_files['html'], 'w', encoding='utf-8') as f:
-                f.write(rendered_html)
-
-            # Convert to PDF
-            try:
-                HTML(string=rendered_html, media_type='print').write_pdf(output_files['pdf'])
-            except Exception as e:
-                logger.exception(f"PDF conversion failed for {markdown_file.name}: {e.__class__.__name__}: {str(e)}")
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"HTML content causing PDF conversion failure (first 500 chars): {rendered_html[:500]}")
-                output_files['pdf'] = None
-            
-            return output_files
-            
+            return write_rendered_markdown_formats(
+                output_files,
+                rendered_html,
+                logger=logger,
+                context_label=markdown_file.name,
+            )
         except Exception as e:
             logger.exception(f"Error converting {markdown_file.name} to other formats: {e.__class__.__name__}: {str(e)}")
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("Full error:", exc_info=True)
 
             return {
-                'md': markdown_file,
-                'pdf': None,
-                'html': None
+                "md": markdown_file,
+                "pdf": None,
+                "html": None,
             }
 
     def read_and_convert_markdown(self, markdown_file: Path) -> str:
@@ -572,8 +539,7 @@ class Report:
             HTML content
         """
         # Read markdown content
-        with open(markdown_file, 'r', encoding='utf-8') as f:
-            markdown_content = f.read()
+        markdown_content = markdown_file.read_text(encoding="utf-8")
 
         # Parse HTML with Beautiful Soup and fix any issues
         soup = BeautifulSoup(markdown.markdown(markdown_content, extensions=['tables', 'fenced_code', 'codehilite']), 'html.parser')
@@ -601,8 +567,7 @@ class Report:
             logo_path = images_dir / 'oasis-logo.jpg'
             
             # Encode the logo in base64
-            with open(logo_path, "rb") as image_file:
-                encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+            encoded_string = base64.b64encode(logo_path.read_bytes()).decode("utf-8")
             
             # Create a data URL for the image
             logo_data_url = f"data:image/jpeg;base64,{encoded_string}"
@@ -707,8 +672,9 @@ class Report:
         """
         model_name = sanitize_name(self.current_model)
         return {
-            fmt: self.report_dirs[model_name][fmt] / f"{safe_name}.{fmt}"
-            for fmt in self.output_format if fmt in self.report_dirs[model_name]
+            fmt: self.report_dirs[model_name][fmt] / artifact_filename(safe_name, fmt)
+            for fmt in self.output_format
+            if fmt in self.report_dirs[model_name]
         }
 
     def get_output_directory(self, input_path: str | Path, base_reports_dir: Path) -> Path:

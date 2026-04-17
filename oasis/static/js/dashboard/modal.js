@@ -116,6 +116,10 @@ DashboardApp.getAvailableFormatsForPath = function(path, currentFormat) {
         available.add(String(report.format).toLowerCase());
     }
 
+    const fh = DashboardApp.formatHelpers;
+    if (fh && fh.sortFormatsForDisplay) {
+        return fh.sortFormatsForDisplay(Array.from(available));
+    }
     return Array.from(available);
 };
 
@@ -362,35 +366,53 @@ DashboardApp.openReport = function(path, format) {
     
     // Download options - restaurer le code pour les options de téléchargement
     if (downloadOptions) {
-        const basePath = path.substring(0, path.lastIndexOf('.'));
-        // Extract the base path without the current format
-        const formatPattern = /\/(md|html|pdf|json)\//;
-        const match = path.match(formatPattern);
+        const fh = DashboardApp.formatHelpers;
         let currentFormat = 'md';
-        
-        if (match) {
-            currentFormat = match[1];
+        const folderIdx = fh && fh.reportPathFormatFolderIndex
+            ? fh.reportPathFormatFolderIndex(path)
+            : -1;
+        const segs = path.split('/');
+        if (folderIdx >= 0 && segs[folderIdx]) {
+            currentFormat = String(segs[folderIdx]).toLowerCase();
+        } else if (fh && fh.formatPatternRegexForReportPaths) {
+            const m = path.match(fh.formatPatternRegexForReportPaths());
+            if (m) {
+                currentFormat = m[1].toLowerCase();
+            }
+        } else {
+            const legacy = path.match(/\/(md|html|pdf|json|sarif)\//);
+            if (legacy) {
+                currentFormat = legacy[1].toLowerCase();
+            }
         }
-        
+
         const availableFormats = DashboardApp.getAvailableFormatsForPath(path, currentFormat);
-        const formatLabels = {
-            json: '📋',
-            md: '📝',
-            html: '🌐',
-            pdf: '📄'
-        };
+        const labels = DashboardApp.FORMAT_DOWNLOAD_LABELS || {};
 
         let downloadHtml = '';
         availableFormats.forEach(ext => {
-            const icon = formatLabels[ext];
-            if (!icon) {
-                return;
+            const extLower = String(ext).toLowerCase();
+            const btnLabel = fh && fh.formatDownloadButtonLabel
+                ? fh.formatDownloadButtonLabel(ext)
+                : (String(ext).toUpperCase());
+            const titleUnknown = labels[extLower]
+                ? ''
+                : ` title="${DashboardApp._escapeHtml('Format: ' + ext)}"`;
+            let formattedPath = path;
+            if (fh && fh.reportPathForAlternateFormat) {
+                formattedPath = fh.reportPathForAlternateFormat(path, extLower);
             }
-            const formattedPath = basePath.replace(`/${currentFormat}/`, `/${ext}/`) + `.${ext}`;
-            downloadHtml += `<button class="btn btn-format" onclick="downloadReportFile('${jsq(formattedPath)}', '${jsq(ext)}')">
-                           ${icon} ${ext.toUpperCase()}</button>`;
+            if (formattedPath === path) {
+                const basePath = path.substring(0, path.lastIndexOf('.'));
+                const suffix = fh && fh.downloadArtifactSuffix
+                    ? fh.downloadArtifactSuffix(extLower)
+                    : ('.' + extLower);
+                formattedPath = basePath.replace(`/${currentFormat}/`, `/${extLower}/`) + suffix;
+            }
+            downloadHtml += `<button class="btn btn-format"${titleUnknown} onclick="downloadReportFile('${jsq(formattedPath)}', '${jsq(extLower)}')">
+                           ${btnLabel}</button>`;
         });
-        
+
         downloadOptions.innerHTML = downloadHtml;
     }
 };

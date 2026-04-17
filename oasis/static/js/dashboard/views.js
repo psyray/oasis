@@ -306,23 +306,12 @@ DashboardApp.renderListViewWithTemplate = function() {
         const mediumRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.medium_risk || 0), 0);
         const lowRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.low_risk || 0), 0);
         
-        // Determine format paths for buttons
-        let jsonPath = '';
-        let mdPath = '';
-        let htmlPath = '';
-        let pdfPath = '';
-        
-        // Get the latest report for each format
+        // Resolve download paths across all report rows (same stem may appear as json, md, sarif, …)
         reportsForVuln.sort((a, b) => new Date(b.date) - new Date(a.date));
-        const latestReport = reportsForVuln[0];
-        
-        if (latestReport) {
-            const af = latestReport.alternative_formats || {};
-            jsonPath = latestReport.format === 'json' ? latestReport.path : (af.json || '');
-            mdPath = latestReport.format === 'md' ? latestReport.path : (af.md || '');
-            htmlPath = latestReport.format === 'html' ? latestReport.path : (af.html || '');
-            pdfPath = latestReport.format === 'pdf' ? latestReport.path : (af.pdf || '');
-        }
+        const fh = DashboardApp.formatHelpers;
+        const formatPaths = fh && fh.collectFormatPathsFromReports
+            ? fh.collectFormatPathsFromReports(reportsForVuln)
+            : {};
                 
         // Generate models HTML
         let modelsHTML = '';
@@ -358,20 +347,23 @@ DashboardApp.renderListViewWithTemplate = function() {
             }
         });
             
-        // Generate format buttons HTML
+        // Generate format buttons HTML (order from REPORT_DOWNLOAD_FORMATS: human-readable first)
         let formatButtons = '';
-        if (pdfPath) {
-          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${jsq(pdfPath)}', 'pdf')">📄 PDF</button>`;
-        }
-        if (jsonPath) {
-          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${jsq(jsonPath)}', 'json')">📋 JSON</button>`;
-        }
-        if (mdPath) {
-          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${jsq(mdPath)}', 'md')">📝 MD</button>`;
-        }
-        if (htmlPath) {
-          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${jsq(htmlPath)}', 'html')">🌐 HTML</button>`;
-        }
+        const fmts = (fh && fh.REPORT_DOWNLOAD_FORMATS) || [];
+        fmts.forEach(fmt => {
+            const p = formatPaths[fmt];
+            if (!p) {
+                return;
+            }
+            const btnLabel = fh && fh.formatDownloadButtonLabel
+                ? fh.formatDownloadButtonLabel(fmt)
+                : String(fmt).toUpperCase();
+            const fmtLower = String(fmt).toLowerCase();
+            const titleUnknown = (DashboardApp.FORMAT_DOWNLOAD_LABELS || {})[fmtLower]
+                ? ''
+                : ` title="${h('Format: ' + fmt)}"`;
+            formatButtons += `<button class="btn btn-format"${titleUnknown} onclick="downloadReportFile('${jsq(p)}', '${jsq(fmt)}')">${btnLabel}</button>`;
+        });
             
         // Use the template and replace placeholders
         let cardHTML = DashboardApp.cardTemplate
