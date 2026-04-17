@@ -1,6 +1,7 @@
 ## 🚀 [0.5.0] - 2026-04-17
 
 ### ✨ Added
+- 📍 Added source line metadata: chunk `start_line` / `end_line`, optional per-finding `snippet_start_line` / `snippet_end_line` when the vulnerable snippet is found in the chunk text, SARIF `region` (snippet span preferred over chunk span), and report hints (analysis schema version **3**)
 - 🤔 Added Ollama thinking toggles for scan vs deep models (`--model-thinking` / `-mt`, `--small-model-thinking` / `-smt`)
 - 📋 Added structured vulnerability analysis (Pydantic) with JSON normalization and repair for flaky model output
 - 📄 Added canonical JSON reports (`report.json`) via `--output-format` (with `all` and comma-separated lists)

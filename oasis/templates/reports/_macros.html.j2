@@ -39,6 +39,12 @@
 </table>
 {%- endmacro %}
 
+{% macro render_chunk_source_lines(chunk) -%}
+{% if chunk.start_line is not none and chunk.end_line is not none %}
+<p class="chunk-source-lines"><strong>Source lines:</strong> {{ chunk.start_line }}&ndash;{{ chunk.end_line }}</p>
+{% endif %}
+{%- endmacro %}
+
 {% macro render_chunk_notes(chunk, file_index, chunk_index) -%}
 <h4>Chunk {{ file_index }}.{{ chunk_index }} notes</h4>
 <pre>{{ chunk.notes }}</pre>

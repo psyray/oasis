@@ -200,6 +200,22 @@ class TestReportSchema(unittest.TestCase):
         self.assertIn("**Example payloads**:", markdown)
         self.assertIn('<div class="page-break"></div>', markdown)
 
+    def test_chunk_analysis_to_markdown_includes_source_line_hint(self):
+        chunk = ChunkDeepAnalysis(
+            findings=[
+                VulnerabilityFinding(
+                    title="Issue",
+                    vulnerable_code="x",
+                    explanation="y",
+                    severity="Medium",
+                )
+            ],
+            start_line=2,
+            end_line=9,
+        )
+        markdown = chunk_analysis_to_markdown(chunk, 0)
+        self.assertIn("source lines 2-9", markdown)
+
     def test_chunk_analysis_to_markdown_no_findings_uses_notes(self):
         chunk = ChunkDeepAnalysis(
             findings=[],

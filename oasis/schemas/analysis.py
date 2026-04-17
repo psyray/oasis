@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 # Bump when changing chunk or report shapes (cache invalidation).
-ANALYSIS_SCHEMA_VERSION = 1
+ANALYSIS_SCHEMA_VERSION = 3
 
 
 class ScanVerdict(BaseModel):
@@ -50,12 +50,28 @@ class VulnerabilityFinding(BaseModel):
     exploitation_conditions: str = Field(default="", description="Dependencies for exploitation")
     remediation: str = Field(default="", description="Remediation guidance")
     secure_code_example: str = Field(default="", description="Secure code example if any")
+    snippet_start_line: Optional[int] = Field(
+        default=None,
+        description="1-based first line of vulnerable_code in the file when resolved in the chunk (tooling)",
+    )
+    snippet_end_line: Optional[int] = Field(
+        default=None,
+        description="1-based last line of vulnerable_code in the file when resolved in the chunk (tooling)",
+    )
 
 
 class ChunkDeepAnalysis(BaseModel):
     """Structured deep analysis for one code chunk."""
 
     findings: List[VulnerabilityFinding] = Field(default_factory=list)
+    start_line: Optional[int] = Field(
+        default=None,
+        description="1-based first line of this chunk in the source file (tooling; not from LLM)",
+    )
+    end_line: Optional[int] = Field(
+        default=None,
+        description="1-based last line of this chunk in the source file (tooling; not from LLM)",
+    )
     notes: Optional[str] = Field(default=None, description="Optional analyst notes")
     validation_error: bool = Field(default=False, description="True when structured validation failed")
     potential_vulnerabilities: bool = Field(
@@ -134,9 +150,12 @@ def build_dashboard_stats(files: List[FileReportEntry]) -> DashboardStats:
 def chunk_analysis_to_markdown(chunk: ChunkDeepAnalysis, chunk_index: int) -> str:
     """Render chunk structured analysis as markdown for adaptive combined reports."""
     parts: List[str] = []
+    line_hint = ""
+    if chunk.start_line is not None and chunk.end_line is not None:
+        line_hint = f" _(source lines {chunk.start_line}-{chunk.end_line})_"
     if not chunk.findings:
         parts.append(
-            f"#### Chunk {chunk_index + 1}\n\nNo vulnerabilities identified in structured output.\n"
+            f"#### Chunk {chunk_index + 1}{line_hint}\n\nNo vulnerabilities identified in structured output.\n"
         )
         if chunk.notes:
             parts.append(f"\n**Notes**: {chunk.notes}\n")
@@ -144,7 +163,7 @@ def chunk_analysis_to_markdown(chunk: ChunkDeepAnalysis, chunk_index: int) -> st
     for i, finding in enumerate(chunk.findings):
         parts.extend(
             (
-                f"#### Finding {i + 1} (chunk {chunk_index + 1}): {finding.title}\n",
+                f"#### Finding {i + 1} (chunk {chunk_index + 1}){line_hint}: {finding.title}\n",
                 f"- **Severity**: {finding.severity}\n",
             )
         )

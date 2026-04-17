@@ -15,7 +15,8 @@ from .config import CHUNK_ANALYZE_TIMEOUT, MODEL_EMOJIS, VULNERABILITY_PROMPT_EX
 
 # Import from other modules
 from .ollama_manager import OllamaManager
-from .tools import chunk_content, logger, calculate_similarity, sanitize_name
+from .snippet_lines import absolute_snippet_lines_in_file
+from .tools import chunk_content_with_spans, logger, calculate_similarity, sanitize_name
 from .report import Report
 from .embedding import EmbeddingManager, build_vulnerability_embedding_prompt
 from .cache import CacheManager
@@ -25,6 +26,7 @@ from .schemas.analysis import (
     ChunkDeepAnalysis,
     MediumRiskAnalysis,
     ScanVerdict,
+    VulnerabilityFinding,
     chunk_analysis_to_markdown,
 )
 from .structured_output.deep import (
@@ -41,6 +43,33 @@ from .structured_output.json_repair import (
 )
 
 STRUCTURED_OUTPUT_RAW_PREVIEW_MAX_LEN = 500
+
+
+def _enrich_findings_with_snippet_file_lines(
+    chunk_model: ChunkDeepAnalysis,
+    chunk_text: str,
+    file_chunk_start: Optional[int],
+) -> ChunkDeepAnalysis:
+    """Attach snippet_start_line/snippet_end_line when vulnerable_code matches the chunk."""
+    if not isinstance(file_chunk_start, int) or file_chunk_start < 1:
+        return chunk_model
+    new_findings: List[VulnerabilityFinding] = []
+    changed = False
+    for finding in chunk_model.findings:
+        span = absolute_snippet_lines_in_file(
+            chunk_text, file_chunk_start, finding.vulnerable_code
+        )
+        if span is None:
+            new_findings.append(finding)
+        else:
+            a, b = span
+            new_findings.append(
+                finding.model_copy(update={"snippet_start_line": a, "snippet_end_line": b})
+            )
+            changed = True
+    if not changed:
+        return chunk_model
+    return chunk_model.model_copy(update={"findings": new_findings})
 
 # Define analysis modes and types
 # Handler receives either ValidationError (schema mismatch) or runtime/transport exceptions.
@@ -457,8 +486,19 @@ class SecurityAnalyzer:
         logger.error(f"Invalid vulnerability type: {vulnerability}")
         return "", "", [], "", ""
 
-    def _build_analysis_prompt(self, vuln_name: str, vuln_desc: str, vuln_patterns: list,
-                               vuln_impact: str, vuln_mitigation: str, chunk_text: str, i: int, total_chunks: int) -> str:
+    def _build_analysis_prompt(
+        self,
+        vuln_name: str,
+        vuln_desc: str,
+        vuln_patterns: list,
+        vuln_impact: str,
+        vuln_mitigation: str,
+        chunk_text: str,
+        i: int,
+        total_chunks: int,
+        start_line: Optional[int] = None,
+        end_line: Optional[int] = None,
+    ) -> str:
         """
         Construct the prompt for the LLM analysis.
         
@@ -486,6 +526,13 @@ class SecurityAnalyzer:
         
         common_prompt = _get_structured_deep_instructions(vuln_name)
 
+        location_note = ""
+        if start_line is not None and end_line is not None:
+            location_note = (
+                f"\nSOURCE LOCATION: This segment corresponds to lines {start_line}-{end_line} "
+                f"(1-based, inclusive) in the file under analysis.\n"
+            )
+
         return f"""You are a cybersecurity expert specialized in {vuln_name} vulnerabilities ONLY.
 
 CRITICAL INSTRUCTION: You must ONLY analyze the code for {vuln_name} vulnerabilities.
@@ -494,7 +541,7 @@ If you find other security issues, IGNORE them completely.
 
 VULNERABILITY DETAILS:
 {vuln_info}
-
+{location_note}
 CODE SEGMENT TO ANALYZE:
 ```
 {chunk_text}
@@ -600,7 +647,14 @@ Analyze this code segment ({i + 1}/{total_chunks}) for {vuln_name} vulnerabiliti
                 )
             return f"Error during chunk analysis: {e}"
 
-    def _build_scan_prompt(self, vuln_name: str, vuln_desc: str, chunk_text: str) -> str:
+    def _build_scan_prompt(
+        self,
+        vuln_name: str,
+        vuln_desc: str,
+        chunk_text: str,
+        start_line: Optional[int] = None,
+        end_line: Optional[int] = None,
+    ) -> str:
         """
         Build a simplified prompt for initial scanning with lightweight models
         
@@ -612,9 +666,14 @@ Analyze this code segment ({i + 1}/{total_chunks}) for {vuln_name} vulnerabiliti
         Returns:
             Simplified prompt optimized for lightweight models
         """
+        location_note = ""
+        if start_line is not None and end_line is not None:
+            location_note = (
+                f"\nSOURCE LOCATION: Lines {start_line}-{end_line} (1-based, inclusive) in the file.\n"
+            )
         return f"""You are performing a preliminary security scan for {vuln_name} vulnerabilities.
 Description of vulnerability: {vuln_desc}
-
+{location_note}
 IMPORTANT INSTRUCTIONS:
 1. Analyze the code below for ONLY {vuln_name} vulnerabilities
 2. Return EXACTLY one JSON object and nothing else.
@@ -831,20 +890,27 @@ Code to analyze:
         """
         vuln_name, vuln_desc, _, _, _ = vuln_details
         
-        # Get the file content and chunk it
-        code = self.code_base[file_path]['content']
-        code_chunks = chunk_content(code, MAX_CHUNK_SIZE)
-        
+        # Get the file content and chunk it (with 1-based line spans per chunk)
+        code = self.code_base[file_path]["content"]
+        spanned = chunk_content_with_spans(code, MAX_CHUNK_SIZE)
+        code_chunks = [t[0] for t in spanned]
+
         # Initialize suspicious chunks for this file
         suspicious_chunks = []
-        
+
         # Scan each chunk with the lightweight model
-        with tqdm(total=len(code_chunks), 
-                desc=f"Chunks in {Path(file_path).name}", 
-                position=3, leave=False, disable=silent) as chunk_pbar:
-            for i, chunk in enumerate(code_chunks):
+        with tqdm(
+            total=len(code_chunks),
+            desc=f"Chunks in {Path(file_path).name}",
+            position=3,
+            leave=False,
+            disable=silent,
+        ) as chunk_pbar:
+            for i, (chunk, start_line, end_line) in enumerate(spanned):
                 # Use a simplified prompt for the scanning phase
-                scan_prompt = self._build_scan_prompt(vuln_name, vuln_desc, chunk)
+                scan_prompt = self._build_scan_prompt(
+                    vuln_name, vuln_desc, chunk, start_line=start_line, end_line=end_line
+                )
                 scan_result = self._analyze_code_chunk(
                     scan_prompt,
                     file_path,
@@ -863,7 +929,7 @@ Code to analyze:
                     )
                     scan_verdict = "ERROR"
                 if scan_verdict == "SUSPICIOUS":
-                    suspicious_chunks.append((i, chunk))
+                    suspicious_chunks.append((i, chunk, start_line, end_line))
                 elif scan_verdict == "ERROR":
                     logger.warning(
                         f"Structured scan verdict validation failed for chunk {i + 1} in {file_path}; continuing"
@@ -880,7 +946,7 @@ Code to analyze:
                 chunk_pbar.update(1)
         
         # Store indices for potential future use
-        self.suspicious_sections[(file_path, vuln_name)] = [idx for idx, _ in suspicious_chunks]
+        self.suspicious_sections[(file_path, vuln_name)] = [idx for idx, *_ in suspicious_chunks]
         
         return suspicious_chunks
     
@@ -1004,11 +1070,19 @@ Code to analyze:
         with tqdm(total=len(suspicious_chunks), 
                  desc=f"Chunks in {Path(file_path).name}", 
                  position=3, leave=False, disable=silent) as chunk_pbar:
-            for chunk_idx, chunk in suspicious_chunks:
+            for chunk_idx, chunk, start_line, end_line in suspicious_chunks:
                 # Build a detailed prompt for deep analysis
                 prompt = self._build_analysis_prompt(
-                    vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation, 
-                    chunk, chunk_idx, len(suspicious_chunks)
+                    vuln_name,
+                    vuln_desc,
+                    vuln_patterns,
+                    vuln_impact,
+                    vuln_mitigation,
+                    chunk,
+                    chunk_idx,
+                    len(suspicious_chunks),
+                    start_line=start_line,
+                    end_line=end_line,
                 )
 
                 # Analyze with the deep model
@@ -1023,7 +1097,13 @@ Code to analyze:
                     response_model=ChunkDeepAnalysis,
                 )
                 try:
-                    analyses.append(ChunkDeepAnalysis.model_validate_json(analysis_result))
+                    validated = ChunkDeepAnalysis.model_validate_json(analysis_result)
+                    merged = validated.model_copy(
+                        update={"start_line": start_line, "end_line": end_line}
+                    )
+                    analyses.append(
+                        _enrich_findings_with_snippet_file_lines(merged, chunk, start_line)
+                    )
                 except ValidationError as exc:
                     self._log_structured_output_error(
                         phase="deep",
@@ -1036,7 +1116,12 @@ Code to analyze:
                         chunk_index=chunk_idx,
                     )
                     analyses.append(
-                        ChunkDeepAnalysis(findings=[], notes=f"Invalid chunk JSON: {analysis_result[:500]}")
+                        ChunkDeepAnalysis(
+                            findings=[],
+                            notes=f"Invalid chunk JSON: {analysis_result[:500]}",
+                            start_line=start_line,
+                            end_line=end_line,
+                        )
                     )
                 chunk_pbar.update(1)
 
@@ -1652,16 +1737,22 @@ class AdaptiveAnalysisPipeline:
         # Submit task to batch processor
         return self._batch_processor.submit_task(task)
 
-    def _static_pattern_analysis(self, code_chunks: List[str], vuln_patterns: List[str]) -> List[Tuple[int, str]]:
+    def _static_pattern_analysis(
+        self,
+        code_chunks: List[str],
+        vuln_patterns: List[str],
+        line_spans: List[Tuple[int, int]],
+    ) -> List[Tuple[int, str, int, int]]:
         """
         Perform fast pattern-based static analysis on code chunks.
         
         Args:
             code_chunks: List of code chunks
             vuln_patterns: List of vulnerability patterns to look for
+            line_spans: Parallel list of (start_line, end_line) per chunk index (1-based inclusive)
             
         Returns:
-            List of potentially suspicious chunks with their indices
+            List of potentially suspicious chunks with their indices and source line spans
         """
         suspicious_chunks = []
         
@@ -1674,7 +1765,8 @@ class AdaptiveAnalysisPipeline:
                 # TODO: Add more patterns
                 for pattern in vuln_patterns:
                     if pattern and pattern.lower() in chunk_lower:
-                        suspicious_chunks.append((i, chunk))
+                        sl, el = line_spans[i]
+                        suspicious_chunks.append((i, chunk, sl, el))
                         break
                 
                 pbar.update(1)
@@ -1682,9 +1774,15 @@ class AdaptiveAnalysisPipeline:
         logger.debug(f"Static analysis identified {len(suspicious_chunks)}/{len(code_chunks)} suspicious chunks")
         return suspicious_chunks
     
-    def _lightweight_model_scan(self, file_path: str, code_chunks: List[str], 
-                              static_suspicious_chunks: List[Tuple[int, str]], 
-                              vuln_name: str, vuln_desc: str) -> List[Tuple[int, str]]:
+    def _lightweight_model_scan(
+        self,
+        file_path: str,
+        code_chunks: List[str],
+        static_suspicious_chunks: List[Tuple[int, str, int, int]],
+        line_spans: List[Tuple[int, int]],
+        vuln_name: str,
+        vuln_desc: str,
+    ) -> List[Tuple[int, str, int, int]]:
         """
         Scan code chunks with lightweight model.
         
@@ -1699,16 +1797,19 @@ class AdaptiveAnalysisPipeline:
             Updated list of suspicious chunks
         """
         # Create a set of indices of chunks already identified as suspicious
-        suspicious_indices = {i for i, _ in static_suspicious_chunks}
-        final_suspicious_chunks = static_suspicious_chunks.copy()
+        suspicious_indices = {i for i, *_ in static_suspicious_chunks}
+        final_suspicious_chunks = list(static_suspicious_chunks)
         
         # Only scan chunks not already identified as suspicious
         remaining_chunks = [(i, chunk) for i, chunk in enumerate(code_chunks) if i not in suspicious_indices]
         
         with tqdm(total=len(remaining_chunks), desc="Lightweight model scan", leave=False) as pbar:
             for i, chunk in remaining_chunks:
+                sl, el = line_spans[i]
                 # Use simplified scan prompt
-                scan_prompt = self.analyzer._build_scan_prompt(vuln_name, vuln_desc, chunk)
+                scan_prompt = self.analyzer._build_scan_prompt(
+                    vuln_name, vuln_desc, chunk, start_line=sl, end_line=el
+                )
                 scan_result = self.analyzer._analyze_code_chunk(
                     scan_prompt,
                     file_path,
@@ -1727,7 +1828,7 @@ class AdaptiveAnalysisPipeline:
                     )
                     scan_verdict = "ERROR"
                 if scan_verdict == "SUSPICIOUS":
-                    final_suspicious_chunks.append((i, chunk))
+                    final_suspicious_chunks.append((i, chunk, sl, el))
                 elif scan_verdict == "ERROR":
                     logger.warning(
                         f"Adaptive scan verdict validation failed for chunk {i + 1} in {file_path}; continuing"
@@ -1746,7 +1847,9 @@ class AdaptiveAnalysisPipeline:
         logger.debug(f"After lightweight scan: {len(final_suspicious_chunks)}/{len(code_chunks)} suspicious chunks")
         return final_suspicious_chunks
     
-    def _identify_context_sensitive_chunks(self, suspicious_chunks: List[Tuple[int, str]], vuln_name: str) -> List[Tuple[int, str]]:
+    def _identify_context_sensitive_chunks(
+        self, suspicious_chunks: List[Tuple[int, str, int, int]], vuln_name: str
+    ) -> List[Tuple[int, str, int, int]]:
         """
         Identify chunks that require context-sensitive analysis.
         
@@ -1768,13 +1871,13 @@ class AdaptiveAnalysisPipeline:
         ]
         
         with tqdm(total=len(suspicious_chunks), desc="Identifying context-sensitive chunks", leave=False) as pbar:
-            for chunk_idx, chunk_text in suspicious_chunks:
+            for chunk_idx, chunk_text, start_line, end_line in suspicious_chunks:
                 chunk_lower = chunk_text.lower()
                 
                 # Check for context patterns
                 for pattern in context_patterns:
                     if pattern in chunk_lower:
-                        context_sensitive_chunks.append((chunk_idx, chunk_text))
+                        context_sensitive_chunks.append((chunk_idx, chunk_text, start_line, end_line))
                         break
                 
                 pbar.update(1)
@@ -1782,9 +1885,16 @@ class AdaptiveAnalysisPipeline:
         logger.debug(f"Identified {len(context_sensitive_chunks)}/{len(suspicious_chunks)} context-sensitive chunks")
         return context_sensitive_chunks
     
-    def _medium_model_analysis(self, file_path: str, context_chunks: List[Tuple[int, str]], 
-                               vuln_name: str, vuln_desc: str, vuln_patterns: List[str],
-                               vuln_impact: str, vuln_mitigation: str) -> List[Dict]:
+    def _medium_model_analysis(
+        self,
+        file_path: str,
+        context_chunks: List[Tuple[int, str, int, int]],
+        vuln_name: str,
+        vuln_desc: str,
+        vuln_patterns: List[str],
+        vuln_impact: str,
+        vuln_mitigation: str,
+    ) -> List[Dict]:
         """
         Perform medium-depth analysis on context-sensitive chunks.
         
@@ -1803,7 +1913,7 @@ class AdaptiveAnalysisPipeline:
         results = []
 
         with tqdm(total=len(context_chunks), desc="Medium-depth analysis", leave=False) as pbar:
-            for idx, (chunk_idx, chunk_text) in enumerate(context_chunks):
+            for idx, (chunk_idx, chunk_text, _sl, _el) in enumerate(context_chunks):
                 # Build a more detailed prompt than the scan prompt, but less detailed than deep analysis
                 schema_hint = json.dumps(MediumRiskAnalysis.model_json_schema(), indent=2)
                 prompt = f"""You are a security analyst specialized in {vuln_name} vulnerabilities.
@@ -1861,8 +1971,12 @@ Respond with JSON only matching this schema (no markdown fences):
 
         return results
     
-    def _identify_high_risk_chunks(self, suspicious_chunks: List[Tuple[int, str]], 
-                               medium_results: List[Dict], risk_threshold: int = 70) -> List[Tuple[int, str]]:
+    def _identify_high_risk_chunks(
+        self,
+        suspicious_chunks: List[Tuple[int, str, int, int]],
+        medium_results: List[Dict],
+        risk_threshold: int = 70,
+    ) -> List[Tuple[int, str, int, int]]:
         """
         Identify high-risk chunks that need deep analysis.
         
@@ -1883,7 +1997,8 @@ Respond with JSON only matching this schema (no markdown fences):
         
         # Select high-risk chunks based on risk threshold
         high_risk_chunks = [
-            (chunk_idx, chunk_text) for chunk_idx, chunk_text in suspicious_chunks
+            (chunk_idx, chunk_text, start_line, end_line)
+            for chunk_idx, chunk_text, start_line, end_line in suspicious_chunks
             if not validation_error_map.get(chunk_idx, False)
             and risk_map.get(chunk_idx, 0) >= risk_threshold
         ]
@@ -1891,9 +2006,16 @@ Respond with JSON only matching this schema (no markdown fences):
         logger.debug(f"Identified {len(high_risk_chunks)}/{len(suspicious_chunks)} high-risk chunks")
         return high_risk_chunks
 
-    def _deep_model_analysis(self, file_path: str, high_risk_chunks: List[Tuple[int, str]],
-                            vuln_name: str, vuln_desc: str, vuln_patterns: List[str],
-                            vuln_impact: str, vuln_mitigation: str) -> List[Dict]:
+    def _deep_model_analysis(
+        self,
+        file_path: str,
+        high_risk_chunks: List[Tuple[int, str, int, int]],
+        vuln_name: str,
+        vuln_desc: str,
+        vuln_patterns: List[str],
+        vuln_impact: str,
+        vuln_mitigation: str,
+    ) -> List[Dict]:
         """
         Perform deep analysis on high-risk chunks.
         
@@ -1915,7 +2037,12 @@ Respond with JSON only matching this schema (no markdown fences):
         common_prompt = _get_structured_deep_instructions(vuln_name)
 
         with tqdm(total=len(high_risk_chunks), desc="Deep analysis of high-risk chunks", leave=False) as pbar:
-            for chunk_idx, chunk_text in high_risk_chunks:
+            for chunk_idx, chunk_text, start_line, end_line in high_risk_chunks:
+                location_note = ""
+                if start_line is not None and end_line is not None:
+                    location_note = (
+                        f"\nSOURCE LOCATION: Lines {start_line}-{end_line} (1-based, inclusive) in the file.\n"
+                    )
                 prompt = f"""You are a cybersecurity expert specialized in {vuln_name} vulnerabilities ONLY.
 
 VULNERABILITY DETAILS:
@@ -1924,7 +2051,7 @@ VULNERABILITY DETAILS:
 - Common patterns: {', '.join(vuln_patterns) if vuln_patterns else 'N/A'}
 - Security impact: {vuln_impact}
 - Mitigation: {vuln_mitigation}
-
+{location_note}
 CODE SEGMENT TO ANALYZE:
 
 ```
@@ -1948,11 +2075,15 @@ Analyze this code segment for {vuln_name} vulnerabilities ONLY.
                     response_model=ChunkDeepAnalysis,
                 )
 
-                deep_results.append({
-                    'chunk_idx': chunk_idx,
-                    'analysis': analysis_result,
-                    'content': chunk_text
-                })
+                deep_results.append(
+                    {
+                        "chunk_idx": chunk_idx,
+                        "analysis": analysis_result,
+                        "content": chunk_text,
+                        "start_line": start_line,
+                        "end_line": end_line,
+                    }
+                )
                 
                 pbar.update(1)
         
@@ -1962,7 +2093,7 @@ Analyze this code segment for {vuln_name} vulnerabilities ONLY.
         self,
         file_path: str,
         code_chunks: List[str],
-        suspicious_chunks: List[Tuple[int, str]],
+        suspicious_chunks: List[Tuple[int, str, int, int]],
         medium_results: List[Dict],
         deep_results: List[Dict],
     ) -> Dict[str, Any]:
@@ -1970,7 +2101,7 @@ Analyze this code segment for {vuln_name} vulnerabilities ONLY.
         Combine adaptive phases into markdown plus structured deep chunk payloads.
         """
         # Extract all chunk indices
-        suspicious_indices = {idx for idx, _ in suspicious_chunks}
+        suspicious_indices = {idx for idx, *_ in suspicious_chunks}
         medium_indices = {result['chunk_idx'] for result in medium_results}
         deep_indices = {result['chunk_idx'] for result in deep_results}
         
@@ -1991,8 +2122,18 @@ Analyze this code segment for {vuln_name} vulnerabilities ONLY.
         for result in deep_results:
             raw = result.get("analysis", "")
             chunk_idx = result.get("chunk_idx", "unknown")
+            sl, el = result.get("start_line"), result.get("end_line")
             try:
                 chunk_model = ChunkDeepAnalysis.model_validate_json(raw)
+                if isinstance(sl, int) and isinstance(el, int):
+                    chunk_model = chunk_model.model_copy(update={"start_line": sl, "end_line": el})
+                chunk_text = result.get("content") or ""
+                if isinstance(chunk_text, str):
+                    chunk_model = _enrich_findings_with_snippet_file_lines(
+                        chunk_model,
+                        chunk_text,
+                        sl if isinstance(sl, int) else None,
+                    )
                 parsed_deep_results.append({"result": result, "model": chunk_model})
                 structured_chunks.append(chunk_model.model_dump())
             except Exception as exc:
@@ -2029,12 +2170,16 @@ Analyze this code segment for {vuln_name} vulnerabilities ONLY.
                         len(raw_text),
                     )
                     notes = f"{raw_text[:4000]}... [truncated]"
+                fb_sl = result.get("start_line") if isinstance(result.get("start_line"), int) else None
+                fb_el = result.get("end_line") if isinstance(result.get("end_line"), int) else None
                 structured_chunks.append(
                     ChunkDeepAnalysis(
                         findings=[],
                         notes=notes,
                         validation_error=True,
                         potential_vulnerabilities=True,
+                        start_line=fb_sl,
+                        end_line=fb_el,
                     ).model_dump()
                 )
 
@@ -2340,16 +2485,21 @@ class BatchAdaptiveAnalysis:
                     continue
                 
                 # Static analysis phase
-                code = self.code_base[file_path]['content']
-                code_chunks = chunk_content(code, MAX_CHUNK_SIZE)
-                
+                code = self.code_base[file_path]["content"]
+                spanned = chunk_content_with_spans(code, MAX_CHUNK_SIZE)
+                code_chunks = [t[0] for t in spanned]
+                line_spans = [(t[1], t[2]) for t in spanned]
+
                 logger.debug(f"PHASE 1: Static pattern analysis for {file_path} - {vuln_name}")
-                suspicious_chunks = self.pipeline._static_pattern_analysis(code_chunks, vuln_patterns)
-                
+                suspicious_chunks = self.pipeline._static_pattern_analysis(
+                    code_chunks, vuln_patterns, line_spans
+                )
+
                 # Store results for next phases
                 self.analysis_data[(file_path, vuln_name)] = {
                     'file_path': file_path,
                     'code_chunks': code_chunks,
+                    'line_spans': line_spans,
                     'suspicious_chunks': suspicious_chunks,
                     'vuln_data': vulnerability,
                     'vuln_details': (vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation),
@@ -2391,7 +2541,12 @@ class BatchAdaptiveAnalysis:
                 # Only scan if static analysis filtered enough chunks
                 if len(suspicious_chunks) < len(code_chunks) * threshold:
                     suspicious_chunks = self.pipeline._lightweight_model_scan(
-                        file_path, code_chunks, suspicious_chunks, vuln_details[0], vuln_details[1]
+                        file_path,
+                        code_chunks,
+                        suspicious_chunks,
+                        data["line_spans"],
+                        vuln_details[0],
+                        vuln_details[1],
                     )
                     # Update suspicious chunks
                     self.analysis_data[(file_path, vuln_name)]['suspicious_chunks'] = suspicious_chunks
@@ -2590,15 +2745,20 @@ class BatchAdaptiveAnalysis:
                         continue
 
                     # Static analysis phase - always perform regardless of cache
-                    code = self.code_base[file_path]['content']
-                    code_chunks = chunk_content(code, MAX_CHUNK_SIZE)
+                    code = self.code_base[file_path]["content"]
+                    spanned = chunk_content_with_spans(code, MAX_CHUNK_SIZE)
+                    code_chunks = [t[0] for t in spanned]
+                    line_spans = [(t[1], t[2]) for t in spanned]
 
-                    suspicious_chunks = self.pipeline._static_pattern_analysis(code_chunks, vuln_patterns)
+                    suspicious_chunks = self.pipeline._static_pattern_analysis(
+                        code_chunks, vuln_patterns, line_spans
+                    )
 
                     # Store results for next phases
                     self.analysis_data[result_key] = {
                         'file_path': file_path,
                         'code_chunks': code_chunks,
+                        'line_spans': line_spans,
                         'suspicious_chunks': suspicious_chunks,
                         'vuln_data': vulnerability,
                         'vuln_details': (vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation),
@@ -2656,7 +2816,12 @@ class BatchAdaptiveAnalysis:
                     # Only scan if static analysis didn't find enough
                     if len(suspicious_chunks) < len(code_chunks) * threshold:
                         suspicious_chunks = self.pipeline._lightweight_model_scan(
-                            file_path, code_chunks, suspicious_chunks, vuln_details[0], vuln_details[1]
+                            file_path,
+                            code_chunks,
+                            suspicious_chunks,
+                            data["line_spans"],
+                            vuln_details[0],
+                            vuln_details[1],
                         )
                         # Update suspicious chunks
                         self.analysis_data[result_key]['suspicious_chunks'] = suspicious_chunks

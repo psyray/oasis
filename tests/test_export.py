@@ -76,3 +76,72 @@ class TestSarifExport(unittest.TestCase):
         locs = results[0].get("locations") or []
         self.assertTrue(locs)
         self.assertEqual(locs[0]["physicalLocation"]["artifactLocation"]["uri"], "app/routes.py")
+
+    def test_sarif_region_includes_chunk_line_span(self):
+        doc = VulnerabilityReportDocument(
+            title="Test",
+            generated_at="2026-01-01T00:00:00",
+            model_name="m",
+            vulnerability_name="XSS",
+            vulnerability={"name": "XSS", "description": "d"},
+            files=[
+                FileReportEntry(
+                    file_path="src/x.js",
+                    similarity_score=1.0,
+                    chunk_analyses=[
+                        ChunkDeepAnalysis(
+                            findings=[
+                                VulnerabilityFinding(
+                                    title="Reflected",
+                                    vulnerable_code="innerHTML = x",
+                                    explanation="DOM XSS.",
+                                    severity="High",
+                                )
+                            ],
+                            start_line=40,
+                            end_line=55,
+                        )
+                    ],
+                )
+            ],
+        )
+        payload = vulnerability_document_to_sarif(doc, tool_version="0.5.0-test")
+        region = payload["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"]
+        self.assertEqual(region.get("startLine"), 40)
+        self.assertEqual(region.get("endLine"), 55)
+        self.assertIn("snippet", region)
+
+    def test_sarif_region_prefers_finding_snippet_span(self):
+        doc = VulnerabilityReportDocument(
+            title="Test",
+            generated_at="2026-01-01T00:00:00",
+            model_name="m",
+            vulnerability_name="SQL Injection",
+            vulnerability={"name": "SQL Injection"},
+            files=[
+                FileReportEntry(
+                    file_path="app.php",
+                    similarity_score=1.0,
+                    chunk_analyses=[
+                        ChunkDeepAnalysis(
+                            findings=[
+                                VulnerabilityFinding(
+                                    title="Unsafe",
+                                    vulnerable_code="cursor.execute(q)",
+                                    explanation="SQLi",
+                                    severity="High",
+                                    snippet_start_line=12,
+                                    snippet_end_line=14,
+                                )
+                            ],
+                            start_line=50,
+                            end_line=300,
+                        )
+                    ],
+                )
+            ],
+        )
+        payload = vulnerability_document_to_sarif(doc, tool_version="0.5.0-test")
+        region = payload["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"]
+        self.assertEqual(region.get("startLine"), 12)
+        self.assertEqual(region.get("endLine"), 14)

@@ -55,10 +55,10 @@ def vulnerability_document_to_sarif(
     """
     Map a ``VulnerabilityReportDocument`` to a SARIF 2.1.0 ``sarifLog`` object.
 
-    Omits ``startLine`` / ``endLine`` when the analysis schema does not provide them;
-    ``region.snippet`` carries ``vulnerable_code`` when present. When line/column
-    metadata exists on findings in the future, extend this builder to emit richer
-    ``region`` objects and/or multiple ``tool.driver.rules`` for finer de-duplication.
+    Fills ``region.startLine`` / ``region.endLine`` from finding-level
+    ``snippet_start_line`` / ``snippet_end_line`` when present (resolved from
+    ``vulnerable_code`` inside the analyzed chunk); otherwise falls back to the
+    chunk span. ``region.snippet`` carries ``vulnerable_code`` when present.
     """
     rule_id = _slug_rule_id(doc.vulnerability_name)
     vuln_meta: Dict[str, Any] = doc.vulnerability if isinstance(doc.vulnerability, dict) else {}
@@ -89,8 +89,17 @@ def vulnerability_document_to_sarif(
                 physical: Dict[str, Any] = {
                     "artifactLocation": {"uri": uri},
                 }
+                region: Dict[str, Any] = {}
                 if snippet_text := (finding.vulnerable_code or "").strip():
-                    physical["region"] = {"snippet": {"text": snippet_text}}
+                    region["snippet"] = {"text": snippet_text}
+                if finding.snippet_start_line is not None and finding.snippet_end_line is not None:
+                    region["startLine"] = finding.snippet_start_line
+                    region["endLine"] = finding.snippet_end_line
+                elif chunk.start_line is not None and chunk.end_line is not None:
+                    region["startLine"] = chunk.start_line
+                    region["endLine"] = chunk.end_line
+                if region:
+                    physical["region"] = region
 
                 result: Dict[str, Any] = {
                     "ruleId": rule_id,
