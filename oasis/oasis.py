@@ -8,7 +8,7 @@ from typing import Union
 
 
 # Import from configuration
-from .config import MODEL_EMOJIS, REPORT, DEFAULT_ARGS
+from .config import MODEL_EMOJIS, REPORT, DEFAULT_ARGS, validate_report_dashboard_formats
 
 # Import from other modules
 from .tools import generate_timestamp, setup_logging, logger, display_logo, get_vulnerability_mapping
@@ -46,6 +46,58 @@ class OasisScanner:
             return False
         raise argparse.ArgumentTypeError("Expected 'yes' or 'no'")
 
+    @staticmethod
+    def _parse_output_formats_list(raw: str) -> list:
+        """
+        Normalize comma-separated ``--output-format`` values to canonical ``REPORT['OUTPUT_FORMATS']`` strings.
+
+        Tokens are stripped and matched case-insensitively. Unknown tokens raise ValueError.
+        """
+        allowed = REPORT["OUTPUT_FORMATS"]
+        canon = {}
+        for f in allowed:
+            key = str(f).lower()
+            if key not in canon:
+                canon[key] = f
+        tokens = [t.strip() for t in raw.split(",") if t.strip()]
+        if not tokens:
+            return list(allowed)
+        out = []
+        seen: set[str] = set()
+        unknown = []
+        for t in tokens:
+            key = t.lower()
+            if key not in canon:
+                unknown.append(t)
+                continue
+            c = canon[key]
+            if c in seen:
+                continue
+            seen.add(c)
+            out.append(c)
+        if unknown:
+            allowed_s = ", ".join(allowed)
+            unk_s = ", ".join(unknown)
+            raise ValueError(
+                f"Unknown output format(s): {unk_s}. Use 'all' or one or more of: {allowed_s}"
+            )
+        return out
+
+    @staticmethod
+    def _output_format_cli_type(value: str) -> list:
+        """
+        argparse ``type`` for ``--output-format``: returns a canonical list of format strings.
+        """
+        if not isinstance(value, str):
+            raise argparse.ArgumentTypeError("--output-format must be a string")
+        s = value.strip()
+        if s.lower() == "all":
+            return list(REPORT["OUTPUT_FORMATS"])
+        try:
+            return OasisScanner._parse_output_formats_list(s)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from exc
+
     def setup_argument_parser(self):
         """
         Configure and return argument parser
@@ -68,8 +120,17 @@ class OasisScanner:
         io_group = parser.add_argument_group('Input/Output Options')
         io_group.add_argument('-i', '--input', dest='input_path', type=str, 
                             help='Path to file, directory, or .txt file containing paths to analyze')
-        io_group.add_argument('-of', '--output-format', type=str, default=DEFAULT_ARGS['OUTPUT_FORMAT'],
-                            help=f'Output format [pdf, html, md] (default: {DEFAULT_ARGS["OUTPUT_FORMAT"]})')
+        io_group.add_argument(
+            '-of',
+            '--output-format',
+            type=OasisScanner._output_format_cli_type,
+            default=DEFAULT_ARGS['OUTPUT_FORMAT'],
+            help=(
+                f'Output format(s): comma-separated or "all" for '
+                f'{", ".join(REPORT["OUTPUT_FORMATS"])} (default: {DEFAULT_ARGS["OUTPUT_FORMAT"]}). '
+                f'Tokens are case-insensitive; spaces around commas are ignored.'
+            ),
+        )
         io_group.add_argument('-x', '--extensions', type=str,
                             help='Comma-separated list of file extensions to analyze (e.g., "py,js,java")')
         
@@ -347,11 +408,19 @@ class OasisScanner:
         # Now setup full logging with appropriate paths
         self._setup_logging()
 
-        # Process output format
-        if self.args.output_format == 'all':
-            self.args.output_format = REPORT['OUTPUT_FORMATS']
+        validate_report_dashboard_formats()
+
+        # Process output format (argparse usually supplies list via type=; support injected str)
+        of_raw = self.args.output_format
+        if isinstance(of_raw, list):
+            self.args.output_format = of_raw
+        elif isinstance(of_raw, str):
+            try:
+                self.args.output_format = OasisScanner._output_format_cli_type(of_raw)
+            except argparse.ArgumentTypeError as exc:
+                return self._handle_argument_errors(str(exc))
         else:
-            self.args.output_format = self.args.output_format.split(',')
+            return self._handle_argument_errors("Invalid --output-format / -of value")
 
         display_logo()
         return True
@@ -484,6 +553,8 @@ class OasisScanner:
         # Create the report directories for all main models
         self.report.models = main_models
         self.report.create_report_directories(self.args.input_path, models=main_models)
+        self.args.run_id = getattr(self.report, "output_dir_name", None)
+        self._configure_run_error_logging()
 
         # Run analysis with all main models
         result = self.run_analysis_mode(main_models, scan_model, vuln_mapping)
@@ -515,13 +586,21 @@ class OasisScanner:
         Args:
             None
         """
-        if self.args.silent:
-            logs_dir = Path(self.args.input_path).resolve().parent / REPORT['OUTPUT_DIR'] / "logs" if self.args.input_path else Path(REPORT['OUTPUT_DIR']) / "logs"
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            log_file = logs_dir / f"oasis_errors_{generate_timestamp(for_file=True)}.log"
-        else:
-            log_file = None
-            
+        # Base logging initialization (console behavior, levels).
+        # Run-specific error file logging is configured once report output_dir is known.
+        setup_logging(debug=self.args.debug, silent=self.args.silent, error_log_file=None)
+
+    def _configure_run_error_logging(self):
+        """
+        Configure run-specific error log file in security_reports/<run>/logs.
+        """
+        if not hasattr(self, "report") or not getattr(self.report, "output_dir", None):
+            return
+
+        logs_dir = self.report.output_dir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        run_id = getattr(self.report, "output_dir_name", generate_timestamp(for_file=True))
+        log_file = logs_dir / f"oasis_errors_{run_id}.log"
         setup_logging(debug=self.args.debug, silent=self.args.silent, error_log_file=log_file)
 
     def _handle_argument_errors(self, arg0):

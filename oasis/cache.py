@@ -5,6 +5,7 @@ import hashlib
 import pickle
 
 from .enums import AnalysisMode, AnalysisType
+from .schemas.analysis import ANALYSIS_SCHEMA_VERSION
 from .tools import create_cache_dir, sanitize_name, logger
 
 class CacheManager:
@@ -66,7 +67,63 @@ class CacheManager:
         self.adaptive_analysis_cache = {}
         
         # Validate cache files and clean expired ones
+        self._cleanup_marker_file = self.cache_dir / f".schema_cleanup_v{ANALYSIS_SCHEMA_VERSION}.done"
+        self._run_schema_cleanup_once()
         self.validate_cache_expiration()
+
+    def _run_schema_cleanup_once(self) -> None:
+        """Run schema cleanup once per cache directory/version."""
+        if self._cleanup_marker_file.exists():
+            return
+        self.cleanup_stale_schema_entries()
+        try:
+            self._cleanup_marker_file.write_text(datetime.now().isoformat(), encoding="utf-8")
+        except OSError as exc:
+            logger.warning(f"Unable to persist schema cleanup marker {self._cleanup_marker_file}: {exc}")
+
+    def cleanup_stale_schema_entries(self) -> None:
+        """Remove stale schema-versioned keys from OASIS cache payloads only."""
+        version_prefix = f"v{ANALYSIS_SCHEMA_VERSION}_"
+        try:
+            cache_dirs = list(self.standard_cache_dir.values()) + list(self.adaptive_cache_dir.values())
+            removed_keys = 0
+            for cache_dir in cache_dirs:
+                if not cache_dir.exists():
+                    continue
+                for cache_file in cache_dir.glob("*.cache"):
+                    try:
+                        with open(cache_file, "rb") as cache_handle:
+                            payload = pickle.load(cache_handle)
+                    except Exception:
+                        # Skip non-OASIS cache payloads or unreadable files.
+                        continue
+
+                    if not isinstance(payload, dict):
+                        continue
+
+                    stale_keys = [
+                        key for key in payload
+                        if isinstance(key, str) and key.startswith("v") and not key.startswith(version_prefix)
+                    ]
+                    if not stale_keys:
+                        continue
+
+                    for stale_key in stale_keys:
+                        payload.pop(stale_key, None)
+                    removed_keys += len(stale_keys)
+
+                    try:
+                        if payload:
+                            with open(cache_file, "wb") as cache_handle:
+                                pickle.dump(payload, cache_handle)
+                        else:
+                            cache_file.unlink()
+                    except OSError as exc:
+                        logger.warning(f"Failed to update stale cache entry {cache_file}: {exc}")
+            if removed_keys:
+                logger.info(f"Removed {removed_keys} stale cache keys from previous schema versions")
+        except Exception as exc:
+            logger.warning(f"Error during stale cache cleanup: {exc}")
     
     def get_cache_path(self, file_path: str, mode: AnalysisMode, 
                      analysis_type: AnalysisType) -> Path:
@@ -272,13 +329,13 @@ class CacheManager:
         # For adaptive analysis (empty chunk)
         if not chunk:
             if file_path:
-                return f"{sanitize_name(file_path)}_{sanitize_name(vuln_name)}"
-            return sanitize_name(vuln_name)
+                return f"v{ANALYSIS_SCHEMA_VERSION}_{sanitize_name(file_path)}_{sanitize_name(vuln_name)}"
+            return f"v{ANALYSIS_SCHEMA_VERSION}_{sanitize_name(vuln_name)}"
             
         # For standard analysis
         chunk_hash = hashlib.md5(chunk.encode()).hexdigest()
         prompt_hash = hashlib.md5(prompt.encode()).hexdigest()
-        return f"{chunk_hash}_{prompt_hash}_{sanitize_name(vuln_name)}"
+        return f"v{ANALYSIS_SCHEMA_VERSION}_{chunk_hash}_{prompt_hash}_{sanitize_name(vuln_name)}"
     
     def clear_scan_cache(self, analysis_type: AnalysisType = None) -> None:
         """
