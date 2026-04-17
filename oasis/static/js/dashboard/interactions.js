@@ -97,15 +97,56 @@ DashboardApp.filterDatesByModel = function(modelElement) {
     DashboardApp.updateDatesForModel(card, modelName, vulnType);
 };
 
+DashboardApp._buildDateTagElement = function(dateInfo, options = {}) {
+    const {
+        includeModelLabel = false,
+        fallbackModelName = 'Unknown'
+    } = options;
+    const path = dateInfo.path || '';
+    const format = dateInfo.format || 'md';
+    const modelName = dateInfo.model || fallbackModelName;
+
+    const tag = document.createElement('span');
+    tag.className = 'date-tag clickable';
+    tag.dataset.model = modelName;
+    tag.addEventListener('click', () => DashboardApp.openReport(path, format));
+
+    if (includeModelLabel) {
+        const label = document.createElement('div');
+        label.className = 'date-label';
+        label.textContent = `${modelName}:`;
+        tag.appendChild(label);
+    }
+
+    const hasDate = !!dateInfo.date;
+    const main = document.createElement('div');
+    main.className = 'date-main';
+    if (hasDate) {
+        const dateObj = new Date(dateInfo.date);
+        main.textContent = dateObj.toLocaleDateString();
+    } else {
+        main.textContent = 'No date';
+    }
+    tag.appendChild(main);
+
+    if (hasDate) {
+        const time = document.createElement('div');
+        time.className = 'date-time';
+        const dateObj = new Date(dateInfo.date);
+        time.textContent = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        tag.appendChild(time);
+    }
+
+    return tag;
+};
+
 DashboardApp.updateDatesForModel = function(card, modelName, vulnType) {
     DashboardApp.debug("Updating dates for model:", modelName, "vulnerability:", vulnType);
-    const h = DashboardApp._escapeHtml;
-    const jsq = DashboardApp._escapeJsSingleQuote;
     
     // Show loading in the dates container
     const datesContainer = card.querySelector('.dates-list');
     if (datesContainer) {
-        datesContainer.innerHTML = '<div class="loading"><div class="loading-spinner"></div></div>';
+        DashboardApp._appendLoadingSpinner(datesContainer);
     } else {
         console.error("Cannot find dates container in card");
         DashboardApp.debug("Card structure:", card.innerHTML);
@@ -124,58 +165,39 @@ DashboardApp.updateDatesForModel = function(card, modelName, vulnType) {
             // Rebuild dates with the received data
             if (datesContainer) {
                 if (data.dates && data.dates.length > 0) {
-                    let datesHtml = '';
-                    data.dates.forEach(dateInfo => {
-                        // Formatting the date and time
-                        if (dateInfo.date) {
-                            const dateObj = new Date(dateInfo.date);
-                            const formattedDate = dateObj.toLocaleDateString();
-                            const formattedTime = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                        
-                            // Get path and format
-                            const path = dateInfo.path || '';
-                            const format = dateInfo.format || 'md';
-                            
-                            datesHtml += `
-                                <span class="date-tag clickable" 
-                                    onclick="DashboardApp.openReport('${jsq(path)}', '${jsq(format)}')" 
-                                    data-model="${h(modelName)}">
-                                    <div class="date-main">${formattedDate}</div>
-                                    <div class="date-time">${formattedTime}</div>
-                                </span>
-                            `;
-                        } else {
-                            // Fallback
-                            const path = dateInfo.path || '';
-                            const format = dateInfo.format || 'md';
-                            
-                            datesHtml += `
-                                <span class="date-tag clickable" 
-                                    onclick="DashboardApp.openReport('${jsq(path)}', '${jsq(format)}')" 
-                                    data-model="${h(modelName)}">
-                                    <div class="date-main">No date</div>
-                                </span>
-                            `;
-                        }
+                    DashboardApp._clearElement(datesContainer);
+                    const fragment = document.createDocumentFragment();
+                    data.dates.forEach((dateInfo) => {
+                        fragment.appendChild(
+                            DashboardApp._buildDateTagElement(dateInfo, { fallbackModelName: modelName })
+                        );
                     });
-                    datesContainer.innerHTML = datesHtml;
+                    datesContainer.appendChild(fragment);
                 } else {
-                    datesContainer.innerHTML = '<span class="no-dates">No dates available for this model</span>';
+                    DashboardApp._appendTextMessage(
+                        datesContainer,
+                        'no-dates',
+                        'No dates available for this model',
+                        'span'
+                    );
                 }
             }
         })
         .catch(error => {
             console.error('Error fetching dates:', error);
             if (datesContainer) {
-                datesContainer.innerHTML = `<span class="error-message">Error loading dates: ${h(error.message)}</span>`;
+                DashboardApp._appendTextMessage(
+                    datesContainer,
+                    'error-message',
+                    `Error loading dates: ${DashboardApp._errorMessage(error)}`,
+                    'span'
+                );
             }
         });
 };
 
 DashboardApp.updateDatesForVulnerability = function(vulnElement, vulnType) {
     DashboardApp.debug("Updating dates for vulnerability:", vulnType);
-    const h = DashboardApp._escapeHtml;
-    const jsq = DashboardApp._escapeJsSingleQuote;
     
     // Get the containing section
     const section = vulnElement.closest('.tree-section');
@@ -188,7 +210,7 @@ DashboardApp.updateDatesForVulnerability = function(vulnElement, vulnType) {
     // Show loading in the dates container
     const datesContainer = section.querySelector('.tree-dates-list');
     if (datesContainer) {
-        datesContainer.innerHTML = '<div class="loading"><div class="loading-spinner"></div></div>';
+        DashboardApp._appendLoadingSpinner(datesContainer);
     }
     
     // Fetch dates for the selected vulnerability
@@ -203,53 +225,33 @@ DashboardApp.updateDatesForVulnerability = function(vulnElement, vulnType) {
             // Rebuild dates with the received data
             if (datesContainer) {
                 if (data.dates && data.dates.length > 0) {
-                    let datesHtml = '';
-                    data.dates.forEach(dateInfo => {
-                        // Formatting the date and time
-                        if (dateInfo.date) {
-                            const dateObj = new Date(dateInfo.date);
-                            const formattedDate = dateObj.toLocaleDateString();
-                            const formattedTime = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                        
-                            const modelName = dateInfo.model || 'Unknown';
-                            const path = dateInfo.path || '';
-                            const format = dateInfo.format || 'md'; // par défaut à md
-                            
-                            datesHtml += `
-                                <span class="date-tag clickable" 
-                                    onclick="DashboardApp.openReport('${jsq(path)}', '${jsq(format)}')" 
-                                    data-model="${h(modelName)}">
-                                    <div class="date-label">${h(modelName)}:</div>
-                                    <div class="date-main">${formattedDate}</div>
-                                    <div class="date-time">${formattedTime}</div>
-                                </span>
-                            `;
-                        } else {
-                            // Fallback
-                            const modelName = dateInfo.model || 'Unknown';
-                            const path = dateInfo.path || '';
-                            const format = dateInfo.format || 'md';
-                            
-                            datesHtml += `
-                                <span class="date-tag clickable" 
-                                    onclick="DashboardApp.openReport('${jsq(path)}', '${jsq(format)}')" 
-                                    data-model="${h(modelName)}">
-                                    <div class="date-label">${h(modelName)}:</div>
-                                    <div class="date-main">No date</div>
-                                </span>
-                            `;
-                        }
+                    DashboardApp._clearElement(datesContainer);
+                    const fragment = document.createDocumentFragment();
+                    data.dates.forEach((dateInfo) => {
+                        fragment.appendChild(
+                            DashboardApp._buildDateTagElement(dateInfo, { includeModelLabel: true })
+                        );
                     });
-                    datesContainer.innerHTML = datesHtml;
+                    datesContainer.appendChild(fragment);
                 } else {
-                    datesContainer.innerHTML = '<span class="no-dates">No dates available for this vulnerability</span>';
+                    DashboardApp._appendTextMessage(
+                        datesContainer,
+                        'no-dates',
+                        'No dates available for this vulnerability',
+                        'span'
+                    );
                 }
             }
         })
         .catch(error => {
             console.error('Error fetching dates:', error);
             if (datesContainer) {
-                datesContainer.innerHTML = `<span class="error-message">Error loading dates: ${h(error.message)}</span>`;
+                DashboardApp._appendTextMessage(
+                    datesContainer,
+                    'error-message',
+                    `Error loading dates: ${DashboardApp._errorMessage(error)}`,
+                    'span'
+                );
             }
         });
 };

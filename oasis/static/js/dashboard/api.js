@@ -65,8 +65,11 @@ DashboardApp.fetchReports = function() {
         .catch(error => {
             console.error('Error fetching reports:', error);
             const errorMessage = DashboardApp._errorMessage(error);
-            document.getElementById('reports-container').innerHTML = 
-                `<div class="error-message">Error fetching reports: ${DashboardApp._escapeHtml(errorMessage)}</div>`;
+            DashboardApp._appendTextMessage(
+                document.getElementById('reports-container'),
+                'error-message',
+                `Error fetching reports: ${errorMessage}`
+            );
         });
 };
 
@@ -109,8 +112,11 @@ DashboardApp.fetchStats = function(forceRefresh = false, options = {}) {
         .catch(error => {
             console.error('Error fetching stats:', error);
             const errorMessage = DashboardApp._errorMessage(error);
-            document.getElementById('stats-container').innerHTML = 
-                `<div class="error-message">Error fetching stats: ${DashboardApp._escapeHtml(errorMessage)}</div>`;
+            DashboardApp._appendTextMessage(
+                document.getElementById('stats-container'),
+                'error-message',
+                `Error fetching stats: ${errorMessage}`
+            );
         });
 };
 
@@ -154,8 +160,11 @@ DashboardApp.refreshDashboard = function() {
     })
     .catch(error => {
         console.error('Error refreshing dashboard:', error);
-        document.getElementById('stats-container').innerHTML = 
-            '<div class="error-message">Error refreshing dashboard. Please try again later.</div>';
+        DashboardApp._appendTextMessage(
+            document.getElementById('stats-container'),
+            'error-message',
+            'Error refreshing dashboard. Please try again later.'
+        );
     });
 };
 
