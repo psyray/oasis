@@ -10,7 +10,7 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 from functools import wraps
 
 
-from .config import REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS
+from .config import REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS, LANGUAGES
 from .export.filenames import artifact_filename, report_dir_glob_for_format
 from .report import Report
 from .tools import parse_iso_date, parse_report_date
@@ -141,7 +141,13 @@ class WebServer:
         return render_template('login.html', error=error)
 
     def _is_within_security_root(self, path: Path, root: Path) -> bool:
-        """Compatibility-safe path containment check (Python 3.9+ and older)."""
+        """Compatibility-safe path containment check (Python 3.9+ and older).
+
+        Both inputs are resolved here so containment checks always operate on
+        normalized absolute paths, regardless of caller behavior.
+        """
+        path = path.resolve(strict=False)
+        root = root.resolve()
         is_relative_to = getattr(path, "is_relative_to", None)
         if callable(is_relative_to):
             return path.is_relative_to(root)
@@ -178,6 +184,7 @@ class WebServer:
                 'dashboard.html',
                 model_emojis=MODEL_EMOJIS,
                 vuln_emojis=VULN_EMOJIS,
+                languages=LANGUAGES,
                 debug=self.debug,
                 report_output_formats=REPORT.get('OUTPUT_FORMATS', []),
                 dashboard_format_display_order=_dashboard_format_display_order(),
@@ -196,42 +203,31 @@ class WebServer:
 
             if request.args.get('force', '0') == '1':
                 self.collect_report_data()
-
             # Filter reports based on parameters
             filtered_data = self.filter_reports(
-                model_filter, 
-                format_filter, 
-                vuln_filter, 
-                start_date, 
-                end_date, 
-                md_dates_only=md_dates_only
+                model_filter=model_filter,
+                format_filter=format_filter,
+                vuln_filter=vuln_filter,
+                start_date=start_date,
+                end_date=end_date,
+                md_dates_only=md_dates_only,
             )
             return jsonify(filtered_data)
             
         @app.route('/api/stats')
         @login_required
         def get_stats():
-            # Check if there are any filter parameters
-            model_filter = request.args.get('model', '')
-            format_filter = request.args.get('format', '')
-            vuln_filter = request.args.get('vulnerability', '')
-            start_date = request.args.get('start_date')
-            end_date = request.args.get('end_date')
-            
-            # If any filters are applied, get filtered reports first
-            if any([model_filter, format_filter, vuln_filter, start_date, end_date]):
-                filtered_reports = self.filter_reports(
-                    model_filter=model_filter,
-                    format_filter=format_filter,
-                    vuln_filter=vuln_filter,
-                    start_date=start_date,
-                    end_date=end_date
-                )
-                return jsonify(self.get_report_statistics(filtered_reports=filtered_reports))
-            else:
-                # No filters, get global statistics
-                return jsonify(self.get_report_statistics())
-
+            # Filter reports based on parameters
+            filtered_data = self.filter_reports(
+                model_filter=request.args.get('model', ''),
+                format_filter=request.args.get('format', ''),
+                vuln_filter=request.args.get('vulnerability', ''),
+                start_date=request.args.get('start_date', None),
+                end_date=request.args.get('end_date', None),
+                md_dates_only=request.args.get('md_dates_only', '1') == '1',
+            )
+            return jsonify(self.get_report_statistics(filtered_reports=filtered_data))
+        
         @app.route('/reports/<path:filename>')
         @login_required
         def serve_report(filename):
@@ -377,27 +373,12 @@ class WebServer:
         @login_required
         def get_dates_by_model():
             """Get dates available for a specific model and vulnerability type"""
-            model = request.args.get('model', '')
-            vulnerability = request.args.get('vulnerability', '')
-            
-            if not model or not vulnerability:
-                return jsonify({'error': 'Model and vulnerability parameters are required'}), 400
-            
-            # Normalize vulnerability type for comparison
-            vulnerability = vulnerability.lower()
-            
-            # Filter reports by model and vulnerability
-            filtered_reports = []
-            for report in self.report_data:
-                report_vuln = report.get('vulnerability_type', '').lower()
-                report_model = report.get('model', '')
-                
-                if model == report_model and vulnerability in report_vuln:
-                    filtered_reports.append(report)
-            
+            # Filter reports based on parameters
+            filtered_data = self.filter_reports(mandatory_filters=['model', 'vulnerability'])
+
             # Extract dates from filtered reports
             dates = []
-            for report in filtered_reports:
+            for report in filtered_data:
                 if 'date' in report:
                     # Create a dictionary date_info from the date string
                     date_info = {'date': report['date']}
@@ -417,7 +398,7 @@ class WebServer:
                     elif report.get('path'):
                         date_info['path'] = report['path']
                         date_info['format'] = report.get('format', 'md')
-
+                    date_info['language'] = report.get('language', 'en')
                     dates.append(date_info)
             
             # Sort dates from newest to oldest
@@ -455,6 +436,38 @@ class WebServer:
                 exc,
             )
             return {}
+
+    @staticmethod
+    def _language_from_json_report_file(report_file: Path) -> str | None:
+        """Load report language from canonical vulnerability JSON report.
+
+        Returns ``None`` when the field is missing/empty or when the report file
+        cannot be read/parsed, so callers can fallback to legacy ``language.txt``
+        when available.
+        """
+        try:
+            with open(report_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            # Only swallow expected I/O / parsing issues; let other exceptions
+            # propagate so they can be surfaced and fixed.
+            return None
+
+        language = str(data.get('language') or '').strip().lower()
+        return language or None
+
+    @staticmethod
+    def _language_from_legacy_file(report_file: Path) -> str | None:
+        """Load report language from legacy ``language.txt`` sidecar."""
+        lang_file = report_file.parent.parent / 'language.txt'
+        if not lang_file.exists():
+            return None
+        try:
+            with open(lang_file, 'r', encoding='utf-8') as f:
+                language = f.read().strip().lower()
+            return language or None
+        except Exception:
+            return None
         
     def _collect_reports_from_directories(self):
         """Extract reports data from directory structure"""
@@ -506,15 +519,27 @@ class WebServer:
         """Process a single report file and extract metadata"""
         # Extract vulnerability type from filename
         vulnerability_type = self._extract_vulnerability_type(report_file.stem)
-        
+
         stats = self._stats_from_json_report_file(report_file) if fmt == 'json' else {}
-        
+
         # Build relative path for web access
         relative_path = report_file.relative_to(self.security_dir)
-        
+
         # Find alternative formats available (including timestamp)
         alternative_formats = self._find_alternative_formats(model_dir, report_file.stem, timestamp_dir)
-        
+
+        language = None
+        if fmt == 'json':
+            language = self._language_from_json_report_file(report_file)
+        else:
+            sibling_json = model_dir / 'json' / f"{report_file.stem}.json"
+            if sibling_json.exists():
+                language = self._language_from_json_report_file(sibling_json)
+        if language is None:
+            language = self._language_from_legacy_file(report_file)
+        if language is None:
+            language = 'en'
+
         return {
             "model": model_name,
             "format": fmt,
@@ -524,7 +549,8 @@ class WebServer:
             "stats": stats,
             "alternative_formats": alternative_formats,
             "date": report_date,
-            "timestamp_dir": timestamp_dir
+            "timestamp_dir": timestamp_dir,
+            "language": language
         }
         
     def _calculate_global_statistics(self, reports):
@@ -671,12 +697,24 @@ class WebServer:
         report_format = report.get("format")
         return report_format == "json" or (report_format == "md" and not has_json)
 
-    def filter_reports(self, model_filter='', format_filter='', vuln_filter='', start_date=None, end_date=None, md_dates_only=True):
+    def filter_reports(self, model_filter='', format_filter='', vuln_filter='', start_date=None, end_date=None, md_dates_only=True, mandatory_filters=None):
         """Filter reports based on criteria"""
         if not self.report_data:
             self.collect_report_data()
 
         filtered = self.report_data
+
+        if mandatory_filters:
+            values = {
+                "model": model_filter,
+                "format": format_filter,
+                "vulnerability": vuln_filter,
+                "start_date": start_date,
+                "end_date": end_date,
+            }
+            for filter_name in mandatory_filters:
+                if not values.get(filter_name):
+                    return []
 
         # Apply model filter (common to both branches)
         if model_filter:
@@ -686,29 +724,17 @@ class WebServer:
         # Apply date filtering (common to both branches)
         filtered = self._apply_date_filter(filtered, start_date, end_date)
 
-        if md_dates_only and not format_filter:
-            # MD dates only branch - apply vulnerability filter
-            if vuln_filter:
-                vuln_filters = [v.lower() for v in vuln_filter.split(',')]
-                filtered = [r for r in filtered if any(v in r['vulnerability_type'].lower() for v in vuln_filters)]
+        # Standard branch - apply format and vulnerability filters
+        if format_filter:
+            format_filters = [f.lower() for f in format_filter.split(',')]
+            filtered = [r for r in filtered if r['format'].lower() in format_filters]
 
-            # For each report that isn't MD, mark date_visible=False
-            for report in filtered:
-                report["date_visible"] = self._is_date_visible_for_report(report)
+        if vuln_filter:
+            vuln_filters = [v.lower() for v in vuln_filter.split(',')]
+            filtered = [r for r in filtered if any(v in r['vulnerability_type'].lower() for v in vuln_filters)]
 
-        else:
-            # Standard branch - apply format and vulnerability filters
-            if format_filter:
-                format_filters = [f.lower() for f in format_filter.split(',')]
-                filtered = [r for r in filtered if r['format'].lower() in format_filters]
-
-            if vuln_filter:
-                vuln_filters = [v.lower() for v in vuln_filter.split(',')]
-                filtered = [r for r in filtered if any(v in r['vulnerability_type'].lower() for v in vuln_filters)]
-
-            # Mark all reports as visible in dates
-            for report in filtered:
-                report['date_visible'] = True
+        for report in filtered:
+            report["date_visible"] = self._is_date_visible_for_report(report) if md_dates_only else True
 
         return filtered
 
@@ -724,10 +750,10 @@ class WebServer:
         force_refresh = request.args.get('force', '0') == '1'
         if force_refresh or not self.report_data:
             self.collect_report_data()
-        
+
         # Use filtered reports if provided, otherwise use all reports
         reports_to_analyze = filtered_reports if filtered_reports is not None else self.report_data
-        
+
         # Initialize statistics structure
         stats = {
             "total_reports": 0,
@@ -736,44 +762,45 @@ class WebServer:
             "formats": {},
             "dates": {},
             "risk_summary": {
+                "total_findings": 0,
                 "high": 0,
                 "medium": 0,
                 "low": 0
             }
         }
-        
+
         # Calculate statistics based on the provided reports
         for report in reports_to_analyze:
             if report["format"] == "json":
-                stats["total_reports"] += 1
-
-                model = report["model"]
-                if model not in stats["models"]:
-                    stats["models"][model] = 0
-                stats["models"][model] += 1
-
-                vuln_type = report["vulnerability_type"]
-                if vuln_type not in stats["vulnerabilities"]:
-                    stats["vulnerabilities"][vuln_type] = 0
-                stats["vulnerabilities"][vuln_type] += 1
-
-                if report["date"]:
-                    date_only = report["date"].split()[0]
-                    if date_only not in stats["dates"]:
-                        stats["dates"][date_only] = 0
-                    stats["dates"][date_only] += 1
-
-                if "stats" in report and report["stats"]:
-                    stats["risk_summary"]["high"] += report["stats"].get("high_risk", 0)
-                    stats["risk_summary"]["medium"] += report["stats"].get("medium_risk", 0)
-                    stats["risk_summary"]["low"] += report["stats"].get("low_risk", 0)
+                self._update_stats_for_report(stats, report)
 
             # count all available formats
             fmt = report["format"]
             if fmt not in stats["formats"]:
                 stats["formats"][fmt] = 0
             stats["formats"][fmt] += 1
-        
+
         # Return the calculated statistics
         return stats
-        
+
+    def _update_stats_for_report(self, stats: dict, report: dict) -> None:
+        stats["total_reports"] += 1
+        if model := report.get("model"):
+            stats["models"][model] = stats["models"].get(model, 0) + 1
+
+        if vulnerability_type := report.get("vulnerability_type"):
+            stats["vulnerabilities"][vulnerability_type] = (
+                stats["vulnerabilities"].get(vulnerability_type, 0) + 1
+            )
+
+        if report_date := report.get("date"):
+            date_only = report_date.split()[0]
+            stats["dates"][date_only] = stats["dates"].get(date_only, 0) + 1
+
+        if "stats" in report and report["stats"]:
+            report_stats = report["stats"]
+            stats["risk_summary"]["total_findings"] += report_stats.get("total_findings", 0)
+            stats["risk_summary"]["high"] += report_stats.get("high_risk", 0)
+            stats["risk_summary"]["medium"] += report_stats.get("medium_risk", 0)
+            stats["risk_summary"]["low"] += report_stats.get("low_risk", 0)
+

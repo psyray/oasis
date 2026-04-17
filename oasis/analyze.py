@@ -11,7 +11,7 @@ from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 
 # Import from configuration
-from .config import CHUNK_ANALYZE_TIMEOUT, MODEL_EMOJIS, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS, MAX_CHUNK_SIZE, DEFAULT_ARGS
+from .config import CHUNK_ANALYZE_TIMEOUT, LANGUAGES, MODEL_EMOJIS, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS, MAX_CHUNK_SIZE, DEFAULT_ARGS
 
 # Import from other modules
 from .ollama_manager import OllamaManager
@@ -138,6 +138,8 @@ class SecurityAnalyzer:
         self.analysis_pipeline = AdaptiveAnalysisPipeline(self)
         self.structured_output_failure_handler = structured_output_failure_handler
         self.run_id = getattr(args, "run_id", None)
+        self.language_code = getattr(args, "language", "en")
+        self.language = LANGUAGES.get(self.language_code, LANGUAGES["en"])
 
         # Clear scan cache if requested
         if hasattr(self, 'clear_cache_scan') and self.clear_cache_scan:
@@ -535,7 +537,7 @@ class SecurityAnalyzer:
                 f"(1-based, inclusive) in the file under analysis.\n"
             )
 
-        return f"""You are a cybersecurity expert specialized in {vuln_name} vulnerabilities ONLY.
+        return f"""{self.get_language_instruction()}You are a cybersecurity expert specialized in {vuln_name} vulnerabilities ONLY.
 
 CRITICAL INSTRUCTION: You must ONLY analyze the code for {vuln_name} vulnerabilities.
 DO NOT mention, describe, or analyze ANY other type of vulnerability.
@@ -556,6 +558,12 @@ Analyze this code segment ({i + 1}/{total_chunks}) for {vuln_name} vulnerabiliti
 
 {VULNERABILITY_PROMPT_EXTENSION}
 """
+
+    def get_language_instruction(self) -> str:
+        """
+        Get the language instruction for the LLM analysis.
+        """
+        return f"You MUST write your response in {self.language['english_name']}. " if self.language_code != 'en' else ""
 
     def _analyze_code_chunk(
         self,
@@ -870,6 +878,8 @@ Code to analyze:
                         file_pbar.update(1)
 
                 vuln_scan_pbar.update(1)
+                if main_pbar:
+                    main_pbar.update(1)
 
         return {
             'suspicious_data': all_suspicious_data,
@@ -1315,7 +1325,7 @@ class EmbeddingAnalyzer:
             vuln: Vulnerability to analyze
         """
 
-        cache_key = f"{sanitize_name(vuln['name'])}_{self.analyze_type}"
+        cache_key = f"{sanitize_name(vuln['name'])}_{self.embedding_manager.analyze_type}"
         if cache_key in self.results_cache:
             return self.results_cache[cache_key]
 
@@ -1976,10 +1986,10 @@ Respond with JSON only matching this schema (no markdown fences):
     
     def _identify_high_risk_chunks(
         self,
-        suspicious_chunks: List[Tuple[int, str, int, int]],
+        suspicious_chunks: List[Tuple],
         medium_results: List[Dict],
         risk_threshold: int = 70,
-    ) -> List[Tuple[int, str, int, int]]:
+    ) -> List[Tuple]:
         """
         Identify high-risk chunks that need deep analysis.
         
@@ -1998,13 +2008,24 @@ Respond with JSON only matching this schema (no markdown fences):
             for result in medium_results
         }
         
-        # Select high-risk chunks based on risk threshold
-        high_risk_chunks = [
-            (chunk_idx, chunk_text, start_line, end_line)
-            for chunk_idx, chunk_text, start_line, end_line in suspicious_chunks
-            if not validation_error_map.get(chunk_idx, False)
-            and risk_map.get(chunk_idx, 0) >= risk_threshold
-        ]
+        # Select high-risk chunks based on risk threshold.
+        # Keep backward compatibility with legacy tuples: (chunk_idx, chunk_text).
+        high_risk_chunks: List[Tuple] = []
+        for chunk in suspicious_chunks:
+            if len(chunk) >= 4:
+                chunk_idx, chunk_text, start_line, end_line = chunk[:4]
+                selected_chunk: Tuple = (chunk_idx, chunk_text, start_line, end_line)
+            elif len(chunk) == 2:
+                chunk_idx, chunk_text = chunk
+                selected_chunk = (chunk_idx, chunk_text)
+            else:
+                continue
+
+            if validation_error_map.get(chunk_idx, False):
+                continue
+            if risk_map.get(chunk_idx, 0) < risk_threshold:
+                continue
+            high_risk_chunks.append(selected_chunk)
         
         logger.debug(f"Identified {len(high_risk_chunks)}/{len(suspicious_chunks)} high-risk chunks")
         return high_risk_chunks
@@ -2040,13 +2061,21 @@ Respond with JSON only matching this schema (no markdown fences):
         common_prompt = _get_structured_deep_instructions(vuln_name)
 
         with tqdm(total=len(high_risk_chunks), desc="Deep analysis of high-risk chunks", leave=False) as pbar:
-            for chunk_idx, chunk_text, start_line, end_line in high_risk_chunks:
+            for chunk in high_risk_chunks:
+                if len(chunk) >= 4:
+                    chunk_idx, chunk_text, start_line, end_line = chunk[:4]
+                elif len(chunk) == 2:
+                    chunk_idx, chunk_text = chunk
+                    start_line, end_line = None, None
+                else:
+                    pbar.update(1)
+                    continue
                 location_note = ""
                 if start_line is not None and end_line is not None:
                     location_note = (
                         f"\nSOURCE LOCATION: Lines {start_line}-{end_line} (1-based, inclusive) in the file.\n"
                     )
-                prompt = f"""You are a cybersecurity expert specialized in {vuln_name} vulnerabilities ONLY.
+                prompt = f"""{self.get_language_instruction()}You are a cybersecurity expert specialized in {vuln_name} vulnerabilities ONLY.
 
 VULNERABILITY DETAILS:
 - Name: {vuln_name}

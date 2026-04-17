@@ -49,7 +49,7 @@ def strip_code_fences(candidate: str) -> str:
         return candidate
     # Opening: first line of the buffer only (no MULTILINE — avoids matching inner lines).
     candidate = re.sub(
-        r"^```(?:json)?\s*$\n?",
+        r"^```(?:json)?[ \t]*\r?\n",
         "",
         candidate,
         count=1,

@@ -3,12 +3,28 @@ from typing import Union, Dict
 from datetime import datetime
 import hashlib
 import pickle
+import tempfile
 
 from .enums import AnalysisMode, AnalysisType
 from .schemas.analysis import ANALYSIS_SCHEMA_VERSION
 from .tools import create_cache_dir, sanitize_name, logger
 
 class CacheManager:
+    @staticmethod
+    def _atomic_pickle_write(target_path: Path, payload) -> None:
+        """Write pickle payload atomically to avoid partial file corruption."""
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target_path.parent,
+            delete=False,
+            prefix=f".{target_path.name}.",
+            suffix=".tmp",
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            pickle.dump(payload, tmp_file)
+        tmp_path.replace(target_path)
+
     """
     Manages caching operations for security analysis results
     """
@@ -92,6 +108,12 @@ class CacheManager:
                     continue
                 for cache_file in cache_dir.glob("*.cache"):
                     try:
+                        # Skip files that may still be written by another process.
+                        if (datetime.now().timestamp() - cache_file.stat().st_mtime) < 5:
+                            continue
+                    except OSError:
+                        continue
+                    try:
                         with open(cache_file, "rb") as cache_handle:
                             payload = pickle.load(cache_handle)
                     except Exception:
@@ -114,8 +136,7 @@ class CacheManager:
 
                     try:
                         if payload:
-                            with open(cache_file, "wb") as cache_handle:
-                                pickle.dump(payload, cache_handle)
+                            self._atomic_pickle_write(cache_file, payload)
                         else:
                             cache_file.unlink()
                     except OSError as exc:
@@ -205,10 +226,8 @@ class CacheManager:
                 return
             
             try:
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(cache_path, 'wb') as f:
-                    pickle.dump(cache_dict[file_path], f)
-                    logger.debug(f"Saved {mode.value} {analysis_type.value} chunk cache for {file_path}: {len(cache_dict[file_path])} entries")
+                self._atomic_pickle_write(cache_path, cache_dict[file_path])
+                logger.debug(f"Saved {mode.value} {analysis_type.value} chunk cache for {file_path}: {len(cache_dict[file_path])} entries")
             except Exception as e:
                 logger.exception(f"Error saving {mode.value} {analysis_type.value} chunk cache: {str(e)}")
     

@@ -118,7 +118,7 @@ cd oasis
 2. Install with pipx:
 ```bash
 # First time installation
-pipx install --editable .
+pipx install -e .
 ```
 
 ## 🔄 Update
@@ -187,7 +187,7 @@ oasis -i [path_to_analyze] -v sqli,xss --clear-cache-scan -sm gemma3:4b -m gemma
 Full production scan:
 ```bash
 # Comprehensive scan of a large codebase
-oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:lates -t 0.7 --vulns all
+oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.7 --vulns all
 ```
 
 ## 🎮 Command Line Arguments
@@ -196,6 +196,8 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:lates -t 0.7
 - `--input` `-i`: Path to file, directory, or .txt file containing newline-separated paths to analyze
 - `--output-format` `-of`: Comma-separated formats or `all` for json, sarif, pdf, html, md (default: all)
 - `--extensions` `-x`: Custom file extensions to analyze (e.g., "py,js,java")
+- `--language` `-l`: Language for reports (default: en)  
+  Supported: 🇬🇧 English (en), 🇫🇷 Français (fr), 🇪🇸 Español (es), 🇩🇪 Deutsch (de), 🇮🇹 Italiano (it), 🇵🇹 Português (pt), 🇷🇺 Русский (ru), 🇨🇳 中文 (zh), 🇯🇵 日本語 (ja)
 
 ### Analysis Configuration
 - `--analyze-type` `-at`: Analyze type [standard, deep] (default: standard)
@@ -355,10 +357,20 @@ For the best results with OASIS:
 | `rce` | Remote Code Execution |
 | `ssrf` | Server-Side Request Forgery |
 | `xxe` | XML External Entity |
-| `path` | Path Traversal |
+| `pathtra` | Path Traversal |
 | `idor` | Insecure Direct Object Reference |
 | `auth` | Authentication Issues |
 | `csrf` | Cross-Site Request Forgery |
+| `cmdi` | Command Injection |
+| `cors` | CORS Misconfiguration |
+| `debug` | Debug Information Exposure |
+| `deser` | Insecure Deserialization |
+| `jwt` | JWT Implementation Flaws |
+| `lfi` | Local File Inclusion |
+| `redirect` | Open Redirect |
+| `rfi` | Remote File Inclusion |
+| `secrets` | Hardcoded Secrets |
+| `upload` | File Upload Vulnerabilities |
 
 ## 📁 Output Structure
 

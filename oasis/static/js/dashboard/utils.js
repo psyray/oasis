@@ -231,7 +231,7 @@ if (typeof DashboardApp !== 'undefined') {
     DashboardApp.debug("Grouping reports by model and vulnerability");
     return reports.map(report => {
         // Extraction of important properties
-        const { model, vulnerability_type, path, date, format, stats, alternative_formats, date_visible } = report;
+        const { model, vulnerability_type, path, date, format, stats, alternative_formats, language, date_visible } = report;
         
         // Construction of a simplified report
         return {
@@ -242,6 +242,7 @@ if (typeof DashboardApp !== 'undefined') {
             format,
             date_visible: date_visible !== undefined ? date_visible : true,
             stats: stats || { high_risk: 0, medium_risk: 0, low_risk: 0, total_findings: 0, files_analyzed: 0 },
+            language,
             alternative_formats: alternative_formats || {}
         };
     });
@@ -314,12 +315,26 @@ if (typeof DashboardApp !== 'undefined') {
         .join(' ');
     };
 
+    // Precompute once to avoid sorting on each getModelEmoji call.
+    const modelEmojiEntries = Object.entries(modelEmojis).sort(
+        ([keyA], [keyB]) => keyB.length - keyA.length
+    );
+
     DashboardApp.getModelEmoji = function(model) {
-    // Try to match by prefix
-    for (const [key, emoji] of Object.entries(modelEmojis)) {
-        // Check if model starts with key or key starts with model
-        if (model.toLowerCase().startsWith(key.toLowerCase()) || 
-            key.toLowerCase().startsWith(model.toLowerCase())) {
+    const modelLower = String(model || '').toLowerCase();
+
+    // First pass: strict prefix matching, prioritizing more specific keys first.
+    for (const [key, emoji] of modelEmojiEntries) {
+        const keyLower = key.toLowerCase();
+        if (modelLower.startsWith(keyLower)) {
+            return emoji + ' ';
+        }
+    }
+
+    // Second pass: backward-compatible substring fallback for non-prefix names.
+    for (const [key, emoji] of modelEmojiEntries) {
+        const keyLower = key.toLowerCase();
+        if (modelLower.includes(keyLower)) {
             return emoji + ' ';
         }
     }
@@ -339,6 +354,27 @@ if (typeof DashboardApp !== 'undefined') {
     
     // Default emoji if no match found
     return '🔒 ';
+    };
+
+    DashboardApp.getLanguageMeta = function(languageCode) {
+    const registry = (window.__OASIS_DASHBOARD__ && window.__OASIS_DASHBOARD__.languages) || {};
+    const builtInRegistry = {
+        en: { name: 'English', emoji: '🇬🇧' },
+        fr: { name: 'Français', emoji: '🇫🇷' },
+        es: { name: 'Español', emoji: '🇪🇸' },
+        de: { name: 'Deutsch', emoji: '🇩🇪' },
+        it: { name: 'Italiano', emoji: '🇮🇹' },
+        pt: { name: 'Português', emoji: '🇵🇹' }
+    };
+    const normalizedRaw = String(languageCode || 'en').trim().toLowerCase();
+    const normalized = normalizedRaw.split(/[-_]/)[0] || 'en';
+    const fallback = registry.en || builtInRegistry.en;
+    const current = registry[normalized] || builtInRegistry[normalized] || fallback;
+    return {
+        code: normalized || 'en',
+        name: current.name || fallback.name || 'English',
+        emoji: current.emoji || fallback.emoji || '🇬🇧'
+    };
     };
 
     DashboardApp.debug('Utils module loaded');

@@ -10,7 +10,7 @@ from markdown.preprocessors import Preprocessor
 from jinja2 import Environment, FileSystemLoader
 
 # Import from configuration
-from .config import REPORT
+from .config import REPORT, LANGUAGES
 
 # Import from other modules
 from .export import artifact_filename
@@ -38,7 +38,8 @@ class Report:
         output_format: List of output formats to generate
     """
     
-    def __init__(self, input_path: str | Path, output_format: List[str], models: List[str] = None, current_model: str = None):
+    def __init__(self, input_path: str | Path, output_format: List[str], models: List[str] = None, 
+                 current_model: str = None, language: str = 'en'):
         """
         Initialize the report generator
         
@@ -47,6 +48,7 @@ class Report:
             output_format: List of output formats to generate
             models: List of models to generate reports for
             current_model: Current model being used
+            language: Language code for reports (default: en)
         """
         if models is None:
             models = []
@@ -57,6 +59,19 @@ class Report:
         self.report_dirs = {}
         self.models = models
         self.current_model = current_model
+        self.original_language = language
+        normalized_language = str(language or "en").strip().lower()
+        self.language_code = normalized_language.split("-", 1)[0].split("_", 1)[0] or "en"
+        if self.language_code not in LANGUAGES:
+            logger.warning(
+                "Unsupported language code '%s' (normalized from %r); falling back to default language 'en'. Available languages: %s",
+                self.language_code,
+                self.original_language,
+                ", ".join(sorted(LANGUAGES.keys())),
+            )
+            self.language_code = "en"
+        self.language = LANGUAGES[self.language_code]
+
 
         # Configure the Jinja2 environment
         template_dir = Path(__file__).parent / 'templates'
@@ -107,6 +122,11 @@ class Report:
                 for model_dir in models_dir:
                     self.report_dirs[model_dir][fmt] = base_dir / model_dir / fmt
                     self.ensure_directory(self.report_dirs[model_dir][fmt])
+                    
+                    # Create language.txt file in the report directory
+                    lang_file = self.report_dirs[model_dir][fmt].parent / 'language.txt'
+                    with open(lang_file, 'w', encoding='utf-8') as f:
+                        f.write(self.language_code)
 
         return self.report_dirs
     
@@ -197,6 +217,7 @@ class Report:
             title=f"{vuln_name} Security Analysis",
             generated_at=generate_timestamp(),
             model_name=model_name,
+            language=self.language_code,
             vulnerability_name=vuln_name,
             vulnerability=dict(vulnerability),
             files=file_entries,
@@ -417,7 +438,7 @@ class Report:
         output_files = self.filter_output_files("_executive_summary")
 
         # Start building the executive summary
-        report = self.create_header("Security Analysis Executive Summary", model_name)
+        report = self.create_header("Executive Summary", model_name)
         
         report.extend([
             "\n## Overview",

@@ -110,6 +110,7 @@ class VulnerabilityReportDocument(BaseModel):
     title: str
     generated_at: str
     model_name: str
+    language: str = "en"
     vulnerability_name: str
     vulnerability: Dict[str, Any] = Field(default_factory=dict)
     files: List[FileReportEntry] = Field(default_factory=list)

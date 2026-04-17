@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import pickle
@@ -89,8 +90,9 @@ class EmbeddingManager:
             args: Arguments
         """
         # Create cache directory
-        cache_dir=create_cache_dir(self.input_path)
-        self.cache_file = cache_dir / f"{sanitize_name(self.input_path)}_{sanitize_name(self.embedding_model)}.cache"
+        cache_dir = create_cache_dir(self.input_path)
+        path_id = hashlib.sha1(str(self.input_path).encode("utf-8")).hexdigest()[:16]
+        self.cache_file = cache_dir / f"{path_id}_{sanitize_name(self.embedding_model)}.cache"
         logger.debug(f"Cache file: {self.cache_file}")
         
         # Clear cache if requested

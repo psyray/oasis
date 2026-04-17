@@ -8,7 +8,7 @@ from typing import Union
 
 
 # Import from configuration
-from .config import MODEL_EMOJIS, REPORT, DEFAULT_ARGS, validate_report_dashboard_formats
+from .config import LANGUAGES, MODEL_EMOJIS, REPORT, DEFAULT_ARGS, validate_report_dashboard_formats
 
 # Import from other modules
 from .tools import generate_timestamp, setup_logging, logger, display_logo, get_vulnerability_mapping
@@ -45,6 +45,20 @@ class OasisScanner:
         if normalized_value == "no":
             return False
         raise argparse.ArgumentTypeError("Expected 'yes' or 'no'")
+
+    @staticmethod
+    def _language_help_text() -> str:
+        """
+        Build help text for language flag, including supported codes.
+        """
+        supported = ", ".join(
+            f"{meta.get('name', code)} ({code})"
+            for code, meta in LANGUAGES.items()
+        )
+        return (
+            "Language for reports (default: en).\n"
+            f"Supported: {supported}"
+        )
 
     @staticmethod
     def _parse_output_formats_list(raw: str) -> list:
@@ -109,6 +123,14 @@ class OasisScanner:
             def _split_lines(self, text, width):
                 if text.startswith('Vulnerability types'):
                     return text.splitlines()
+                if '\n' in text:
+                    lines = []
+                    for part in text.splitlines():
+                        if not part.strip():
+                            lines.append('')
+                            continue
+                        lines.extend(super()._split_lines(part, width))
+                    return lines
                 return super()._split_lines(text, width)
 
         parser = argparse.ArgumentParser(
@@ -133,6 +155,13 @@ class OasisScanner:
         )
         io_group.add_argument('-x', '--extensions', type=str,
                             help='Comma-separated list of file extensions to analyze (e.g., "py,js,java")')
+        io_group.add_argument(
+            '-l', '--language',
+            dest='language',
+            type=str,
+            default='en',
+            help=self._language_help_text(),
+        )
         
         # Analysis Configuration
         analysis_group = parser.add_argument_group('Analysis Configuration')
@@ -258,7 +287,7 @@ class OasisScanner:
                 llm_model=main_model,
                 embedding_manager=self.embedding_manager,
                 ollama_manager=self.ollama_manager,
-                scan_model=scan_model
+                scan_model=scan_model[0]
             )
             
             # Set the current model for report generation
@@ -348,8 +377,12 @@ class OasisScanner:
         elif init_result is False:
             return 1  # Error exit code for validation failures
 
-        # Initialize report
-        self.report = Report(self.args.input_path, self.args.output_format)
+        # Initialize report with language settings
+        self.report = Report(
+            self.args.input_path, 
+            self.args.output_format,
+            language=getattr(self.args, 'language', 'en')
+        )
 
         # Initialize Ollama and check connection
         if not self.args.web:
@@ -521,28 +554,37 @@ class OasisScanner:
             logger.error("No scan model was selected.")
             return 1
             
+        if isinstance(scan_model, list):
+            scan_model_name = scan_model[0] if scan_model else None
+        else:
+            scan_model_name = scan_model
+
+        if not scan_model_name:
+            logger.error("No scan model was selected.")
+            return 1
+
         if not main_models:
             logger.warning("No main models were selected, using scan model for deep analysis as well")
-            main_models = [scan_model]
+            main_models = [scan_model_name]
         
         # Store the scan model in the arguments
-        self.args.scan_model = scan_model
+        self.args.scan_model = scan_model_name
         
         # Log model selection information
-        display_scan_model = self.ollama_manager.get_model_display_name(scan_model)
+        display_scan_model = self.ollama_manager.get_model_display_name(scan_model_name)
         display_main_models = ", ".join([self.ollama_manager.get_model_display_name(m) for m in main_models])
-        if len(main_models) == 1 and scan_model == main_models[0]:
+        if len(main_models) == 1 and scan_model_name == main_models[0]:
             logger.info(f"{MODEL_EMOJIS['default']}Using '{display_scan_model}' for both scanning and deep analysis")
         else:
             logger.info(f"{MODEL_EMOJIS['default']}Using '{display_scan_model}' for scanning and {display_main_models} for deep analysis")
 
         self.ollama_manager.configure_analysis_model_thinking(
-            scan_model=scan_model,
+            scan_model=scan_model_name,
             main_models=main_models,
             scan_model_thinking=self.args.small_model_thinking,
             main_model_thinking=self.args.model_thinking
         )
-        if scan_model in main_models and self.args.small_model_thinking != self.args.model_thinking:
+        if scan_model_name in main_models and self.args.small_model_thinking != self.args.model_thinking:
             logger.warning(
                 "Scan and deep analysis share the same model; applying deep analysis thinking setting for that model."
             )
@@ -557,7 +599,7 @@ class OasisScanner:
         self._configure_run_error_logging()
 
         # Run analysis with all main models
-        result = self.run_analysis_mode(main_models, scan_model, vuln_mapping)
+        result = self.run_analysis_mode(main_models, [scan_model_name], vuln_mapping)
         if not result:
             return 1
 

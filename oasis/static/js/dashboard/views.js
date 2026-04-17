@@ -125,12 +125,14 @@ DashboardApp.renderTreeView = function(groupBy) {
                     const reportDate = report.date ? new Date(report.date) : null;
                     const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
                     const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+                    const languageMeta = DashboardApp.getLanguageMeta(report.language);
                     
                     html += `
                         <span class="date-tag clickable" 
                             onclick="${openReportOnclick(report.path, report.format)}" 
                             data-model="${h(model)}" 
                             data-vulnerability="${h(report.vulnerability_type)}">
+                            <span class="language-flag" title="${h(languageMeta.name)}">${h(languageMeta.emoji)}</span>
                             <div class="date-main">${formattedDate}</div>
                             <div class="date-time">${formattedTime}</div>
                         </span>
@@ -194,12 +196,14 @@ DashboardApp.renderTreeView = function(groupBy) {
                     const reportDate = report.date ? new Date(report.date) : null;
                     const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
                     const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+                    const languageMeta = DashboardApp.getLanguageMeta(report.language);
                     
                     html += `
                         <span class="date-tag clickable" 
                             onclick="${openReportOnclick(report.path, report.format)}" 
                             data-model="${h(report.model)}" 
                             data-vulnerability="${h(vuln)}">
+                            <span class="language-flag" title="${h(languageMeta.name)}">${h(languageMeta.emoji)}</span>
                             <div class="date-main">${formattedDate}</div>
                             <div class="date-time">${formattedTime}</div>
                         </span>
@@ -237,21 +241,7 @@ DashboardApp.renderListView = function() {
         return;
     }
     
-    // Load the template if it's not already loaded
-    if (!DashboardApp.cardTemplate) {
-        fetch('/static/templates/dashboard_card.html')
-            .then(response => response.text())
-            .then(template => {
-                DashboardApp.cardTemplate = template;
-                DashboardApp.renderListViewWithTemplate();
-            })
-            .catch(error => {
-                console.error('Error loading template:', error);
-                container.innerHTML = '<div class="error-message">Error loading template. Please refresh the page.</div>';
-            });
-    } else {
-        DashboardApp.renderListViewWithTemplate();
-    }
+    DashboardApp.renderListViewWithTemplate();
 };
 
 DashboardApp.renderListViewWithTemplate = function() {
@@ -335,11 +325,13 @@ DashboardApp.renderListViewWithTemplate = function() {
                 const reportDate = report.date ? new Date(report.date) : null;
                 const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
                 const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+                const languageMeta = DashboardApp.getLanguageMeta(report.language);
                 
                 datesHTML += `
                     <span class="date-tag clickable" 
                         onclick="${openReportOnclick(report.path, report.format)}" 
                         data-model="${h(report.model)}">
+                        <span class="language-flag" title="${h(languageMeta.name)}">${h(languageMeta.emoji)}</span>
                         <div class="date-main">${formattedDate}</div>
                         <div class="date-time">${formattedTime}</div>
                     </span>
@@ -366,7 +358,7 @@ DashboardApp.renderListViewWithTemplate = function() {
         });
             
         // Use the template and replace placeholders
-        let cardHTML = DashboardApp.cardTemplate
+        let cardHTML = DashboardApp.templates.dashboardCard
             .replace('${formattedVulnTypeEmoji}', formattedVulnEmoji)
             .replace('${formattedVulnType}', formattedVuln)
             .replace('${modelsHTML}', modelsHTML)
@@ -457,4 +449,4 @@ DashboardApp.switchView = function(viewMode) {
     DashboardApp.renderCurrentView();
 };
 
-DashboardApp.debug("Views module loaded"); 
+DashboardApp.debug("Views module loaded");
