@@ -102,6 +102,8 @@ class SecurityAnalyzer:
             logger.exception(f"Initialization error: {str(e)}")
             raise RuntimeError("Could not connect to Ollama server") from e
 
+        self.args = args
+
         # Set up primary (deep) model
         self.llm_model = llm_model
         
@@ -1680,6 +1682,7 @@ class AdaptiveAnalysisPipeline:
             analyzer: SecurityAnalyzer instance with required methods and attributes
         """
         self.analyzer = analyzer
+        self.args = analyzer.args
         self.ollama_manager = analyzer.ollama_manager
         self.client = analyzer.client
         self.llm_model = analyzer.llm_model
@@ -2380,6 +2383,7 @@ class BatchAdaptiveAnalysis:
         """
         self.pipeline = pipeline
         self.analyzer = pipeline.analyzer
+        self.args = pipeline.analyzer.args
         self.ollama_manager = pipeline.ollama_manager
         self.client = pipeline.client
         self.llm_model = pipeline.llm_model

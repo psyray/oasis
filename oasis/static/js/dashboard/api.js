@@ -1,6 +1,9 @@
 // API functions for fetching data
-DashboardApp.buildFilterParams = function() {
+DashboardApp.buildFilterParams = function(options = {}) {
     // Create and return URLSearchParams object with active filters
+    const {
+        includeVulnerability = true
+    } = options;
     const params = new URLSearchParams();
     
     if (DashboardApp.activeFilters.models && DashboardApp.activeFilters.models.length > 0) {
@@ -11,7 +14,11 @@ DashboardApp.buildFilterParams = function() {
         params.append('format', DashboardApp.activeFilters.formats.join(','));
     }
     
-    if (DashboardApp.activeFilters.vulnerabilities && DashboardApp.activeFilters.vulnerabilities.length > 0) {
+    if (
+        includeVulnerability &&
+        DashboardApp.activeFilters.vulnerabilities &&
+        DashboardApp.activeFilters.vulnerabilities.length > 0
+    ) {
         params.append('vulnerability', DashboardApp.activeFilters.vulnerabilities.join(','));
     }
     
@@ -58,17 +65,20 @@ DashboardApp.fetchReports = function() {
         .catch(error => {
             console.error('Error fetching reports:', error);
             const errorMessage = DashboardApp._errorMessage(error);
-            document.getElementById('reports-container').innerHTML = 
-                `<div class="error-message">Error fetching reports: ${DashboardApp._escapeHtml(errorMessage)}</div>`;
+            DashboardApp._appendTextMessage(
+                document.getElementById('reports-container'),
+                'error-message',
+                `Error fetching reports: ${errorMessage}`
+            );
         });
 };
 
-DashboardApp.fetchStats = function(forceRefresh = false) {
+DashboardApp.fetchStats = function(forceRefresh = false, options = {}) {
     DashboardApp.debug("Fetching stats...");
     DashboardApp.showLoading('stats-container');
     
     // Use the utility function to build parameters
-    const params = DashboardApp.buildFilterParams();
+    const params = DashboardApp.buildFilterParams(options);
     
     // Add force parameter if requested
     if (forceRefresh) {
@@ -102,8 +112,11 @@ DashboardApp.fetchStats = function(forceRefresh = false) {
         .catch(error => {
             console.error('Error fetching stats:', error);
             const errorMessage = DashboardApp._errorMessage(error);
-            document.getElementById('stats-container').innerHTML = 
-                `<div class="error-message">Error fetching stats: ${DashboardApp._escapeHtml(errorMessage)}</div>`;
+            DashboardApp._appendTextMessage(
+                document.getElementById('stats-container'),
+                'error-message',
+                `Error fetching stats: ${errorMessage}`
+            );
         });
 };
 
@@ -114,10 +127,16 @@ DashboardApp.refreshDashboard = function() {
     this.showLoading('stats-container');
     this.showLoading('reports-container');
     
-    // Fetch fresh data
+    const baseParams = DashboardApp.buildFilterParams();
+    baseParams.append('force', '1');
+    const statsParams = new URLSearchParams(baseParams);
+    const reportsParams = new URLSearchParams(baseParams);
+    reportsParams.append('md_dates_only', '1');
+
+    // Fetch fresh data with active filters preserved
     Promise.all([
-        fetch('/api/stats?force=1').then(response => response.json()),
-        fetch('/api/reports?force=1&md_dates_only=1').then(response => response.json())
+        fetch(`/api/stats?${statsParams.toString()}`).then(response => response.json()),
+        fetch(`/api/reports?${reportsParams.toString()}`).then(response => response.json())
     ])
     .then(([statsData, reportsData]) => {
         // Update the state
@@ -141,8 +160,11 @@ DashboardApp.refreshDashboard = function() {
     })
     .catch(error => {
         console.error('Error refreshing dashboard:', error);
-        document.getElementById('stats-container').innerHTML = 
-            '<div class="error-message">Error refreshing dashboard. Please try again later.</div>';
+        DashboardApp._appendTextMessage(
+            document.getElementById('stats-container'),
+            'error-message',
+            'Error refreshing dashboard. Please try again later.'
+        );
     });
 };
 

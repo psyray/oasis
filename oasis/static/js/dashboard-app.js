@@ -155,10 +155,16 @@ const DashboardApp = {
         
         // Load card template
         this.loadCardTemplate();
+
+        // Restore persisted vulnerability filters before first API calls.
+        if (typeof this.loadVulnerabilityFiltersFromStorage === 'function') {
+            this.loadVulnerabilityFiltersFromStorage();
+        }
         
         // Initialize the dashboard
         this.fetchReports();
-        this.fetchStats();
+        // Keep vulnerability options complete on page reload.
+        this.fetchStats(false, { includeVulnerability: false });
         this.initializeFilters();
         
         // Initialize modal events if available
@@ -204,6 +210,9 @@ const DashboardApp = {
                     vulnerabilities: [],
                     dateRange: null
                 };
+                if (typeof self.clearVulnerabilityFilterStorage === 'function') {
+                    self.clearVulnerabilityFilterStorage();
+                }
                 
                 // Reset checkboxes
                 document.querySelectorAll('.filter-checkbox').forEach(checkbox => {

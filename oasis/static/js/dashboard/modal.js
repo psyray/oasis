@@ -144,7 +144,6 @@ DashboardApp.ensureModalStyles = function() {
 
 DashboardApp.openReport = function(path, format) {
     DashboardApp.debug("Opening report:", path, format);
-    const jsq = DashboardApp._escapeJsSingleQuote;
     if (!path) {
         console.error("No path provided for report");
         return;
@@ -210,24 +209,14 @@ DashboardApp.openReport = function(path, format) {
             })
             .then((data) => {
                 if (data.content) {
-                    const htmlContainer = document.createElement('div');
-                    htmlContainer.className = 'html-content-container';
-                    htmlContainer.innerHTML = data.content;
-
-                    const elementsToRemove = htmlContainer.querySelectorAll('html, head, body, script, style, link');
-                    elementsToRemove.forEach(el => {
-                        if (el.tagName.toLowerCase() === 'body') {
-                            const bodyContent = el.innerHTML;
-                            el.parentNode.innerHTML = bodyContent;
-                        } else {
-                            el.remove();
-                        }
-                    });
-
-                    modalContent.innerHTML = '';
-                    modalContent.appendChild(htmlContainer);
+                    DashboardApp._clearElement(modalContent);
+                    DashboardApp._appendSanitizedHtml(modalContent, data.content, 'html-content-container');
                 } else {
-                    modalContent.innerHTML = '<div class="error-message">Unable to load report content.</div>';
+                    DashboardApp._appendTextMessage(
+                        modalContent,
+                        'error-message',
+                        'Unable to load report content.'
+                    );
                 }
                 DashboardApp.hideLoading('report-modal-content');
             })
@@ -244,16 +233,24 @@ DashboardApp.openReport = function(path, format) {
                     })
                     .then((data) => {
                         if (data.content) {
-                            modalContent.innerHTML = data.content;
+                            DashboardApp._appendSanitizedHtml(modalContent, data.content);
                         } else {
-                            modalContent.innerHTML = '<div class="error-message">Unable to load report content.</div>';
+                            DashboardApp._appendTextMessage(
+                                modalContent,
+                                'error-message',
+                                'Unable to load report content.'
+                            );
                         }
                         DashboardApp.hideLoading('report-modal-content');
                     })
                     .catch((markdownError) => {
                         console.error('Error fetching markdown fallback for JSON path:', markdownError);
                         const errorMessage = DashboardApp._errorMessage(markdownError);
-                        modalContent.innerHTML = `<div class="error-message">Error loading report content: ${DashboardApp._escapeHtml(errorMessage)}</div>`;
+                        DashboardApp._appendTextMessage(
+                            modalContent,
+                            'error-message',
+                            `Error loading report content: ${errorMessage}`
+                        );
                         DashboardApp.hideLoading('report-modal-content');
                     });
             });
@@ -268,16 +265,24 @@ DashboardApp.openReport = function(path, format) {
             })
             .then((data) => {
                 if (data.content) {
-                    modalContent.innerHTML = data.content;
+                    DashboardApp._appendSanitizedHtml(modalContent, data.content);
                 } else {
-                    modalContent.innerHTML = '<div class="error-message">Unable to load report content.</div>';
+                    DashboardApp._appendTextMessage(
+                        modalContent,
+                        'error-message',
+                        'Unable to load report content.'
+                    );
                 }
                 DashboardApp.hideLoading('report-modal-content');
             })
             .catch((error) => {
                 console.error('Error fetching report content:', error);
                 const errorMessage = DashboardApp._errorMessage(error);
-                modalContent.innerHTML = `<div class="error-message">Error loading report content: ${DashboardApp._escapeHtml(errorMessage)}</div>`;
+                DashboardApp._appendTextMessage(
+                    modalContent,
+                    'error-message',
+                    `Error loading report content: ${errorMessage}`
+                );
                 DashboardApp.hideLoading('report-modal-content');
             });
     } else if (format === 'html') {
@@ -290,26 +295,9 @@ DashboardApp.openReport = function(path, format) {
                 return response.text();
             })
             .then(htmlContent => {
-                // Create a div to contain the HTML content
-                const htmlContainer = document.createElement('div');
-                htmlContainer.className = 'html-content-container';
-                htmlContainer.innerHTML = htmlContent;
-                
-                // Remove elements that could break the layout
-                const elementsToRemove = htmlContainer.querySelectorAll('html, head, body, script, style, link');
-                elementsToRemove.forEach(el => {
-                    if (el.tagName.toLowerCase() === 'body') {
-                        // For body, we want to keep its content
-                        const bodyContent = el.innerHTML;
-                        el.parentNode.innerHTML = bodyContent;
-                    } else {
-                        el.remove();
-                    }
-                });
-                
-                // Inject the content
-                modalContent.innerHTML = '';
-                modalContent.appendChild(htmlContainer);
+                // Inject sanitized HTML content
+                DashboardApp._clearElement(modalContent);
+                DashboardApp._appendSanitizedHtml(modalContent, htmlContent, 'html-content-container');
                 
                 // Add a style to ensure the content is displayed properly
                 const style = document.createElement('style');
@@ -327,7 +315,11 @@ DashboardApp.openReport = function(path, format) {
             .catch(error => {
                 console.error('Error fetching HTML content:', error);
                 const errorMessage = DashboardApp._errorMessage(error);
-                modalContent.innerHTML = `<div class="error-message">Error loading HTML content: ${DashboardApp._escapeHtml(errorMessage)}</div>`;
+                DashboardApp._appendTextMessage(
+                    modalContent,
+                    'error-message',
+                    `Error loading HTML content: ${errorMessage}`
+                );
                 DashboardApp.hideLoading('report-modal-content');
             });
     } else if (format === 'pdf') {
@@ -342,7 +334,7 @@ DashboardApp.openReport = function(path, format) {
         embed.style.cssText = 'position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none;';
         
         pdfContainer.appendChild(embed);
-        modalContent.innerHTML = '';
+        DashboardApp._clearElement(modalContent);
         modalContent.appendChild(pdfContainer);
         
         // Ajustements pour l'Observateur de redimensionnement
@@ -360,7 +352,11 @@ DashboardApp.openReport = function(path, format) {
         
         DashboardApp.hideLoading('report-modal-content');
     } else {
-        modalContent.innerHTML = `<div class="format-message">This format (${DashboardApp._escapeHtml(String(format).toUpperCase())}) cannot be displayed directly. Use the download option.</div>`;
+        DashboardApp._appendTextMessage(
+            modalContent,
+            'format-message',
+            `This format (${String(format).toUpperCase()}) cannot be displayed directly. Use the download option.`
+        );
         DashboardApp.hideLoading('report-modal-content');
     }
     
@@ -389,15 +385,12 @@ DashboardApp.openReport = function(path, format) {
         const availableFormats = DashboardApp.getAvailableFormatsForPath(path, currentFormat);
         const labels = DashboardApp.FORMAT_DOWNLOAD_LABELS || {};
 
-        let downloadHtml = '';
+        DashboardApp._clearElement(downloadOptions);
         availableFormats.forEach(ext => {
             const extLower = String(ext).toLowerCase();
             const btnLabel = fh && fh.formatDownloadButtonLabel
                 ? fh.formatDownloadButtonLabel(ext)
                 : (String(ext).toUpperCase());
-            const titleUnknown = labels[extLower]
-                ? ''
-                : ` title="${DashboardApp._escapeHtml('Format: ' + ext)}"`;
             let formattedPath = path;
             if (fh && fh.reportPathForAlternateFormat) {
                 formattedPath = fh.reportPathForAlternateFormat(path, extLower);
@@ -409,11 +402,17 @@ DashboardApp.openReport = function(path, format) {
                     : ('.' + extLower);
                 formattedPath = basePath.replace(`/${currentFormat}/`, `/${extLower}/`) + suffix;
             }
-            downloadHtml += `<button class="btn btn-format"${titleUnknown} onclick="downloadReportFile('${jsq(formattedPath)}', '${jsq(extLower)}')">
-                           ${btnLabel}</button>`;
+            const button = document.createElement('button');
+            button.className = 'btn btn-format';
+            if (!labels[extLower]) {
+                button.title = `Format: ${ext}`;
+            }
+            button.textContent = btnLabel;
+            button.addEventListener('click', () => {
+                DashboardApp.downloadReportFile(formattedPath, extLower);
+            });
+            downloadOptions.appendChild(button);
         });
-
-        downloadOptions.innerHTML = downloadHtml;
     }
 };
 
