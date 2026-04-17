@@ -1,0 +1,83 @@
+{% macro render_header(document) -%}
+<h1>{{ document.title }}</h1>
+<p><strong>Date:</strong> {{ document.generated_at }} &mdash; <strong>Model:</strong> {{ document.model_name }}</p>
+<p><strong>Vulnerability:</strong> {{ document.vulnerability_name }}</p>
+{%- endmacro %}
+
+{% macro render_table_of_contents() -%}
+<h2 id="table-of-contents">Table of contents</h2>
+<ol>
+  <li><a href="#summary">Summary</a></li>
+  <li><a href="#statistics">Statistics</a></li>
+  <li><a href="#files">Files</a></li>
+  <li><a href="#detailed-analysis">Detailed analysis</a></li>
+  <li><a href="#errors-notes">Errors &amp; Notes</a></li>
+</ol>
+{%- endmacro %}
+
+{% macro render_statistics(stats) -%}
+<h2 id="statistics">Statistics</h2>
+<ul>
+  <li><strong>Files analyzed:</strong> {{ stats.files_analyzed }}</li>
+  <li><strong>Total findings:</strong> {{ stats.total_findings }}</li>
+  <li><strong>Critical:</strong> {{ stats.critical_risk }}</li>
+  <li><strong>High:</strong> {{ stats.high_risk }}</li>
+  <li><strong>Medium:</strong> {{ stats.medium_risk }}</li>
+  <li><strong>Low:</strong> {{ stats.low_risk }}</li>
+</ul>
+{%- endmacro %}
+
+{% macro render_file_summary(files) -%}
+<h2 id="files">Files</h2>
+<table class="summary-table">
+  <thead><tr><th>File</th><th>Similarity</th></tr></thead>
+  <tbody>
+  {% for file in files %}
+    <tr><td><code>{{ file.file_path }}</code></td><td>{{ "%.3f"|format(file.similarity_score) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{%- endmacro %}
+
+{% macro render_chunk_source_lines(chunk) -%}
+{% if chunk.start_line is not none and chunk.end_line is not none %}
+<p class="chunk-source-lines"><strong>Source lines:</strong> {{ chunk.start_line }}&ndash;{{ chunk.end_line }}</p>
+{% endif %}
+{%- endmacro %}
+
+{% macro render_chunk_notes(chunk, file_index, chunk_index) -%}
+<h4>Chunk {{ file_index }}.{{ chunk_index }} notes</h4>
+<pre>{{ chunk.notes }}</pre>
+{%- endmacro %}
+
+{% macro render_finding(finding, file_index, finding_index) -%}
+<h4>Finding {{ file_index }}.{{ finding_index }}: {{ finding.title }} <span class="severity">({{ finding.severity }})</span></h4>
+{% if finding.vulnerable_code %}
+<h5>Vulnerable code</h5>
+<pre><code>{{ finding.vulnerable_code }}</code></pre>
+{% endif %}
+<h5>Explanation</h5>
+<p>{{ finding.explanation }}</p>
+{% if finding.impact %}<h5>Impact</h5><p>{{ finding.impact }}</p>{% endif %}
+{% if finding.entry_point %}<h5>Entry point</h5><p>{{ finding.entry_point }}</p>{% endif %}
+{% if finding.execution_path_diagram %}
+<h5>Execution path</h5>
+<pre><code>{{ finding.execution_path_diagram }}</code></pre>
+{% endif %}
+{% if finding.http_methods %}<h5>HTTP methods</h5><p>{{ finding.http_methods | join(', ') }}</p>{% endif %}
+{% if finding.manipulable_parameters %}<h5>Parameters</h5><p>{{ finding.manipulable_parameters | join(', ') }}</p>{% endif %}
+{% if finding.exploitation_steps %}
+<h5>Exploitation steps</h5>
+<ul>{% for step in finding.exploitation_steps %}<li>{{ step }}</li>{% endfor %}</ul>
+{% endif %}
+{% if finding.example_payloads %}
+<h5>Example payloads</h5>
+<ul>{% for payload in finding.example_payloads %}<li><code>{{ payload }}</code></li>{% endfor %}</ul>
+{% endif %}
+{% if finding.exploitation_conditions %}<h5>Conditions</h5><p>{{ finding.exploitation_conditions }}</p>{% endif %}
+{% if finding.remediation %}<h5>Remediation</h5><p>{{ finding.remediation }}</p>{% endif %}
+{% if finding.secure_code_example %}
+<h5>Secure example</h5>
+<pre><code>{{ finding.secure_code_example }}</code></pre>
+{% endif %}
+{%- endmacro %}

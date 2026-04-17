@@ -43,7 +43,7 @@
 - 🔄 **Interactive Model Selection**: Guided selection of scan and analysis models with parameter-based filtering
 - 💾 **Dual-Layer Caching**: Efficient caching for both embeddings and analysis results to dramatically speed up repeated scans
 - 🔧 **Scan Result Caching**: Store and reuse vulnerability analysis results with model-specific caching
-- 📊 **Rich Reporting**: Detailed reports in multiple formats (Markdown, PDF, HTML)
+- 📊 **Rich Reporting**: Canonical JSON reports plus derived HTML, PDF, and Markdown exports
 - 🔄 **Parallel Processing**: Optimized performance through parallel vulnerability analysis
 - 📝 **Executive Summaries**: Clear overview of all detected vulnerabilities
 - 🎯 **Customizable Scans**: Support for specific vulnerability types and file extensions
@@ -194,7 +194,7 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:lates -t 0.7
 
 ### Input/Output Options
 - `--input` `-i`: Path to file, directory, or .txt file containing newline-separated paths to analyze
-- `--output-format` `-of`: Output format [pdf, html, md] (default: all)
+- `--output-format` `-of`: Comma-separated formats or `all` for json, sarif, pdf, html, md (default: all)
 - `--extensions` `-x`: Custom file extensions to analyze (e.g., "py,js,java")
 
 ### Analysis Configuration
@@ -362,19 +362,65 @@ For the best results with OASIS:
 
 ## 📁 Output Structure
 
+Vulnerability runs are stored under a timestamped directory. For each model, per-format folders include a **canonical JSON** report (`json/*.json`) used by the web dashboard for statistics and previews. Chunk objects may include **`start_line` / `end_line`** (1-based inclusive bounds for the analyzed source segment, computed at split time, not inferred by the model). Each finding may include **`snippet_start_line` / `snippet_end_line`** when the tool can match `vulnerable_code` inside that chunk (otherwise SARIF falls back to the chunk span). **SARIF 2.1.0** (`sarif/*.sarif`) is generated from the same document for toolchains (DefectDojo, SonarQube, IDE SARIF viewers) and maps those spans to `region.startLine` / `region.endLine` when available. HTML and PDF are rendered from that JSON via Jinja2; Markdown is an additional human-readable export.
+
 ```
 security_reports/
-├── [model_name]/
-│   ├── markdown/
-│   │   ├── vulnerability_type.md
-│   │   └── executive_summary.md
-│   ├── pdf/
-│   │   ├── vulnerability_type.pdf
-│   │   └── executive_summary.pdf
-│   └── html/
-│       ├── vulnerability_type.html
-│       └── executive_summary.html
+└── [input_basename]_YYYYMMDD_HHMMSS/
+    ├── logs/
+    │   └── oasis_errors_[run_id].log
+    └── [sanitized_model_name]/
+        ├── json/
+        │   └── vulnerability_type.json
+        ├── sarif/
+        │   └── vulnerability_type.sarif
+        ├── md/
+        │   └── vulnerability_type.md
+        ├── html/
+        │   └── vulnerability_type.html
+        └── pdf/
+            └── vulnerability_type.pdf
 ```
+
+### Ollama structured outputs
+
+Deep and scan analysis calls use Ollama **structured outputs** (`format` with a JSON schema). Use a recent Ollama server; model quality still varies by GGUF. If structured validation fails, the analyzer falls back to safe defaults or regex (function extraction only).
+
+### Structured output hardening
+
+Use this priority order to reduce invalid JSON responses (`Field required`, `json_invalid`, `EOF while parsing a string`):
+
+1. **Model selection first**
+   - Choose a scan model that is stable with strict JSON outputs.
+   - Keep a deep model only if it stays stable across repeated runs on the same corpus.
+   - Compare candidates with the same target files and track invalid JSON rate + average chunk latency.
+2. **Ollama generation settings**
+   - Keep conservative generation settings for structured scan/deep calls.
+   - Keep thinking disabled for strict JSON runs unless a model explicitly requires it.
+   - Ensure chunk size and model context window are compatible to avoid truncated outputs.
+3. **Targeted retry policy**
+   - Retry only known structured failures: missing required `verdict` (scan) and invalid/truncated JSON (`json_invalid`, `EOF while parsing`) for deep responses.
+   - Keep retries bounded (scan: up to 2 retries, deep: up to 1 retry) and append a strict JSON correction reminder on retries.
+   - Keep final fallback behavior deterministic when retries fail.
+4. **Operational safeguards**
+   - Track invalid JSON ratio per run and alert when it exceeds your acceptance threshold.
+   - Review `security_reports/<run_id>/logs/oasis_errors_<run_id>.log` after each scan to identify the failing model/phase/chunk quickly.
+
+Each structured-output error log line includes context fields such as run identifier, model, phase, vulnerability (if available), file path, chunk index, exception type, and a truncated raw preview.
+Retry-aware logs also include `retry_attempt` and `retry_max` so you can distinguish first failure from final fallback.
+
+Example hardened command:
+
+```bash
+oasis -i ./critical-service -sm qwen2.5-coder:7b -m bugtraceai-apex-q4 --adaptive -t 0.6 -smt no -mt no
+```
+
+### Web dashboard and Reload
+
+- Statistics and risk summaries are read from **`json/*.json`**.
+- **Reload** refreshes both `/api/stats?force=1` and `/api/reports?force=1` so listings stay in sync with the filesystem.
+- Canonical JSON reports are previewed in the Web UI by rendering HTML from the JSON via the Jinja template, so the modal matches the HTML/PDF structure as closely as possible.
+- Markdown preview (`/api/report-content/...`) remains the fallback for legacy reports that do not have a sibling `json/<same-stem>.json`, or when canonical JSON HTML preview cannot be generated.
 
 ## 💾 Cache Management
 

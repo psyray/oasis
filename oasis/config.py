@@ -1,7 +1,8 @@
 """
 Configuration constants for OASIS
 """
-from typing import Set
+import logging
+from typing import Any, Dict, List, Optional, Set
 
 # Analysis version (used for cache compatibility)
 # This constant must be incremented manually ONLY when the analysis behavior changes in a way that would make cached results obsolete.
@@ -841,7 +842,9 @@ EXTRACT_FUNCTIONS = {
 
 # Report configuration
 REPORT = {
-    'OUTPUT_FORMATS': ['pdf', 'html', 'md'],
+    'OUTPUT_FORMATS': ['json', 'sarif', 'pdf', 'html', 'md'],
+    # Dashboard / API: human-readable first; any OUTPUT_FORMATS entry missing here is appended after
+    'DASHBOARD_FORMAT_DISPLAY_ORDER': ['html', 'pdf', 'md', 'json', 'sarif'],
     'OUTPUT_DIR': 'security_reports',
     'BACKGROUND_COLOR': '#F5F2E9',
     'EXPLAIN_ANALYSIS': """
@@ -887,3 +890,25 @@ Code embeddings are advanced representations that convert your code into numeric
 This report provides a high-level overview of security vulnerabilities detected in the codebase.
     """
 }
+
+_cfg_log = logging.getLogger(__name__)
+
+
+def validate_report_dashboard_formats(report_cfg: Optional[Dict[str, Any]] = None) -> List[str]:
+    """
+    Return ``DASHBOARD_FORMAT_DISPLAY_ORDER`` entries that are not in ``OUTPUT_FORMATS``
+    (case-insensitive). Logs a warning when any are found.
+
+    Not run at import time: call from CLI / web entrypoints (see ``OasisScanner._init_arguments``)
+    or from tests that import this function explicitly.
+    """
+    r = report_cfg if report_cfg is not None else REPORT
+    allowed_lower = {str(x).lower() for x in (r.get("OUTPUT_FORMATS") or [])}
+    order = r.get("DASHBOARD_FORMAT_DISPLAY_ORDER") or []
+    bad = [x for x in order if str(x).lower() not in allowed_lower]
+    if bad:
+        _cfg_log.warning(
+            "DASHBOARD_FORMAT_DISPLAY_ORDER contains formats missing from OUTPUT_FORMATS: %s",
+            bad,
+        )
+    return bad

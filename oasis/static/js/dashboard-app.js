@@ -104,6 +104,7 @@ const DashboardApp = {
         return new Promise((resolve, reject) => {
             // Define modules to load in order
             const modules = [
+                'bootstrap.js',
                 'utils.js',
                 'filters.js',
                 'views.js',
@@ -128,6 +129,9 @@ const DashboardApp = {
             // Load scripts sequentially
             const loadNextScript = (index) => {
                 if (index >= modules.length) {
+                    if (typeof DashboardApp.initFormatHelpers === 'function') {
+                        DashboardApp.initFormatHelpers();
+                    }
                     resolve();
                     return;
                 }

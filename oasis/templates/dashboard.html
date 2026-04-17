@@ -9,6 +9,10 @@
     // Pre-loading model emojis from Python
     const modelEmojis = {{ model_emojis|tojson|safe }};
     const vulnEmojis = {{ vuln_emojis|tojson|safe }};
+    // Single source of truth for allowed formats and UI ordering (see REPORT in config.py)
+    window.__OASIS_DASHBOARD__ = window.__OASIS_DASHBOARD__ || {};
+    window.__OASIS_DASHBOARD__.outputFormats = {{ report_output_formats|tojson|safe }};
+    window.__OASIS_DASHBOARD__.formatDisplayOrder = {{ dashboard_format_display_order|tojson|safe }};
 </script>
 {% endblock %}
 

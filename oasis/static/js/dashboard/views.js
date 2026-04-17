@@ -29,6 +29,8 @@ DashboardApp.renderCurrentView = function() {
 
 DashboardApp.renderTreeView = function(groupBy) {
     DashboardApp.debug("Rendering tree view...");
+    const h = DashboardApp._escapeHtml;
+    const openReportOnclick = DashboardApp._buildOpenReportOnclick;
     const container = document.getElementById('reports-container');
     
     if (!container) {
@@ -76,7 +78,7 @@ DashboardApp.renderTreeView = function(groupBy) {
     // For each group (model or vulnerability type)
     sortedKeys.forEach(key => {
         const reportsInGroup = grouped[key];
-        const formattedKey = DashboardApp.formatDisplayName(key, groupBy === 'model' ? 'model' : 'vulnerability');
+        const formattedKey = h(DashboardApp.formatDisplayName(key, groupBy === 'model' ? 'model' : 'vulnerability'));
         
         html += `
             <div class="tree-section">
@@ -102,7 +104,7 @@ DashboardApp.renderTreeView = function(groupBy) {
             
             sortedModels.forEach(model => {
                 const reportsForModel = modelGroups[model];
-                const formattedModel = DashboardApp.formatDisplayName(model, 'model');
+                const formattedModel = h(DashboardApp.formatDisplayName(model, 'model'));
                 
                 html += `
                     <div class="tree-item">
@@ -117,15 +119,18 @@ DashboardApp.renderTreeView = function(groupBy) {
                 
                 // Add date entries
                 reportsForModel.forEach(report => {
+                    if (!report.date_visible) {
+                        return;
+                    }
                     const reportDate = report.date ? new Date(report.date) : null;
                     const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
                     const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
                     
                     html += `
                         <span class="date-tag clickable" 
-                            onclick="openReport('${report.path}', '${report.format}')" 
-                            data-model="${model}" 
-                            data-vulnerability="${report.vulnerability_type}">
+                            onclick="${openReportOnclick(report.path, report.format)}" 
+                            data-model="${h(model)}" 
+                            data-vulnerability="${h(report.vulnerability_type)}">
                             <div class="date-main">${formattedDate}</div>
                             <div class="date-time">${formattedTime}</div>
                         </span>
@@ -168,7 +173,7 @@ DashboardApp.renderTreeView = function(groupBy) {
             
             sortedVulns.forEach(vuln => {
                 const reportsForVuln = vulnGroups[vuln];
-                const formattedVuln = DashboardApp.formatDisplayName(vuln, 'vulnerability');
+                const formattedVuln = h(DashboardApp.formatDisplayName(vuln, 'vulnerability'));
                 
                 html += `
                     <div class="tree-item">
@@ -183,15 +188,18 @@ DashboardApp.renderTreeView = function(groupBy) {
                 
                 // Add date entries
                 reportsForVuln.forEach(report => {
+                    if (!report.date_visible) {
+                        return;
+                    }
                     const reportDate = report.date ? new Date(report.date) : null;
                     const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
                     const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
                     
                     html += `
                         <span class="date-tag clickable" 
-                            onclick="openReport('${report.path}', '${report.format}')" 
-                            data-model="${report.model}" 
-                            data-vulnerability="${vuln}">
+                            onclick="${openReportOnclick(report.path, report.format)}" 
+                            data-model="${h(report.model)}" 
+                            data-vulnerability="${h(vuln)}">
                             <div class="date-main">${formattedDate}</div>
                             <div class="date-time">${formattedTime}</div>
                         </span>
@@ -248,6 +256,9 @@ DashboardApp.renderListView = function() {
 
 DashboardApp.renderListViewWithTemplate = function() {
     DashboardApp.debug("Rendering list view with template...");
+    const h = DashboardApp._escapeHtml;
+    const jsq = DashboardApp._escapeJsSingleQuote;
+    const openReportOnclick = DashboardApp._buildOpenReportOnclick;
     const container = document.getElementById('reports-container');
     
     // Group by vulnerability type
@@ -280,51 +291,37 @@ DashboardApp.renderListViewWithTemplate = function() {
     
     sortedVulns.forEach(vuln => {
         const reportsForVuln = vulnGroups[vuln];
-        const formattedVulnEmoji = DashboardApp.formatDisplayName(vuln, 'vulnerability');
-        const formattedVuln = DashboardApp.formatDisplayName(vuln, 'vulnerability', false);
+        const formattedVulnEmoji = h(DashboardApp.formatDisplayName(vuln, 'vulnerability'));
+        const formattedVuln = h(DashboardApp.formatDisplayName(vuln, 'vulnerability', false));
         
         // Group models for this vulnerability
         const models = [...new Set(reportsForVuln.map(report => report.model))];
         
         // Get report statistics
-        const totalFindings = reportsForVuln.reduce((sum, r) => sum + (r.stats?.total || 0), 0);
+        const totalFindings = reportsForVuln.reduce(
+            (sum, r) => sum + (r.stats?.total_findings ?? r.stats?.total ?? 0),
+            0
+        );
         const highRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.high_risk || 0), 0);
         const mediumRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.medium_risk || 0), 0);
         const lowRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.low_risk || 0), 0);
         
-        // Determine format paths for buttons
-        let mdPath = '';
-        let htmlPath = '';
-        let pdfPath = '';
-        
-        // Get the latest report for each format
+        // Resolve download paths across all report rows (same stem may appear as json, md, sarif, …)
         reportsForVuln.sort((a, b) => new Date(b.date) - new Date(a.date));
-        const latestReport = reportsForVuln[0];
-        
-        if (latestReport) {
-            // Format paths
-            mdPath = latestReport.format === 'md' ? latestReport.path : 
-                    (latestReport.alternative_formats && latestReport.alternative_formats.md ? 
-                    latestReport.alternative_formats.md : '');
-            
-            htmlPath = latestReport.format === 'html' ? latestReport.path : 
-                    (latestReport.alternative_formats && latestReport.alternative_formats.html ? 
-                    latestReport.alternative_formats.html : '');
-            
-            pdfPath = latestReport.format === 'pdf' ? latestReport.path : 
-                    (latestReport.alternative_formats && latestReport.alternative_formats.pdf ? 
-                    latestReport.alternative_formats.pdf : '');
-        }
+        const fh = DashboardApp.formatHelpers;
+        const formatPaths = fh && fh.collectFormatPathsFromReports
+            ? fh.collectFormatPathsFromReports(reportsForVuln)
+            : {};
                 
         // Generate models HTML
         let modelsHTML = '';
         models.forEach(model => {
-            const formattedModel = DashboardApp.formatDisplayName(model, 'model');
+            const formattedModel = h(DashboardApp.formatDisplayName(model, 'model'));
             
             modelsHTML += `
                 <span class="model-tag clickable" 
                     onclick="filterDatesByModel(this)" 
-                    data-model="${model}">
+                    data-model="${h(model)}">
                     ${formattedModel}
                 </span>
             `;
@@ -341,8 +338,8 @@ DashboardApp.renderListViewWithTemplate = function() {
                 
                 datesHTML += `
                     <span class="date-tag clickable" 
-                        onclick="openReport('${report.path}', '${report.format}')" 
-                        data-model="${report.model}">
+                        onclick="${openReportOnclick(report.path, report.format)}" 
+                        data-model="${h(report.model)}">
                         <div class="date-main">${formattedDate}</div>
                         <div class="date-time">${formattedTime}</div>
                     </span>
@@ -350,17 +347,23 @@ DashboardApp.renderListViewWithTemplate = function() {
             }
         });
             
-        // Generate format buttons HTML
+        // Generate format buttons HTML (order from REPORT_DOWNLOAD_FORMATS: human-readable first)
         let formatButtons = '';
-        if (pdfPath) {
-          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${pdfPath}', 'pdf')">📄 PDF</button>`;
-        }
-        if (mdPath) {
-          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${mdPath}', 'md')">📝 MD</button>`;
-        }
-        if (htmlPath) {
-          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${htmlPath}', 'html')">🌐 HTML</button>`;
-        }
+        const fmts = (fh && fh.REPORT_DOWNLOAD_FORMATS) || [];
+        fmts.forEach(fmt => {
+            const p = formatPaths[fmt];
+            if (!p) {
+                return;
+            }
+            const btnLabel = fh && fh.formatDownloadButtonLabel
+                ? fh.formatDownloadButtonLabel(fmt)
+                : String(fmt).toUpperCase();
+            const fmtLower = String(fmt).toLowerCase();
+            const titleUnknown = (DashboardApp.FORMAT_DOWNLOAD_LABELS || {})[fmtLower]
+                ? ''
+                : ` title="${h('Format: ' + fmt)}"`;
+            formatButtons += `<button class="btn btn-format"${titleUnknown} onclick="downloadReportFile('${jsq(p)}', '${jsq(fmt)}')">${btnLabel}</button>`;
+        });
             
         // Use the template and replace placeholders
         let cardHTML = DashboardApp.cardTemplate

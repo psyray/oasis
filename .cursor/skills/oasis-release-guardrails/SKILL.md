@@ -16,6 +16,7 @@ Keep release changes coherent across code, docs, and metadata like historical `r
 - [ ] Update `CHANGELOG.md` for user-visible behavior changes.
 - [ ] Verify `README.md` reflects CLI options and workflow changes.
 - [ ] Ensure dashboard/web changes include matching template/assets updates when required.
+- [ ] For structured output/report changes, keep schema models, templates, and report contract tests in sync.
 
 ## Commit Guidance
 
@@ -30,3 +31,4 @@ Before finalizing:
 1. Re-read changed docs and confirm they match actual CLI/runtime behavior.
 2. Confirm no stale option name remains after renames.
 3. Ensure change grouping is logical (avoid mixing unrelated concerns).
+4. Run and review the report contract test path (at least `tests/test_report_schema.py`) before release tagging.

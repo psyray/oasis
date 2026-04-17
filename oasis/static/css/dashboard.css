@@ -1152,6 +1152,21 @@ body {
     margin-bottom: 10px;
 }
 
+#report-modal-content h4 {
+    color: var(--dark-blue);
+    font-size: 16px;
+    margin-top: 14px;
+    margin-bottom: 8px;
+}
+
+#report-modal-content h5 {
+    color: var(--dark-blue);
+    font-size: 14px;
+    margin-top: 12px;
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+
 #report-modal-content p {
     margin: 12px 0;
 }
@@ -1170,6 +1185,22 @@ body {
     border-radius: 5px;
     overflow-x: auto;
     border-left: 3px solid var(--turquoise);
+}
+
+.json-report-preview {
+    max-height: 400px;
+    overflow: auto;
+}
+
+.json-preview {
+    margin: 0;
+    white-space: pre;
+}
+
+.json-preview-notice {
+    font-size: 0.9em;
+    color: #666;
+    margin-bottom: 0.5rem;
 }
 
 #report-modal-content a {
@@ -1228,7 +1259,24 @@ body {
     margin: 20px 0;
 }
 
-.html-content-container,
+#report-modal-content .report-file-block {
+    background-color: var(--white);
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--turquoise);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 14px 0 18px 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.html-content-container {
+    width: 100%;
+    height: calc(100vh - 200px);
+    border: none;
+    border-radius: 0;
+    background: transparent;
+}
+
 .pdf-container {
     width: 100%;
     height: calc(100vh - 200px);

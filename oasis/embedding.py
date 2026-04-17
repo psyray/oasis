@@ -14,7 +14,9 @@ from .config import EXTRACT_FUNCTIONS, SUPPORTED_EXTENSIONS, DEFAULT_ARGS
 
 # Import from other modules
 from .ollama_manager import OllamaManager
+from .schemas.function_extract import FunctionExtractResponse
 from .tools import create_cache_dir, logger, chunk_content, parse_input, sanitize_name, open_file
+from pydantic import ValidationError
 
 class EmbeddingManager:
     def __init__(self, args, ollama_manager: OllamaManager):
@@ -477,7 +479,8 @@ class EmbeddingManager:
             
         return functions
 
-    def extract_functions_with_regex(self, file_path: str, content: str, lang: str) -> Dict[str, str]:
+    @staticmethod
+    def extract_functions_with_regex(file_path: str, content: str, lang: str) -> Dict[str, str]:
         """
         Extract functions using regex patterns based on language
         
@@ -493,7 +496,7 @@ class EmbeddingManager:
         
         try:
             # Get appropriate pattern for the language
-            pattern = self.language_patterns(lang)
+            pattern = EmbeddingManager.language_patterns(lang)
             
             # Find all function declarations
             matches = list(re.finditer(pattern, content, re.DOTALL))
@@ -504,7 +507,7 @@ class EmbeddingManager:
                 func_name = next((g for g in match.groups() if g), f"anonymous_function_{i}")
                 
                 # Determine function end boundary
-                func_end = self._find_function_end(content, func_start, lang)
+                func_end = EmbeddingManager._find_function_end(content, func_start, lang)
                 
                 if func_end > func_start:
                     func_id = f"{file_path}::{func_name}"
@@ -517,7 +520,8 @@ class EmbeddingManager:
             
         return functions
         
-    def _find_function_end(self, content: str, start_pos: int, lang: str) -> int:
+    @staticmethod
+    def _find_function_end(content: str, start_pos: int, lang: str) -> int:
         """
         Find the end position of a function based on language syntax
         
@@ -535,14 +539,15 @@ class EmbeddingManager:
 
         # Delegate to appropriate handler based on language type
         if lang in {'js', 'ts', 'java', 'c', 'cpp', 'cs', 'php', 'go'}:
-            return self._find_brace_function_end(content, start_pos)
+            return EmbeddingManager._find_brace_function_end(content, start_pos)
         elif lang in {'py', 'rb'}:
-            return self._find_indentation_function_end(content, start_pos)
+            return EmbeddingManager._find_indentation_function_end(content, start_pos)
 
         # Fallback for unsupported languages
         return len(content)
         
-    def _find_brace_function_end(self, content: str, start_pos: int) -> int:
+    @staticmethod
+    def _find_brace_function_end(content: str, start_pos: int) -> int:
         """Find end position for languages using braces (C-family, etc.)"""
         brace_level = 0
         in_string = False
@@ -569,7 +574,8 @@ class EmbeddingManager:
                         
         return len(content)
         
-    def _find_indentation_function_end(self, content: str, start_pos: int) -> int:
+    @staticmethod
+    def _find_indentation_function_end(content: str, start_pos: int) -> int:
         """Find end position for languages using indentation (Python, Ruby)"""
         lines = content[start_pos:].split('\n')
         if len(lines) <= 1:
@@ -634,7 +640,8 @@ class EmbeddingManager:
         
         return functions 
 
-    def language_patterns(self, lang: str) -> str:
+    @staticmethod
+    def language_patterns(lang: str) -> str:
         """
         Return the regex pattern for a given language
 
@@ -737,79 +744,78 @@ class EmbeddingManager:
         # Use a small, fast model for this task
         extraction_model = EXTRACT_FUNCTIONS['MODEL']
         if not self.ollama_manager.ensure_model_available(extraction_model):
-            return {}
-        
+            logger.info(f"Function extraction model unavailable for {file_path}; falling back to regex-based extraction")
+            return self.extract_functions_with_regex(file_path, content, extension)
+
         # Make sure we're using a normalized version of the content
         # This ensures the same text is used for LLM analysis and extraction
         normalized_content = content.replace('\r\n', '\n')
-        
+
         # Create prompt
+        schema_hint = json.dumps(FunctionExtractResponse.model_json_schema(), indent=2)
         prompt = f"""
-            Extract all functions and methods from the following {extension} code.
-            {EXTRACT_FUNCTIONS['PROMPT']}
-            Here is the code:
-            ```{extension}
-            {normalized_content}
-            ```
-            """
+Extract all functions and methods from the following {extension} code.
+{EXTRACT_FUNCTIONS['PROMPT']}
+Here is the code:
+```{extension}
+{normalized_content}
+```
+
+Respond with JSON only matching this schema (no markdown fences):
+{schema_hint}
+"""
 
         try:
-            # Generate response with a short context model
-            response = self.ollama_manager.generate(
+            response = self.ollama_manager.chat(
                 model=extraction_model,
-                prompt=prompt,
+                messages=[{"role": "user", "content": prompt}],
+                format=FunctionExtractResponse.model_json_schema(),
+                options={"temperature": 0},
             )
-
-            if not response or not response.response:
+            raw = response.get("message", {}).get("content") if response else None
+            if not raw:
                 logger.warning(f"No valid response from LLM for function extraction in {file_path}")
-                return {}
-
-            # Extract JSON part from response
-            json_match = re.search(r'({[\s\S]*})', response.response)
-            if not json_match:
-                logger.warning(f"No valid JSON found in LLM response for {file_path}")
-                return {}
+                return self.extract_functions_with_regex(file_path, content, extension)
 
             try:
-                result = json.loads(json_match[1])
+                parsed = FunctionExtractResponse.model_validate_json(raw)
+            except ValidationError as e:
+                logger.warning(f"Invalid structured function extract for {file_path}: {e}")
+                return self.extract_functions_with_regex(file_path, content, extension)
 
-                # Extract functions using provided indices
-                functions = {}
-                for func in result.get("functions", []):
-                    name = func.get("name", "anonymous")
-                    start = func.get("start")
-                    end = func.get("end")
-                    # TODO: add body, parameters and return_type
-                    # body = func.get("body")
-                    # parameters = func.get("parameters")
-                    # return_type = func.get("return_type")
+            if not getattr(parsed, "functions", None):
+                logger.info(
+                    f"LLM returned no functions for {file_path}; falling back to regex-based extraction"
+                )
+                return self.extract_functions_with_regex(file_path, content, extension)
 
-                    if start is not None and end is not None and start < end and end <= len(normalized_content):
-                        # Extract from the normalized content that was sent to the LLM
-                        func_content = normalized_content[start:end]
-                        
-                        # Validate that the extracted content looks like a function
-                        # Simple check that the content contains the function name
-                        if name in func_content:
-                            functions[f"{file_path}::{name}"] = func_content
-                        else:
-                            logger.warning(f"Function extraction mismatch for {name} in {file_path}")
-                            # TODO: implement a fallback or more advanced validation
+            functions: Dict[str, str] = {}
+            for func in parsed.functions:
+                name = func.name or "anonymous"
+                start, end = func.start, func.end
+                if start < end <= len(normalized_content):
+                    func_content = normalized_content[start:end]
+                    if name in func_content:
+                        functions[f"{file_path}::{name}"] = func_content
+                    else:
+                        logger.warning(f"Function extraction mismatch for {name} in {file_path}")
+                else:
+                    logger.warning(
+                        f"Invalid function span ({start}, {end}) for {name} in {file_path}; skipping this function"
+                    )
 
+            if functions:
                 return functions
-
-            except json.JSONDecodeError as e:
-                logger.exception(f"Invalid JSON in LLM response for {file_path}: {str(e)}")
-                logger.debug(f"Raw JSON response: {json_match[1][:200]}...")
-                return {}
+            logger.info(
+                f"LLM function extraction for {file_path} yielded no valid functions after validation; "
+                "falling back to regex-based extraction"
+            )
+            return self.extract_functions_with_regex(file_path, content, extension)
 
         except Exception as e:
             logger.exception(f"Error using LLM for function extraction in {file_path}: {str(e)}")
-            # Fallback to regex approach
             logger.info(f"Falling back to regex-based extraction for {file_path}")
             return self.extract_functions_with_regex(file_path, content, extension)
-
-        return {}
 
     def get_vulnerability_embedding(self, vulnerability: Union[str, Dict]) -> List[float]:
         """
@@ -986,40 +992,66 @@ def extract_functions_from_file(file_path: str, content: str, extraction_model: 
 
     # Determine file extension
     extension = file_path.split('.')[-1].lower()
-    
+
     # Make sure we're using a normalized version of the content
     normalized_content = content.replace('\r\n', '\n')
-    
+
     try:
         # Ensure model is available
         if not ollama_manager.ensure_model_available(extraction_model):
-            return {}
-            
-        # Create prompt
+            return _extract_functions_with_regex_fallback(file_path, content, extension)
+
+        schema_hint = json.dumps(FunctionExtractResponse.model_json_schema(), indent=2)
         prompt = f"""
-            Extract all functions and methods from the following {extension} code.
-            {EXTRACT_FUNCTIONS['PROMPT']}
-            Here is the code:
-            ```{extension}
-            {normalized_content}
-            ```
-            """
-            
-        # Generate response
-        response = ollama_manager.generate(
+Extract all functions and methods from the following {extension} code.
+{EXTRACT_FUNCTIONS['PROMPT']}
+Here is the code:
+```{extension}
+{normalized_content}
+```
+
+Respond with JSON only matching this schema (no markdown fences):
+{schema_hint}
+"""
+
+        response = ollama_manager.chat(
             model=extraction_model,
-            prompt=prompt,
+            messages=[{"role": "user", "content": prompt}],
+            format=FunctionExtractResponse.model_json_schema(),
+            options={"temperature": 0},
         )
-        
-        if not response or not response.response:
+        raw = response.get("message", {}).get("content") if response else None
+        if not raw:
             logger.warning(f"No valid response from LLM for function extraction in {file_path}")
             return {}
-            
-        # Process response and extract functions
-        # ... (code from extract_functions_with_llm that parses the JSON response)
-        
+
+        parsed = FunctionExtractResponse.model_validate_json(raw)
+        out: Dict[str, str] = {}
+        for func in parsed.functions:
+            start, end = func.start, func.end
+            if start < end <= len(normalized_content):
+                func_content = normalized_content[start:end]
+                name = func.name or "anonymous"
+                if name in func_content:
+                    out[f"{file_path}::{name}"] = func_content
+        return out
+
+    except ValidationError as e:
+        logger.warning(f"Structured function extract failed for {file_path}: {e}")
+        return _extract_functions_with_regex_fallback(file_path, content, extension)
     except Exception as e:
         logger.exception(f"Error extracting functions from {file_path}: {str(e)}")
-        # Fallback to regex approach if needed
-        
-    return {}
+        return _extract_functions_with_regex_fallback(file_path, content, extension)
+
+
+def _extract_functions_with_regex_fallback(file_path: str, content: str, extension: str) -> Dict[str, str]:
+    """
+    Lightweight shared fallback for function extraction.
+
+    Reuses EmbeddingManager regex extraction behavior.
+    """
+    try:
+        return EmbeddingManager.extract_functions_with_regex(file_path, content, extension)
+    except Exception as e:
+        logger.exception(f"Regex fallback function extraction failed for {file_path}: {str(e)}")
+        return {f"{file_path}::__file_blob__": content} if content else {}

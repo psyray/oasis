@@ -50,14 +50,16 @@ DashboardApp.fetchReports = function() {
             
             // Process and store the reports
             DashboardApp.reportData = DashboardApp.groupReportsByModelAndVuln(reports);
+            DashboardApp.buildReportFormatsByPathMap(DashboardApp.reportData);
             
             // Render the reports in the current view
             DashboardApp.renderCurrentView();
         })
         .catch(error => {
             console.error('Error fetching reports:', error);
+            const errorMessage = DashboardApp._errorMessage(error);
             document.getElementById('reports-container').innerHTML = 
-                `<div class="error-message">Error fetching reports: ${error.message}</div>`;
+                `<div class="error-message">Error fetching reports: ${DashboardApp._escapeHtml(errorMessage)}</div>`;
         });
 };
 
@@ -99,8 +101,9 @@ DashboardApp.fetchStats = function(forceRefresh = false) {
         })
         .catch(error => {
             console.error('Error fetching stats:', error);
+            const errorMessage = DashboardApp._errorMessage(error);
             document.getElementById('stats-container').innerHTML = 
-                `<div class="error-message">Error fetching stats: ${error.message}</div>`;
+                `<div class="error-message">Error fetching stats: ${DashboardApp._escapeHtml(errorMessage)}</div>`;
         });
 };
 
@@ -114,12 +117,13 @@ DashboardApp.refreshDashboard = function() {
     // Fetch fresh data
     Promise.all([
         fetch('/api/stats?force=1').then(response => response.json()),
-        fetch('/api/reports').then(response => response.json())
+        fetch('/api/reports?force=1&md_dates_only=1').then(response => response.json())
     ])
     .then(([statsData, reportsData]) => {
         // Update the state
         this.stats = statsData;
         this.reportData = this.groupReportsByModelAndVuln(reportsData);
+        this.buildReportFormatsByPathMap(this.reportData);
         
         // Render the updated data
         this.renderStats();
