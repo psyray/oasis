@@ -441,16 +441,20 @@ class WebServer:
     def _language_from_json_report_file(report_file: Path) -> str | None:
         """Load report language from canonical vulnerability JSON report.
 
-        Returns ``None`` when the field is missing/empty, so callers can fallback
-        to legacy ``language.txt`` when available.
+        Returns ``None`` when the field is missing/empty or when the report file
+        cannot be read/parsed, so callers can fallback to legacy ``language.txt``
+        when available.
         """
         try:
             with open(report_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            language = str(data.get('language') or '').strip().lower()
-            return language or None
-        except Exception:
+        except (OSError, json.JSONDecodeError):
+            # Only swallow expected I/O / parsing issues; let other exceptions
+            # propagate so they can be surfaced and fixed.
             return None
+
+        language = str(data.get('language') or '').strip().lower()
+        return language or None
 
     @staticmethod
     def _language_from_legacy_file(report_file: Path) -> str | None:
@@ -515,30 +519,27 @@ class WebServer:
         """Process a single report file and extract metadata"""
         # Extract vulnerability type from filename
         vulnerability_type = self._extract_vulnerability_type(report_file.stem)
-        
+
         stats = self._stats_from_json_report_file(report_file) if fmt == 'json' else {}
-        
+
         # Build relative path for web access
         relative_path = report_file.relative_to(self.security_dir)
-        
+
         # Find alternative formats available (including timestamp)
         alternative_formats = self._find_alternative_formats(model_dir, report_file.stem, timestamp_dir)
-        
+
         language = None
         if fmt == 'json':
             language = self._language_from_json_report_file(report_file)
-            if language is None:
-                language = self._language_from_legacy_file(report_file)
         else:
             sibling_json = model_dir / 'json' / f"{report_file.stem}.json"
             if sibling_json.exists():
                 language = self._language_from_json_report_file(sibling_json)
-            if language is None:
-                # Backward compatibility with legacy exports generated before JSON language field.
-                language = self._language_from_legacy_file(report_file)
+        if language is None:
+            language = self._language_from_legacy_file(report_file)
         if language is None:
             language = 'en'
-        
+
         return {
             "model": model_name,
             "format": fmt,
@@ -771,28 +772,7 @@ class WebServer:
         # Calculate statistics based on the provided reports
         for report in reports_to_analyze:
             if report["format"] == "json":
-                stats["total_reports"] += 1
-
-                model = report["model"]
-                if model not in stats["models"]:
-                    stats["models"][model] = 0
-                stats["models"][model] += 1
-
-                vuln_type = report["vulnerability_type"]
-                if vuln_type not in stats["vulnerabilities"]:
-                    stats["vulnerabilities"][vuln_type] = 0
-                stats["vulnerabilities"][vuln_type] += 1
-
-                if report["date"]:
-                    date_only = report["date"].split()[0]
-                    if date_only not in stats["dates"]:
-                        stats["dates"][date_only] = 0
-                    stats["dates"][date_only] += 1
-
-                if "stats" in report and report["stats"]:
-                    stats["risk_summary"]["high"] += report["stats"].get("high_risk", 0)
-                    stats["risk_summary"]["medium"] += report["stats"].get("medium_risk", 0)
-                    stats["risk_summary"]["low"] += report["stats"].get("low_risk", 0)
+                self._update_stats_for_report(stats, report)
 
             # count all available formats
             fmt = report["format"]
@@ -803,25 +783,24 @@ class WebServer:
         # Return the calculated statistics
         return stats
 
-    def _get_report_statistics(self, stats, report):
+    def _update_stats_for_report(self, stats: dict, report: dict) -> None:
         stats["total_reports"] += 1
-        self._get_stats_from_report(report, "model", stats, "models")
-        self._get_stats_from_report(
-            report, "vulnerability_type", stats, "vulnerabilities"
-        )
+        if model := report.get("model"):
+            stats["models"][model] = stats["models"].get(model, 0) + 1
 
-        # Add risk summary if available
+        if vulnerability_type := report.get("vulnerability_type"):
+            stats["vulnerabilities"][vulnerability_type] = (
+                stats["vulnerabilities"].get(vulnerability_type, 0) + 1
+            )
+
+        if report_date := report.get("date"):
+            date_only = report_date.split()[0]
+            stats["dates"][date_only] = stats["dates"].get(date_only, 0) + 1
+
         if "stats" in report and report["stats"]:
-            stats["risk_summary"]["total_findings"] += report["stats"].get("total_findings", 0)
-            stats["risk_summary"]["high"] += report["stats"].get("high_risk", 0)
-            stats["risk_summary"]["medium"] += report["stats"].get("medium_risk", 0)
-            stats["risk_summary"]["low"] += report["stats"].get("low_risk", 0)
-
-        return stats
-    
-    def _get_stats_from_report(self, report, arg1, stats, arg3):
-        model = report[arg1]
-        if model not in stats[arg3]:
-            stats[arg3][model] = 0
-        stats[arg3][model] += 1
+            report_stats = report["stats"]
+            stats["risk_summary"]["total_findings"] += report_stats.get("total_findings", 0)
+            stats["risk_summary"]["high"] += report_stats.get("high_risk", 0)
+            stats["risk_summary"]["medium"] += report_stats.get("medium_risk", 0)
+            stats["risk_summary"]["low"] += report_stats.get("low_risk", 0)
 

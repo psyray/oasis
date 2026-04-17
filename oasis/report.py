@@ -59,7 +59,17 @@ class Report:
         self.report_dirs = {}
         self.models = models
         self.current_model = current_model
-        self.language_code = language
+        self.original_language = language
+        normalized_language = str(language or "en").strip().lower()
+        self.language_code = normalized_language.split("-", 1)[0].split("_", 1)[0] or "en"
+        if self.language_code not in LANGUAGES:
+            logger.warning(
+                "Unsupported language code '%s' (normalized from %r); falling back to default language 'en'. Available languages: %s",
+                self.language_code,
+                self.original_language,
+                ", ".join(sorted(LANGUAGES.keys())),
+            )
+            self.language_code = "en"
         self.language = LANGUAGES[self.language_code]
 
 

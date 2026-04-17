@@ -315,12 +315,26 @@ if (typeof DashboardApp !== 'undefined') {
         .join(' ');
     };
 
+    // Precompute once to avoid sorting on each getModelEmoji call.
+    const modelEmojiEntries = Object.entries(modelEmojis).sort(
+        ([keyA], [keyB]) => keyB.length - keyA.length
+    );
+
     DashboardApp.getModelEmoji = function(model) {
-    // Try to match by prefix
-    for (const [key, emoji] of Object.entries(modelEmojis)) {
-        // Check if model starts with key or key starts with model
-        if (model.toLowerCase().includes(key.toLowerCase()) || 
-            key.toLowerCase().includes(model.toLowerCase())) {
+    const modelLower = String(model || '').toLowerCase();
+
+    // First pass: strict prefix matching, prioritizing more specific keys first.
+    for (const [key, emoji] of modelEmojiEntries) {
+        const keyLower = key.toLowerCase();
+        if (modelLower.startsWith(keyLower)) {
+            return emoji + ' ';
+        }
+    }
+
+    // Second pass: backward-compatible substring fallback for non-prefix names.
+    for (const [key, emoji] of modelEmojiEntries) {
+        const keyLower = key.toLowerCase();
+        if (modelLower.includes(keyLower)) {
             return emoji + ' ';
         }
     }
@@ -350,10 +364,7 @@ if (typeof DashboardApp !== 'undefined') {
         es: { name: 'Español', emoji: '🇪🇸' },
         de: { name: 'Deutsch', emoji: '🇩🇪' },
         it: { name: 'Italiano', emoji: '🇮🇹' },
-        pt: { name: 'Português', emoji: '🇵🇹' },
-        ru: { name: 'Русский', emoji: '🇷🇺' },
-        zh: { name: '中文', emoji: '🇨🇳' },
-        ja: { name: '日本語', emoji: '🇯🇵' }
+        pt: { name: 'Português', emoji: '🇵🇹' }
     };
     const normalizedRaw = String(languageCode || 'en').trim().toLowerCase();
     const normalized = normalizedRaw.split(/[-_]/)[0] || 'en';
