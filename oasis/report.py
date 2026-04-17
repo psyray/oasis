@@ -207,6 +207,7 @@ class Report:
             title=f"{vuln_name} Security Analysis",
             generated_at=generate_timestamp(),
             model_name=model_name,
+            language=self.language_code,
             vulnerability_name=vuln_name,
             vulnerability=dict(vulnerability),
             files=file_entries,

@@ -7,6 +7,7 @@
 - 📄 Added canonical JSON reports (`report.json`) via `--output-format` (with `all` and comma-separated lists)
 - 🛡️ Added SARIF 2.1.0 export (`sarif/*.sarif`) and dashboard downloads for SARIF
 - 🧭 Added `.cursor/` rules and agent skills for implementation, releases, and git conventions
+- 🌍 Added report language metadata (`language`) in canonical JSON and dashboard language flags sourced from report data
 
 ### 🐛 Fixed
 - 🔧 Fixed missing `analyze_type` in the embedding analyzer

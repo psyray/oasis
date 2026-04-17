@@ -105,6 +105,7 @@ DashboardApp._buildDateTagElement = function(dateInfo, options = {}) {
     const path = dateInfo.path || '';
     const format = dateInfo.format || 'md';
     const modelName = dateInfo.model || fallbackModelName;
+    const languageMeta = DashboardApp.getLanguageMeta(dateInfo.language);
 
     const tag = document.createElement('span');
     tag.className = 'date-tag clickable';
@@ -117,6 +118,12 @@ DashboardApp._buildDateTagElement = function(dateInfo, options = {}) {
         label.textContent = `${modelName}:`;
         tag.appendChild(label);
     }
+
+    const languageFlag = document.createElement('span');
+    languageFlag.className = 'language-flag';
+    languageFlag.title = languageMeta.name;
+    languageFlag.textContent = languageMeta.emoji;
+    tag.appendChild(languageFlag);
 
     const hasDate = !!dateInfo.date;
     const main = document.createElement('div');

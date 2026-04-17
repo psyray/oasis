@@ -196,9 +196,8 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 - `--input` `-i`: Path to file, directory, or .txt file containing newline-separated paths to analyze
 - `--output-format` `-of`: Comma-separated formats or `all` for json, sarif, pdf, html, md (default: all)
 - `--extensions` `-x`: Custom file extensions to analyze (e.g., "py,js,java")
-- `--language` `-l`: Language for generated reports (default: en)  
-  (Aliases: `--lang`, `-lg`)
-  Supported: English (en), Français (fr), Español (es), Deutsch (de), Italiano (it), Português (pt), Русский (ru), 中文 (zh), 日本語 (ja)
+- `--language` `-l`: Language for reports (default: en)  
+  Supported: 🇬🇧 English (en), 🇫🇷 Français (fr), 🇪🇸 Español (es), 🇩🇪 Deutsch (de), 🇮🇹 Italiano (it), 🇵🇹 Português (pt), 🇷🇺 Русский (ru), 🇨🇳 中文 (zh), 🇯🇵 日本語 (ja)
 
 ### Analysis Configuration
 - `--analyze-type` `-at`: Analyze type [standard, deep] (default: standard)

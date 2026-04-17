@@ -10,7 +10,7 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 from functools import wraps
 
 
-from .config import REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS
+from .config import REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS, LANGUAGES
 from .export.filenames import artifact_filename, report_dir_glob_for_format
 from .report import Report
 from .tools import parse_iso_date, parse_report_date
@@ -184,6 +184,7 @@ class WebServer:
                 'dashboard.html',
                 model_emojis=MODEL_EMOJIS,
                 vuln_emojis=VULN_EMOJIS,
+                languages=LANGUAGES,
                 debug=self.debug,
                 report_output_formats=REPORT.get('OUTPUT_FORMATS', []),
                 dashboard_format_display_order=_dashboard_format_display_order(),
@@ -397,6 +398,7 @@ class WebServer:
                     elif report.get('path'):
                         date_info['path'] = report['path']
                         date_info['format'] = report.get('format', 'md')
+                    date_info['language'] = report.get('language', 'en')
                     dates.append(date_info)
             
             # Sort dates from newest to oldest
@@ -434,6 +436,34 @@ class WebServer:
                 exc,
             )
             return {}
+
+    @staticmethod
+    def _language_from_json_report_file(report_file: Path) -> str | None:
+        """Load report language from canonical vulnerability JSON report.
+
+        Returns ``None`` when the field is missing/empty, so callers can fallback
+        to legacy ``language.txt`` when available.
+        """
+        try:
+            with open(report_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            language = str(data.get('language') or '').strip().lower()
+            return language or None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _language_from_legacy_file(report_file: Path) -> str | None:
+        """Load report language from legacy ``language.txt`` sidecar."""
+        lang_file = report_file.parent.parent / 'language.txt'
+        if not lang_file.exists():
+            return None
+        try:
+            with open(lang_file, 'r', encoding='utf-8') as f:
+                language = f.read().strip().lower()
+            return language or None
+        except Exception:
+            return None
         
     def _collect_reports_from_directories(self):
         """Extract reports data from directory structure"""
@@ -494,12 +524,19 @@ class WebServer:
         # Find alternative formats available (including timestamp)
         alternative_formats = self._find_alternative_formats(model_dir, report_file.stem, timestamp_dir)
         
-        # Add language information if available
-        lang_file = report_file.parent.parent / 'language.txt'
-        if lang_file.exists():
-            with open(lang_file, 'r', encoding='utf-8') as f:
-                language = f.read().strip()
+        language = None
+        if fmt == 'json':
+            language = self._language_from_json_report_file(report_file)
+            if language is None:
+                language = self._language_from_legacy_file(report_file)
         else:
+            sibling_json = model_dir / 'json' / f"{report_file.stem}.json"
+            if sibling_json.exists():
+                language = self._language_from_json_report_file(sibling_json)
+            if language is None:
+                # Backward compatibility with legacy exports generated before JSON language field.
+                language = self._language_from_legacy_file(report_file)
+        if language is None:
             language = 'en'
         
         return {

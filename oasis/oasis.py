@@ -56,8 +56,7 @@ class OasisScanner:
             for code, meta in LANGUAGES.items()
         )
         return (
-            "Language for reports (default: en). "
-            "Aliases: --lang, -lg. "
+            "Language for reports (default: en).\n"
             f"Supported: {supported}"
         )
 
@@ -124,6 +123,14 @@ class OasisScanner:
             def _split_lines(self, text, width):
                 if text.startswith('Vulnerability types'):
                     return text.splitlines()
+                if '\n' in text:
+                    lines = []
+                    for part in text.splitlines():
+                        if not part.strip():
+                            lines.append('')
+                            continue
+                        lines.extend(super()._split_lines(part, width))
+                    return lines
                 return super()._split_lines(text, width)
 
         parser = argparse.ArgumentParser(
@@ -149,7 +156,7 @@ class OasisScanner:
         io_group.add_argument('-x', '--extensions', type=str,
                             help='Comma-separated list of file extensions to analyze (e.g., "py,js,java")')
         io_group.add_argument(
-            '-l', '--language', '-lg', '--lang',
+            '-l', '--language',
             dest='language',
             type=str,
             default='en',

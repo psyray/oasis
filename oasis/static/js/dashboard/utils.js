@@ -342,5 +342,29 @@ if (typeof DashboardApp !== 'undefined') {
     return '🔒 ';
     };
 
+    DashboardApp.getLanguageMeta = function(languageCode) {
+    const registry = (window.__OASIS_DASHBOARD__ && window.__OASIS_DASHBOARD__.languages) || {};
+    const builtInRegistry = {
+        en: { name: 'English', emoji: '🇬🇧' },
+        fr: { name: 'Français', emoji: '🇫🇷' },
+        es: { name: 'Español', emoji: '🇪🇸' },
+        de: { name: 'Deutsch', emoji: '🇩🇪' },
+        it: { name: 'Italiano', emoji: '🇮🇹' },
+        pt: { name: 'Português', emoji: '🇵🇹' },
+        ru: { name: 'Русский', emoji: '🇷🇺' },
+        zh: { name: '中文', emoji: '🇨🇳' },
+        ja: { name: '日本語', emoji: '🇯🇵' }
+    };
+    const normalizedRaw = String(languageCode || 'en').trim().toLowerCase();
+    const normalized = normalizedRaw.split(/[-_]/)[0] || 'en';
+    const fallback = registry.en || builtInRegistry.en;
+    const current = registry[normalized] || builtInRegistry[normalized] || fallback;
+    return {
+        code: normalized || 'en',
+        name: current.name || fallback.name || 'English',
+        emoji: current.emoji || fallback.emoji || '🇬🇧'
+    };
+    };
+
     DashboardApp.debug('Utils module loaded');
 }
