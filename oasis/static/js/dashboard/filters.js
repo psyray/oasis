@@ -1,18 +1,32 @@
 // Filter management functions
 DashboardApp.VULNERABILITY_FILTER_STORAGE_KEY = 'oasis.dashboard.vulnerabilityFilters';
+DashboardApp.FILTER_STORAGE_KEYS = {
+    vulnerabilities: DashboardApp.VULNERABILITY_FILTER_STORAGE_KEY,
+};
+
+DashboardApp.normalizeFilterList = function(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return Array.from(
+        new Set(value.filter(item => typeof item === 'string' && item.trim() !== ''))
+    );
+};
+
+DashboardApp.saveFilterListToStorage = function(filterName, values) {
+    const storageKey = DashboardApp.FILTER_STORAGE_KEYS[filterName];
+    if (!storageKey) {
+        return;
+    }
+    try {
+        localStorage.setItem(storageKey, JSON.stringify(DashboardApp.normalizeFilterList(values)));
+    } catch (error) {
+        DashboardApp.debug(`Unable to save ${filterName} filters to localStorage:`, error);
+    }
+};
 
 DashboardApp.saveVulnerabilityFiltersToStorage = function(vulnerabilityFilters) {
-    try {
-        const normalizedFilters = Array.isArray(vulnerabilityFilters)
-            ? Array.from(new Set(vulnerabilityFilters.filter(value => typeof value === 'string' && value.trim() !== '')))
-            : [];
-        localStorage.setItem(
-            DashboardApp.VULNERABILITY_FILTER_STORAGE_KEY,
-            JSON.stringify(normalizedFilters)
-        );
-    } catch (error) {
-        DashboardApp.debug('Unable to save vulnerability filters to localStorage:', error);
-    }
+    DashboardApp.saveFilterListToStorage('vulnerabilities', vulnerabilityFilters);
 };
 
 DashboardApp.loadVulnerabilityFiltersFromStorage = function() {
@@ -24,9 +38,7 @@ DashboardApp.loadVulnerabilityFiltersFromStorage = function() {
         }
 
         const parsedFilters = JSON.parse(rawFilters);
-        DashboardApp.activeFilters.vulnerabilities = Array.isArray(parsedFilters)
-            ? Array.from(new Set(parsedFilters.filter(value => typeof value === 'string' && value.trim() !== '')))
-            : [];
+        DashboardApp.activeFilters.vulnerabilities = DashboardApp.normalizeFilterList(parsedFilters);
     } catch (error) {
         DashboardApp.activeFilters.vulnerabilities = [];
         DashboardApp.debug('Unable to load vulnerability filters from localStorage:', error);
@@ -101,14 +113,12 @@ DashboardApp.populateFilters = function() {
     const availableVulnerabilities = Object.keys(DashboardApp.stats.vulnerabilities || {})
         .sort((a, b) => a.localeCompare(b, 'fr', { sensitivity: 'base' }));
     const availableVulnerabilitySet = new Set(availableVulnerabilities);
-    const currentVulnerabilityFilters = Array.isArray(DashboardApp.activeFilters.vulnerabilities)
-        ? DashboardApp.activeFilters.vulnerabilities
-        : [];
+    const currentVulnerabilityFilters = DashboardApp.normalizeFilterList(DashboardApp.activeFilters.vulnerabilities);
     const reconciledVulnerabilityFilters = currentVulnerabilityFilters
         .filter(vulnerability => availableVulnerabilitySet.has(vulnerability));
-    const hasReconciledVulnerabilityFilters =
-        currentVulnerabilityFilters.length !== reconciledVulnerabilityFilters.length ||
-        currentVulnerabilityFilters.some((value, index) => value !== reconciledVulnerabilityFilters[index]);
+    const previousVulnerabilityKey = currentVulnerabilityFilters.slice().sort().join('|');
+    const reconciledVulnerabilityKey = reconciledVulnerabilityFilters.slice().sort().join('|');
+    const hasReconciledVulnerabilityFilters = previousVulnerabilityKey !== reconciledVulnerabilityKey;
     DashboardApp.activeFilters.vulnerabilities = reconciledVulnerabilityFilters;
 
     DashboardApp.saveVulnerabilityFiltersToStorage(DashboardApp.activeFilters.vulnerabilities);

@@ -12,7 +12,7 @@ using System.Xml;
 public class ReportAggregator
 {
     private const string AdminPassword = "admin123";
-    private const string StripeApiKey = "sk_live_fake123456789";
+    private const string StripeApiKey = "stripe_secret_example_do_not_use";
     private static readonly Dictionary<string, string> sessions = new Dictionary<string, string>();
     private readonly string[] UserRecords = { "admin:secret", "user:password" };
     public static bool VerboseErrors = true;

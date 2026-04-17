@@ -1,11 +1,14 @@
 """
 Configuration constants for OASIS
 """
+import copy
 import logging
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Dict, Any
+from typing import Any, Dict, List, Optional, Set
+
+from .legacy_vulnerability_mapping import LEGACY_VULNERABILITY_MAPPING
 
 logger = logging.getLogger("oasis")
 
@@ -400,68 +403,7 @@ def _get_legacy_vulnerability_mapping() -> Dict[str, Any]:
     Legacy hardcoded vulnerability definitions for backward compatibility.
     This serves as a fallback when JSON files are not available.
     """
-    return {
-        'sqli': {
-            'name': 'SQL Injection',
-            'description': 'Code that might allow an attacker to inject SQL statements',
-            'patterns': [
-                'string concatenation in SQL query',
-                'user input directly in query',
-                'lack of parameterized queries',
-                'dynamic SQL generation',
-                'raw input in database operations',
-                'query parameters from request',
-                'execute raw SQL',
-                'format string in SQL',
-                'SQL query string interpolation',
-                'unsafe database.execute',
-                'LIKE operator with user input',
-                'ORDER BY with unsanitized input',
-                'MySQL query concatenation',
-                'PostgreSQL dynamic query',
-                'SQLite direct parameter',
-                'UNION injection vulnerability',
-                'database.query with variable',
-                'SQL WHERE clause with input',
-                'executeQuery with variable',
-                'createStatement().execute',
-                'executeSql with template'
-            ],
-            'impact': 'Can lead to data theft, data loss, authentication bypass, or complete system compromise',
-            'mitigation': 'Use parameterized queries or prepared statements, apply input validation, and use ORMs correctly'
-        },
-        'xss': {
-            'name': 'Cross-Site Scripting (XSS)',
-            'description': 'Vulnerabilities that allow attackers to inject client-side scripts',
-            'patterns': [
-                'unescaped output to HTML',
-                'innerHTML with user input',
-                'document.write with variables',
-                'eval with user content',
-                'rendering content without sanitization',
-                'dangerous DOM operations',
-                'raw user data in templates',
-                'bypass content sanitization',
-                'script injection vulnerability',
-                'missing HTML encoding',
-                'dangerouslySetInnerHTML',
-                'template literals with user data',
-                'attribute injection vulnerability',
-                'data-* attribute with user input',
-                'event handler assignment',
-                'href with javascript: protocol',
-                'DOM manipulation with createElement',
-                'React props sanitization missing',
-                'Vue v-html directive with data',
-                'Angular [innerHTML] binding',
-                'svg onload attribute',
-                'CSS expression with user input',
-                'postMessage without origin check'
-            ],
-            'impact': 'Can lead to session hijacking, credential theft, or delivery of malware to users',
-            'mitigation': 'Apply context-aware output encoding, use Content-Security-Policy, validate and sanitize all inputs'
-        }
-    }
+    return copy.deepcopy(LEGACY_VULNERABILITY_MAPPING)
 
 # Load vulnerability definitions dynamically
 VULNERABILITY_MAPPING = load_vulnerability_definitions()

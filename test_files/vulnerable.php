@@ -80,7 +80,7 @@ function processMoneyTransfer($fromAccount, $toAccount, $amount) {
     return "Transferred $amount from $fromAccount to $toAccount";
 }
 
-const STRIPE_SECRET = "sk_live_fake123456789";
+const STRIPE_SECRET = "stripe_secret_example_do_not_use";
 
 function emit_cors_bundle() {
     header("Access-Control-Allow-Origin: *");
