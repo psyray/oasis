@@ -1,4 +1,46 @@
 // Filter management functions
+DashboardApp.VULNERABILITY_FILTER_STORAGE_KEY = 'oasis.dashboard.vulnerabilityFilters';
+
+DashboardApp.saveVulnerabilityFiltersToStorage = function(vulnerabilityFilters) {
+    try {
+        const normalizedFilters = Array.isArray(vulnerabilityFilters)
+            ? Array.from(new Set(vulnerabilityFilters.filter(value => typeof value === 'string' && value.trim() !== '')))
+            : [];
+        localStorage.setItem(
+            DashboardApp.VULNERABILITY_FILTER_STORAGE_KEY,
+            JSON.stringify(normalizedFilters)
+        );
+    } catch (error) {
+        DashboardApp.debug('Unable to save vulnerability filters to localStorage:', error);
+    }
+};
+
+DashboardApp.loadVulnerabilityFiltersFromStorage = function() {
+    try {
+        const rawFilters = localStorage.getItem(DashboardApp.VULNERABILITY_FILTER_STORAGE_KEY);
+        if (!rawFilters) {
+            DashboardApp.activeFilters.vulnerabilities = [];
+            return;
+        }
+
+        const parsedFilters = JSON.parse(rawFilters);
+        DashboardApp.activeFilters.vulnerabilities = Array.isArray(parsedFilters)
+            ? Array.from(new Set(parsedFilters.filter(value => typeof value === 'string' && value.trim() !== '')))
+            : [];
+    } catch (error) {
+        DashboardApp.activeFilters.vulnerabilities = [];
+        DashboardApp.debug('Unable to load vulnerability filters from localStorage:', error);
+    }
+};
+
+DashboardApp.clearVulnerabilityFilterStorage = function() {
+    try {
+        localStorage.removeItem(DashboardApp.VULNERABILITY_FILTER_STORAGE_KEY);
+    } catch (error) {
+        DashboardApp.debug('Unable to clear vulnerability filters from localStorage:', error);
+    }
+};
+
 DashboardApp.renderFilters = function() {
     DashboardApp.debug("Rendering filters...");
     const modelFiltersContainer = document.getElementById('model-filters-section');
@@ -56,13 +98,29 @@ DashboardApp.populateFilters = function() {
     const vulnFiltersContainer = document.getElementById('vulnerability-filters');
     let vulnFiltersHtml = '';
     
-    Object.keys(DashboardApp.stats.vulnerabilities || {}).sort().forEach(vuln => {
+    const availableVulnerabilities = Object.keys(DashboardApp.stats.vulnerabilities || {})
+        .sort((a, b) => a.localeCompare(b, 'fr', { sensitivity: 'base' }));
+    const availableVulnerabilitySet = new Set(availableVulnerabilities);
+    const currentVulnerabilityFilters = Array.isArray(DashboardApp.activeFilters.vulnerabilities)
+        ? DashboardApp.activeFilters.vulnerabilities
+        : [];
+    const reconciledVulnerabilityFilters = currentVulnerabilityFilters
+        .filter(vulnerability => availableVulnerabilitySet.has(vulnerability));
+    const hasReconciledVulnerabilityFilters =
+        currentVulnerabilityFilters.length !== reconciledVulnerabilityFilters.length ||
+        currentVulnerabilityFilters.some((value, index) => value !== reconciledVulnerabilityFilters[index]);
+    DashboardApp.activeFilters.vulnerabilities = reconciledVulnerabilityFilters;
+
+    DashboardApp.saveVulnerabilityFiltersToStorage(DashboardApp.activeFilters.vulnerabilities);
+
+    availableVulnerabilities.forEach(vuln => {
         const count = DashboardApp.stats.vulnerabilities[vuln];
         const formattedVuln = DashboardApp.formatDisplayName(vuln, 'vulnerability');
+        const isChecked = DashboardApp.activeFilters.vulnerabilities.includes(vuln) ? 'checked' : '';
         vulnFiltersHtml += `
             <div class="filter-option" data-type="vulnerability" data-value="${vuln}">
                 <label>
-                    <input type="checkbox" class="filter-checkbox" data-type="vulnerability" data-value="${vuln}">
+                    <input type="checkbox" class="filter-checkbox" data-type="vulnerability" data-value="${vuln}" ${isChecked}>
                     ${formattedVuln} <span class="filter-count">(${count})</span>
                 </label>
             </div>
@@ -124,6 +182,10 @@ DashboardApp.populateFilters = function() {
                 // Remove value if it's present
                 DashboardApp.activeFilters[filterType] = DashboardApp.activeFilters[filterType].filter(item => item !== value);
             }
+
+            if (type === 'vulnerability') {
+                DashboardApp.saveVulnerabilityFiltersToStorage(DashboardApp.activeFilters.vulnerabilities);
+            }
             
             // Refresh reports and stats with new filters
             DashboardApp.fetchReports();
@@ -163,6 +225,11 @@ DashboardApp.populateFilters = function() {
             DashboardApp.fetchReports();
             DashboardApp.fetchStats();
         });
+    }
+
+    if (hasReconciledVulnerabilityFilters) {
+        DashboardApp.fetchReports();
+        DashboardApp.fetchStats();
     }
 };
 
@@ -276,6 +343,7 @@ DashboardApp.initializeFilters = function() {
             DashboardApp.activeFilters.formats = [];
             DashboardApp.activeFilters.vulnerabilities = [];
             DashboardApp.activeFilters.dateRange = null;
+            DashboardApp.clearVulnerabilityFilterStorage();
             
             // Reset checkboxes
             document.querySelectorAll('.filter-checkbox').forEach(checkbox => {
@@ -307,6 +375,7 @@ DashboardApp.clearFilters = function() {
         vulnerabilities: [],
         dateRange: null
     };
+    DashboardApp.clearVulnerabilityFilterStorage();
     
     // Refresh reports only - stats will be calculated from reports
     DashboardApp.fetchReports();
