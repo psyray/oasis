@@ -358,6 +358,11 @@ class OasisScanner:
         try:
             return self._init_oasis(args)
         except KeyboardInterrupt:
+            try:
+                if hasattr(self, "report") and self.report and hasattr(self.report, "mark_progress_aborted"):
+                    self.report.mark_progress_aborted()
+            except Exception:
+                logger.debug("Failed to publish aborted progress state", exc_info=True)
             logger.info(f"\nProcess interrupted by user at {generate_timestamp()}. Exiting...")
             self._save_cache_on_exit()
             return 1
@@ -384,22 +389,49 @@ class OasisScanner:
             language=getattr(self.args, 'language', 'en')
         )
 
-        # Initialize Ollama and check connection
-        if not self.args.web:
-            if not self._init_ollama(self.args.ollama_url):
-                return 1
-            # Initialize embedding manager and process input files
-            return self._execute_requested_mode() if self._init_processing() else 1
+        web_server = None
+        if self.args.web:
+            self._warn_web_mode_ignores_scan_flags()
+            web_server = WebServer(
+                self.report,
+                debug=self.args.debug,
+                web_expose=self.args.web_expose,
+                web_password=self.args.web_password,
+                web_port=self.args.web_port
+            )
+            self.report.set_progress_notifier(web_server.emit_scan_progress)
 
-        # Serve reports via web interface
-        WebServer(
-            self.report, 
-            debug=self.args.debug,
-            web_expose=self.args.web_expose,
-            web_password=self.args.web_password,
-            web_port=self.args.web_port
-        ).run()
-        return 0  # Exit after serving the web interface
+            # In web mode, only serve the UI (no scan execution).
+            web_server.run()
+            return 0
+
+        # Initialize Ollama and check connection
+        if not self._init_ollama(self.args.ollama_url):
+            return 1
+        return self._execute_requested_mode() if self._init_processing() else 1
+
+    def _warn_web_mode_ignores_scan_flags(self) -> None:
+        """Warn when scan-oriented flags are passed with --web UI-only mode."""
+        ignored_flags: list[str] = []
+        if getattr(self.args, "audit", False):
+            ignored_flags.append("--audit")
+        if getattr(self.args, "models", None):
+            ignored_flags.append("--models")
+        if getattr(self.args, "scan_model", None):
+            ignored_flags.append("--scan-model")
+        if getattr(self.args, "adaptive", False):
+            ignored_flags.append("--adaptive")
+        if float(getattr(self.args, "threshold", DEFAULT_ARGS["THRESHOLD"])) != float(DEFAULT_ARGS["THRESHOLD"]):
+            ignored_flags.append("--threshold")
+        if str(getattr(self.args, "vulns", DEFAULT_ARGS["VULNS"])) != str(DEFAULT_ARGS["VULNS"]):
+            ignored_flags.append("--vulns")
+        if getattr(self.args, "extensions", None):
+            ignored_flags.append("--extensions")
+        if ignored_flags:
+            logger.warning(
+                "Web mode serves the dashboard only; scan-related options are ignored: %s",
+                ", ".join(ignored_flags),
+            )
             
     def _init_arguments(self, args) -> Union[bool, None]:
         """

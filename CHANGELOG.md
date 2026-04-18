@@ -8,12 +8,17 @@
 - 🛡️ Added SARIF 2.1.0 export (`sarif/*.sarif`) and dashboard downloads for SARIF
 - 🧭 Added `.cursor/` rules and agent skills for implementation, releases, and git conventions
 - 🌍 Added report language metadata (`language`) in canonical JSON and dashboard language flags sourced from report data
+- ⚡ Added incremental reporting during analysis: vulnerability reports are written as each vulnerability completes instead of waiting for end-of-scan
+- 📈 Added progressive executive summary updates with scan progress metadata (`completed_vulnerabilities`, `total_vulnerabilities`, `is_partial`) and a `/api/progress` endpoint
+- 🌐 Added dashboard language filter with emoji-flag display aligned with report language badges
 
 ### 🐛 Fixed
 - 🔧 Fixed missing `analyze_type` in the embedding analyzer
 - 📝 Fixed vulnerability cards: title/summary shown before the code snippet
 - 🔗 Fixed broken download links in the report modal
 - 🖥️ Fixed small dashboard issues (types display, parallel refresh, debug logging)
+- 🧭 Fixed vulnerability filtering in dashboard so `Executive Summary` remains visible when vulnerability filters are applied
+- 🧹 Fixed atomic text writer edge case by cleaning temporary files when write/replace fails
 
 ### ⚡ Changed
 - 💾 Changed cache layout: per-project folders under `.oasis_cache`, schema-aware cleanup for structured outputs

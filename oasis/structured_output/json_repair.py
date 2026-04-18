@@ -168,7 +168,7 @@ def build_safe_minimal_chunk_json(raw: str) -> Optional[str]:
                     notes_source = n
     if notes_source is None:
         if note_match := re.search(r'"notes"\s*:\s*"([^"]*)"', raw, flags=re.DOTALL):
-            notes_source = note_match.group(1)
+            notes_source = note_match[1]
 
     notes = "Model returned malformed JSON; findings omitted."
     if isinstance(notes_source, str):

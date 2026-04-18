@@ -17,7 +17,7 @@ from .config import CHUNK_ANALYZE_TIMEOUT, LANGUAGES, MODEL_EMOJIS, VULNERABILIT
 from .ollama_manager import OllamaManager
 from .snippet_lines import absolute_snippet_lines_in_file
 from .tools import chunk_content_with_spans, logger, calculate_similarity, sanitize_name
-from .report import Report
+from .report import Report, build_adaptive_deep_phase_markdown, publish_incremental_summary
 from .embedding import EmbeddingManager, build_vulnerability_embedding_prompt
 from .cache import CacheManager
 from .enums import AnalysisMode, AnalysisType
@@ -337,7 +337,7 @@ class SecurityAnalyzer:
             )
             sample_json = json.dumps(samples, ensure_ascii=True, default=str)
             if len(sample_json) > 800:
-                sample_json = sample_json[:800] + "... [truncated]"
+                sample_json = f"{sample_json[:800]}... [truncated]"
             logger.debug(
                 "Normalized structured output fields (%s): %s; sample_changes=%s",
                 model_display,
@@ -781,7 +781,15 @@ Code to analyze:
         
         # Generate final executive summary
         logger.info("GENERATING FINAL REPORT")
-        report.generate_executive_summary(all_results, self.llm_model)
+        publish_incremental_summary(
+            report,
+            self.llm_model,
+            all_results,
+            completed_vulnerabilities=len(vulnerabilities),
+            total_vulnerabilities=len(vulnerabilities),
+            current_vulnerability=None,
+            tested_vulnerabilities=list(all_results.keys()),
+        )
         
         return all_results
 
@@ -988,7 +996,7 @@ Code to analyze:
         # Process each vulnerability separately for reporting
         with tqdm(total=len(suspicious_files_by_vuln), desc="Vulnerabilities analyzed (deep analysis)", 
                  position=1, leave=False, disable=args.silent) as deep_vuln_pbar:
-            for vuln_name, data in suspicious_files_by_vuln.items():
+            for completed_count, (vuln_name, data) in enumerate(suspicious_files_by_vuln.items(), start=1):
                 vuln = data['vuln_data']
 
                 # Update main progress bar before starting the deep analysis
@@ -1009,7 +1017,17 @@ Code to analyze:
                     )
                 else:
                     logger.info(f"No suspicious code found for {vuln_name}")
-                
+
+                publish_incremental_summary(
+                    report,
+                    self.llm_model,
+                    all_results,
+                    completed_vulnerabilities=completed_count,
+                    total_vulnerabilities=len(suspicious_files_by_vuln),
+                    current_vulnerability=vuln_name,
+                    tested_vulnerabilities=list(all_results.keys()),
+                )
+
                 # Update progress bars
                 deep_vuln_pbar.update(1)
                 if main_pbar:
@@ -2218,56 +2236,24 @@ Analyze this code segment for {vuln_name} vulnerabilities ONLY.
         vulnerable_chunks = [
             item for item in parsed_deep_results if item["model"].findings
         ]
+        vulnerable_items = [
+            (item["result"]["chunk_idx"], item["model"]) for item in vulnerable_chunks
+        ]
 
-        # 1. Summary section
-        summary = f"""## Adaptive Security Analysis for {Path(file_path).name}
-
-### Analysis Summary:
-- **Total code chunks analyzed**: {total_chunks}
-- **Suspicious chunks identified**: {suspicious_count} ({(suspicious_count/total_chunks*100):.1f}%)
-- **Context-sensitive chunks analyzed**: {medium_analyzed}
-- **Medium-analysis validation errors**: {medium_validation_errors}
-- **High-risk chunks deeply analyzed**: {deep_analyzed}
-- **Vulnerable chunks found**: {len(vulnerable_chunks)}
-- **Unparseable deep-analysis chunks**: {len(unparsed_deep_chunks)}
-- **Potential vulnerabilities (parse-failure suspects)**: {len(suspect_deep_chunks)}
-"""
-        report_parts = [summary]
-        
-        # 2. Vulnerabilities section (only if vulnerabilities found)
-        if vulnerable_chunks:
-            report_parts.append("\n## Identified Vulnerabilities\n")
-
-            for i, item in enumerate(vulnerable_chunks):
-                result = item["result"]
-                chunk_model = item["model"]
-                chunk_idx = result["chunk_idx"]
-                analysis_body = chunk_analysis_to_markdown(chunk_model, chunk_idx)
-                section_header = f"### Vulnerability #{i+1} - Chunk {chunk_idx+1}\n"
-                report_parts.extend((section_header + analysis_body, "\n<div class=\"page-break\"></div>\n"))
-        else:
-            report_parts.append("\n## No vulnerabilities were found in the deep analysis phase.\n")
-
-        if unparsed_deep_chunks:
-            report_parts.append("\n## Unparseable deep analyses\n")
-            for chunk in unparsed_deep_chunks:
-                chunk_idx = chunk.get("chunk_idx", "unknown")
-                raw = str(chunk.get("analysis", "") or "")
-                note = raw if len(raw) <= 300 else f"{raw[:300]}... [truncated]"
-                escaped_note = note.replace("```", "``\\`")
-                report_parts.append(
-                    "- Chunk {idx}: structured deep analysis could not be parsed.\n\n"
-                    "  Notes (raw model output, truncated & escaped):\n\n"
-                    "  ```\n"
-                    "{note}\n"
-                    "  ```\n".format(
-                        idx=chunk_idx,
-                        note=escaped_note,
-                    )
-                )
+        markdown = build_adaptive_deep_phase_markdown(
+            Path(file_path).name,
+            total_chunks=total_chunks,
+            suspicious_count=suspicious_count,
+            medium_analyzed=medium_analyzed,
+            medium_validation_errors=medium_validation_errors,
+            deep_analyzed=deep_analyzed,
+            vulnerable_items=vulnerable_items,
+            unparsed_deep_chunks=unparsed_deep_chunks,
+            suspect_deep_count=len(suspect_deep_chunks),
+        )
 
         return {
-            "markdown": "\n".join(report_parts),
+            "markdown": markdown,
             "structured_chunks": structured_chunks,
             "suspect_deep_chunks": suspect_deep_chunks,
         }
@@ -2337,7 +2323,7 @@ Analyze this code segment for {vuln_name} vulnerabilities ONLY.
         with tqdm(total=len(all_vulnerability_files), desc="Collecting results", 
                  position=0, leave=True, disable=args.silent) as vuln_pbar:
 
-            for vuln_name, data in all_vulnerability_files.items():
+            for completed_count, (vuln_name, data) in enumerate(all_vulnerability_files.items(), start=1):
                 vuln = data['vuln_data']
                 filtered_results = data['files']
                 vuln_pbar.set_postfix_str(f"Analyzing: {vuln_name}")
@@ -2356,10 +2342,20 @@ Analyze this code segment for {vuln_name} vulnerabilities ONLY.
                         model_name=self.llm_model,
                     )
 
+                publish_incremental_summary(
+                    report,
+                    self.llm_model,
+                    all_results,
+                    completed_vulnerabilities=completed_count,
+                    total_vulnerabilities=len(all_vulnerability_files),
+                    current_vulnerability=vuln_name,
+                    tested_vulnerabilities=list(all_results.keys()),
+                )
+
                 vuln_pbar.update(1)
 
         return all_results
-    
+
     def _collect_vulnerability_results(self, filtered_results, vuln):
         """
         Collect analysis results for a specific vulnerability

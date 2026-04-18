@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 import json
 import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -19,7 +22,24 @@ def ensure_parent_dir(path: Path) -> None:
 
 def write_utf8_text(path: Path, text: str) -> None:
     ensure_parent_dir(path)
-    path.write_text(text, encoding="utf-8")
+    tmp_path: Path | None = None
+    try:
+        # Keep tempfile in the same directory and use delete=False so we can
+        # atomically swap with os.replace on all platforms (including Windows).
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            delete=False,
+        ) as tmp:
+            tmp.write(text)
+            tmp_path = Path(tmp.name)
+        os.replace(tmp_path, path)
+    except Exception:
+        if tmp_path is not None and tmp_path.exists():
+            with suppress(OSError):
+                tmp_path.unlink()
+        raise
 
 
 def write_markdown_lines(path: Path, lines: List[str], logger: logging.Logger) -> None:
@@ -34,12 +54,12 @@ def write_markdown_lines(path: Path, lines: List[str], logger: logging.Logger) -
 
 def write_json_document(path: Path, doc: VulnerabilityReportDocument) -> None:
     ensure_parent_dir(path)
-    path.write_text(doc.model_dump_json(indent=2), encoding="utf-8")
+    write_utf8_text(path, doc.model_dump_json(indent=2))
 
 
 def write_sarif_json(path: Path, payload: dict) -> None:
     ensure_parent_dir(path)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    write_utf8_text(path, json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 def write_pdf_from_html(

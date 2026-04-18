@@ -51,6 +51,8 @@
 - 🔄 **Content Chunking**: Intelligent content splitting for better analysis of large files
 - 🤖 **Interactive Model Installation**: Guided installation for required Ollama models
 - 🌐 **Web Interface**: Secure, password-protected web dashboard for exploring reports
+- ⚡ **Incremental Reporting**: Vulnerability reports are published as soon as each vulnerability analysis completes
+- 📈 **Live Scan Progress**: Executive summary is created early and updated progressively during long scans
 
 ## 🚀 Prerequisites
 
@@ -433,6 +435,9 @@ oasis -i ./critical-service -sm qwen2.5-coder:7b -m bugtraceai-apex-q4 --adaptiv
 - **Reload** refreshes both `/api/stats?force=1` and `/api/reports?force=1` so listings stay in sync with the filesystem.
 - Canonical JSON reports are previewed in the Web UI by rendering HTML from the JSON via the Jinja template, so the modal matches the HTML/PDF structure as closely as possible.
 - Markdown preview (`/api/report-content/...`) remains the fallback for legacy reports that do not have a sibling `json/<same-stem>.json`, or when canonical JSON HTML preview cannot be generated.
+- Executive summary stays visible even when vulnerability filters are active, so scan-wide context is always available.
+- Language filtering is available in the dashboard (`🌐 Filter by language`) and uses the same emoji-flag format as report language badges.
+- Scan progress can be queried via `/api/progress` to retrieve the latest executive-summary progress metadata (`completed_vulnerabilities`, `total_vulnerabilities`, `is_partial`).
 
 ## 💾 Cache Management
 

@@ -333,10 +333,14 @@ def _vulnerability_definition_shape_error(data: Any) -> Optional[str]:
         return f"'patterns' must be a list, got {type(patterns).__name__}"
     if not patterns:
         return "'patterns' must be a non-empty list"
-    for i, item in enumerate(patterns):
-        if not isinstance(item, str):
-            return f"'patterns'[{i}] must be a string, got {type(item).__name__}"
-    return None
+    return next(
+        (
+            f"'patterns'[{i}] must be a string, got {type(item).__name__}"
+            for i, item in enumerate(patterns)
+            if not isinstance(item, str)
+        ),
+        None,
+    )
 
 
 def load_vulnerability_definitions() -> Dict[str, Any]:
@@ -364,8 +368,7 @@ def load_vulnerability_definitions() -> Dict[str, Any]:
     vulnerabilities: Dict[str, Any] = {}
     package_dir = Path(__file__).resolve().parent
     default_vuln_dir = package_dir.parent / "vulnerability"
-    env_dir = os.environ.get("OASIS_VULNERABILITY_DIR")
-    if env_dir:
+    if env_dir := os.environ.get("OASIS_VULNERABILITY_DIR"):
         try:
             vuln_dir = Path(env_dir).expanduser().resolve()
         except (OSError, RuntimeError) as exc:
@@ -505,6 +508,15 @@ REPORT = {
     'OUTPUT_FORMATS': ['json', 'sarif', 'pdf', 'html', 'md'],
     # Dashboard / API: human-readable first; any OUTPUT_FORMATS entry missing here is appended after
     'DASHBOARD_FORMAT_DISPLAY_ORDER': ['html', 'pdf', 'md', 'json', 'sarif'],
+    # Realtime dashboard behavior
+    'DASHBOARD_REALTIME_ENABLED': True,
+    'DASHBOARD_SOCKETIO_CLIENT_URL': 'https://cdn.socket.io/4.7.5/socket.io.min.js',
+    'DASHBOARD_SOCKETIO_ASYNC_MODE': 'auto',
+    # Optional extra Socket.IO origins (use {port} for the dashboard port). Runtime always
+    # adds http://127.0.0.1:{port}, http://localhost:{port}, and when web_expose is not
+    # "local", discovered LAN http://<ip>:{port} URLs for remote browsers.
+    'DASHBOARD_SOCKETIO_CORS_ALLOWED_ORIGINS': [],
+    'DASHBOARD_PROGRESS_MONITOR_INTERVAL_SECONDS': 2.0,
     'OUTPUT_DIR': 'security_reports',
     'BACKGROUND_COLOR': '#F5F2E9',
     'EXPLAIN_ANALYSIS': """

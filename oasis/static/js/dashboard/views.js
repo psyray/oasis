@@ -379,6 +379,7 @@ DashboardApp.renderListViewWithTemplate = function() {
 DashboardApp.renderStats = function() {
     DashboardApp.debug("Rendering stats...");
     const statsContainer = document.getElementById('stats-container');
+    const h = DashboardApp._escapeHtml;
     
     if (!statsContainer) {
         console.error("Stats container not found");
@@ -395,6 +396,54 @@ DashboardApp.renderStats = function() {
     const highPct = (DashboardApp.stats.risk_summary.high / totalRisks * 100) || 0;
     const mediumPct = (DashboardApp.stats.risk_summary.medium / totalRisks * 100) || 0;
     const lowPct = (DashboardApp.stats.risk_summary.low / totalRisks * 100) || 0;
+    const progress = DashboardApp.progressState || {};
+    const hasRun = Boolean(progress.has_progress);
+    const totalVulns = Math.max(0, Number(progress.total_vulnerabilities || 0));
+    const hasProgress = totalVulns > 0;
+    const completedVulns = Math.max(0, Number(progress.completed_vulnerabilities || 0));
+    const progressPct = totalVulns > 0 ? Math.min(100, Math.round((completedVulns / totalVulns) * 100)) : 0;
+    const statusKey = String(progress.status || '').toLowerCase();
+    const progressStatus = statusKey === 'aborted'
+        ? 'Aborted'
+        : (statusKey === 'complete' ? 'Complete' : (progress.is_partial ? 'In progress' : 'Complete'));
+    const statusBadgeClass = statusKey === 'aborted'
+        ? 'badge-high'
+        : (progress.is_partial ? 'badge-medium' : 'badge-low');
+    const testedVulnerabilities = Array.isArray(progress.tested_vulnerabilities)
+        ? progress.tested_vulnerabilities.filter(Boolean)
+        : [];
+    const testedVulnerabilitiesHtml = testedVulnerabilities.length > 0
+        ? testedVulnerabilities.map(vuln => {
+            const emoji = DashboardApp.getVulnerabilityEmoji(String(vuln).toLowerCase().replace(/ /g, '_')).trim() || '🔒';
+            return `<span class="progress-vuln-emoji" title="${h(vuln)}">${h(emoji)}</span>`;
+        }).join('')
+        : '<span class="progress-vuln-empty">No vulnerabilities completed yet</span>';
+    const currentVulnerabilityRaw = String(progress.current_vulnerability || '').trim();
+    const currentVulnerabilityEmoji = currentVulnerabilityRaw
+        ? (DashboardApp.getVulnerabilityEmoji(currentVulnerabilityRaw.toLowerCase().replace(/ /g, '_')).trim() || '🔒')
+        : (statusKey === 'aborted' ? '🛑' : (hasRun ? '⏳' : '📭'));
+    const currentVulnerabilityText = currentVulnerabilityRaw
+        || (statusKey === 'aborted' ? 'Scan aborted by user' : (hasRun ? 'Waiting for first vulnerability' : 'No active scan'));
+    const progressCard = hasProgress
+        ? `
+            <div class="card progress-card">
+                <div class="card-title">⏱️ Scan progress</div>
+                <div class="progress-meta">${completedVulns}/${totalVulns} vulnerabilities</div>
+                <div class="progress-track">
+                    <div class="progress-fill" style="width: ${progressPct}%;"></div>
+                </div>
+                <div class="progress-current-vulnerability">
+                    <span class="progress-current-emoji">${h(currentVulnerabilityEmoji)}</span>
+                    <span class="progress-current-text">${h(currentVulnerabilityText)}</span>
+                </div>
+                <div class="progress-tested-vulnerabilities">${testedVulnerabilitiesHtml}</div>
+                <div class="progress-footer">
+                    <span class="badge ${statusBadgeClass}">${progressStatus}</span>
+                    <span class="progress-model">${progress.model || ''}</span>
+                </div>
+            </div>
+        `
+        : '';
     
     statsContainer.innerHTML = `
         <div class="dashboard-cards">
@@ -428,6 +477,7 @@ DashboardApp.renderStats = function() {
                     <span class="badge badge-low">📌 ${DashboardApp.stats.risk_summary.low || 0} Low</span>
                 </div>
             </div>
+            ${progressCard}
         </div>
     `;
 };
