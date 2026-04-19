@@ -51,37 +51,55 @@ class EmbeddingProgressThrottle:
         """Emit at most once per ``min_interval_sec`` while work is incomplete."""
         if hook is None:
             return
+
+        safe_total: int
+        safe_completed: int
+
         try:
-            total_n = int(total)
+            total_n = total
         except (TypeError, ValueError):
             logger.debug(
                 "EmbeddingProgressThrottle.maybe_emit: invalid total=%r; skipping emit",
                 total,
             )
-            return
-        total_n = max(0, total_n)
-        if total_n <= 0:
-            logger.debug(
-                "EmbeddingProgressThrottle.maybe_emit: non-positive total=%r (normalized=%s); skipping emit",
-                total,
-                total_n,
-            )
-            return
-        try:
-            completed_n = int(completed)
-        except (TypeError, ValueError):
-            completed_n = 0
-        completed_n = max(0, min(completed_n, total_n))
+            if not force:
+                return
+            safe_total = 0
+            safe_completed = 0
+        else:
+            total_n = max(0, total_n)
+            if total_n <= 0:
+                logger.debug(
+                    "EmbeddingProgressThrottle.maybe_emit: non-positive total=%r",
+                    total,
+                )
+                if not force:
+                    return
+                safe_total = 0
+                safe_completed = 0
+            else:
+                safe_total = total_n
+                try:
+                    completed_n = completed
+                except (TypeError, ValueError):
+                    completed_n = 0
+                safe_completed = max(0, min(completed_n, safe_total))
+
         now = time.monotonic()
+
+        if force:
+            self._last_emit_mono = now
+            hook(safe_completed, safe_total)
+            return
+
         if (
-            not force
-            and completed_n < total_n
+            safe_completed < safe_total
             and now - self._last_emit_mono
             < max(EMBEDDING_THROTTLE_MIN_INTERVAL_FLOOR_SEC, min_interval_sec)
         ):
             return
         self._last_emit_mono = now
-        hook(completed_n, total_n)
+        hook(safe_completed, safe_total)
 
 
 class EmbeddingManager:

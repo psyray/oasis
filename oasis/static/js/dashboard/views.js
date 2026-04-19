@@ -403,12 +403,39 @@ DashboardApp.renderStats = function() {
     const completedVulns = Math.max(0, Number(progress.completed_vulnerabilities || 0));
     const progressPct = totalVulns > 0 ? Math.min(100, Math.round((completedVulns / totalVulns) * 100)) : 0;
     const statusKey = String(progress.status || '').toLowerCase();
-    const progressStatus = statusKey === 'aborted'
-        ? 'Aborted'
-        : (statusKey === 'complete' ? 'Complete' : (progress.is_partial ? 'In progress' : 'Complete'));
-    const statusBadgeClass = statusKey === 'aborted'
-        ? 'badge-high'
-        : (progress.is_partial ? 'badge-medium' : 'badge-low');
+    const isAborted = statusKey === 'aborted';
+    const isFailed = statusKey === 'failed';
+    const isSucceeded = statusKey === 'succeeded';
+    const isFinished = statusKey === 'finished' || statusKey === 'complete' || isSucceeded;
+
+    const progressStatus = (() => {
+        if (isAborted) {
+            return 'Aborted';
+        }
+        if (isFailed) {
+            return 'Failed';
+        }
+        if (!isFinished && progress.is_partial) {
+            return 'In progress';
+        }
+        if (isFinished) {
+            return 'Complete';
+        }
+        return progress.is_partial ? 'In progress' : 'Complete';
+    })();
+
+    const statusBadgeClass = (() => {
+        if (isAborted) {
+            return 'badge-status-aborted';
+        }
+        if (isFailed) {
+            return 'badge-status-failed';
+        }
+        if (!isFinished && progress.is_partial) {
+            return 'badge-status-in-progress';
+        }
+        return 'badge-status-complete';
+    })();
     const testedVulnerabilities = Array.isArray(progress.tested_vulnerabilities)
         ? progress.tested_vulnerabilities.filter(Boolean)
         : [];
@@ -421,9 +448,9 @@ DashboardApp.renderStats = function() {
     const currentVulnerabilityRaw = String(progress.current_vulnerability || '').trim();
     const currentVulnerabilityEmoji = currentVulnerabilityRaw
         ? (DashboardApp.getVulnerabilityEmoji(currentVulnerabilityRaw.toLowerCase().replace(/ /g, '_')).trim() || '🔒')
-        : (statusKey === 'aborted' ? '🛑' : (hasRun ? '⏳' : '📭'));
+        : (isAborted ? '🛑' : isFailed ? '⚠️' : (hasRun ? '⏳' : '📭'));
     const currentVulnerabilityText = currentVulnerabilityRaw
-        || (statusKey === 'aborted' ? 'Scan aborted by user' : (hasRun ? 'Waiting for first vulnerability' : 'No active scan'));
+        || (isAborted ? 'Scan aborted by user' : isFailed ? 'Scan failed' : (hasRun ? 'Waiting for first vulnerability' : 'No active scan'));
 
     const normalizePhaseNumber =
         typeof DashboardApp.normalizeProgressNumber === 'function'

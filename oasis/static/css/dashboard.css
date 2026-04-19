@@ -41,7 +41,7 @@ body {
     color: var(--white);
     text-decoration: none;
     font-weight: bold;
-    font-size: 0.9rem;
+    font-size: 1.1rem;
     padding: 6px 12px;
     border-radius: 4px;
     transition: background-color 0.2s ease;
@@ -57,8 +57,8 @@ body {
 }
 
 .logo-circle {
-    width: 80px;
-    height: 80px;
+    width: 50px;
+    height: 50px;
     border-radius: 50%;
     background-color: #e1dcc8;
     display: flex;
@@ -70,8 +70,8 @@ body {
 } 
 
 .oasis-logo-img {
-    width: 60px;
-    height: 60px;
+    width: 40px;
+    height: 40px;
     object-fit: contain;
     margin-top: 0px;
 }
@@ -87,7 +87,7 @@ body {
 
 .title {
     color: white;
-    font-size: 24px;
+    font-size: 35px;
     font-weight: bold;
     margin: 0;
 }
@@ -367,6 +367,31 @@ body {
 .badge-low {
     background-color: #ddffdd;
     color: #2cbe4e;
+}
+
+/* Scan progress chip (distinct from vulnerability severity badges above) */
+.badge-status-aborted {
+    background-color: #fde8e8;
+    color: #8b1538;
+    border: 1px solid #f5c2c7;
+}
+
+.badge-status-failed {
+    background-color: #ffe8e8;
+    color: #cf222e;
+    border: 1px solid #ee9999;
+}
+
+.badge-status-in-progress {
+    background-color: #e8f4fc;
+    color: #0969da;
+    border: 1px solid #b6daff;
+}
+
+.badge-status-complete {
+    background-color: #eefbf0;
+    color: #1a7f37;
+    border: 1px solid #aceebb;
 }
 
 .risk-indicator {

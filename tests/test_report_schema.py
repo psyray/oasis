@@ -528,6 +528,44 @@ class TestReportSchema(unittest.TestCase):
         self.assertNotIn("unwanted_blob", payload)
         self.assertNotIn("leaked_secret", payload)
 
+    @unittest.skipIf(publish_incremental_summary is None, "oasis.report dependencies are unavailable")
+    def test_publish_incremental_summary_respects_explicit_status_override(self):
+        progresses: list = []
+
+        report = SimpleNamespace(
+            generate_executive_summary=lambda all_results, llm_model, progress=None: progresses.append(
+                progress
+            )
+        )
+
+        publish_incremental_summary(
+            report,
+            "model-x",
+            {},
+            completed_vulnerabilities=1,
+            total_vulnerabilities=5,
+            current_vulnerability=None,
+            tested_vulnerabilities=[],
+            status="aborted",
+        )
+
+        payload = progresses[-1]
+        self.assertEqual(payload["status"], "aborted")
+        self.assertTrue(payload["is_partial"])
+
+        publish_incremental_summary(
+            report,
+            "model-x",
+            {},
+            completed_vulnerabilities=1,
+            total_vulnerabilities=5,
+            current_vulnerability=None,
+            tested_vulnerabilities=[],
+            status="succeeded",
+        )
+        self.assertEqual(progresses[-1]["status"], "succeeded")
+        self.assertFalse(progresses[-1]["is_partial"])
+
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_executive_summary_notifier_receives_progress_payload(self):
         report = Report.__new__(Report)
@@ -831,6 +869,14 @@ class TestReportSchema(unittest.TestCase):
         throttle.maybe_emit(hook, 5, 5, min_interval_sec=3600.0, force=True)
         self.assertEqual(calls[-1], (5, 5))
 
+    @unittest.skipIf(EmbeddingProgressThrottle is None, "oasis.embedding unavailable")
+    def test_embedding_progress_force_emit_with_zero_total_calls_hook(self):
+        calls = []
+        hook = lambda c, t: calls.append((c, t))
+        throttle = EmbeddingProgressThrottle()
+        throttle.maybe_emit(hook, 0, 0, min_interval_sec=3600.0, force=True)
+        self.assertEqual(calls, [(0, 0)])
+
     def test_scan_progress_extended_keys_contract_matches_expected_set(self):
         """Guardrail: extend this set when adding wire keys; keeps report/web filtering aligned."""
         expected = frozenset(
@@ -843,6 +889,7 @@ class TestReportSchema(unittest.TestCase):
                 "scan_mode",
                 "event_version",
                 "vulnerability_types_total",
+                "status",
             }
         )
         self.assertEqual(SCAN_PROGRESS_EXTENDED_KEYS, expected)
@@ -866,16 +913,16 @@ class TestReportSchema(unittest.TestCase):
         self.assertIsNone(parse_phase_counts_from_progress_cell(""))
 
     @unittest.skipIf(EmbeddingProgressThrottle is None, "oasis.embedding unavailable")
-    def test_embedding_progress_throttle_rejects_invalid_or_non_positive_total(self):
+    def test_embedding_progress_throttle_force_emit_normalizes_invalid_total(self):
         calls = []
         hook = lambda c, t: calls.append((c, t))
         throttle = EmbeddingProgressThrottle()
         throttle.maybe_emit(hook, 1, -5, min_interval_sec=0.0, force=True)
         throttle.maybe_emit(hook, 1, 0, min_interval_sec=0.0, force=True)
         throttle.maybe_emit(hook, 1, "bad", min_interval_sec=0.0, force=True)
-        self.assertEqual(calls, [])
+        self.assertEqual(calls, [(0, 0), (0, 0), (0, 0)])
         throttle.maybe_emit(hook, 2, 5, min_interval_sec=0.0, force=True)
-        self.assertEqual(calls, [(2, 5)])
+        self.assertEqual(calls, [(0, 0), (0, 0), (0, 0), (2, 5)])
         throttle.maybe_emit(hook, 1, 5.9, min_interval_sec=0.0, force=True)
         self.assertEqual(calls[-1], (1, 5))
 

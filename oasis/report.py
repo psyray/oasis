@@ -30,7 +30,11 @@ from .tools import extract_clean_path, logger, sanitize_name, generate_timestamp
 
 # Package metadata (process constant; avoid lazy imports in hot paths)
 from . import __version__ as oasis_version
-from .helpers.progress_constants import SCAN_PROGRESS_EXTENDED_KEYS
+from .helpers.progress_constants import (
+    SCAN_PROGRESS_EXTENDED_KEYS,
+    SCAN_PROGRESS_NON_PARTIAL_STATUSES,
+    SCAN_PROGRESS_STATUS_EXPLICIT,
+)
 
 
 def progress_timestamp_iso() -> str:
@@ -640,12 +644,15 @@ class Report:
 
         is_partial = bool(progress.get("is_partial", False))
         status_key = str(progress.get("status") or "").strip().lower()
-        if status_key not in {"in_progress", "complete", "aborted"}:
+        if status_key not in SCAN_PROGRESS_STATUS_EXPLICIT:
             status_key = "in_progress" if is_partial else "complete"
         status_label = {
             "in_progress": "Partial (scan in progress)",
             "complete": "Complete",
             "aborted": "Aborted",
+            "failed": "Failed",
+            "succeeded": "Succeeded",
+            "finished": "Finished",
         }[status_key]
         tested_vulnerabilities = [
             str(item).strip()
@@ -1011,19 +1018,39 @@ def publish_incremental_summary(
     Keyword arguments beyond the explicit parameters are merged only when the key is in
     ``SCAN_PROGRESS_EXTENDED_KEYS``, matching ``Report._append_scan_progress_section`` so
     arbitrary caller data cannot be persisted into executive-summary artifacts.
+
+    If ``progress_extras`` includes a validated ``status`` string, it overrides the default
+    ``in_progress`` / ``complete`` pair derived from counts; ``is_partial`` is then derived
+    from that status (non-partial only for success-style terminals in
+    ``SCAN_PROGRESS_NON_PARTIAL_STATUSES``). Invalid status values are ignored.
     """
-    payload: Dict[str, Any] = {
-        "completed_vulnerabilities": completed_vulnerabilities,
-        "total_vulnerabilities": total_vulnerabilities,
-        "is_partial": completed_vulnerabilities < total_vulnerabilities,
-        "status": "in_progress" if completed_vulnerabilities < total_vulnerabilities else "complete",
-        "current_vulnerability": current_vulnerability,
-        "tested_vulnerabilities": tested_vulnerabilities,
-    }
+    status_override = str(progress_extras.get("status") or "").strip()
+    override_lower = status_override.lower()
+    if status_override and override_lower in SCAN_PROGRESS_STATUS_EXPLICIT:
+        effective_status = override_lower
+        is_partial = effective_status not in SCAN_PROGRESS_NON_PARTIAL_STATUSES
+    else:
+        derived_status_key = (
+            "in_progress" if completed_vulnerabilities < total_vulnerabilities else "complete"
+        )
+        effective_status = derived_status_key
+        derived_partial = completed_vulnerabilities < total_vulnerabilities
+        is_partial = derived_partial
+
     extras_allowed = {
         key: val
         for key, val in progress_extras.items()
         if key in SCAN_PROGRESS_EXTENDED_KEYS and val is not None
+    }
+    extras_allowed.pop("status", None)
+
+    payload: Dict[str, Any] = {
+        "completed_vulnerabilities": completed_vulnerabilities,
+        "total_vulnerabilities": total_vulnerabilities,
+        "is_partial": is_partial,
+        "status": effective_status,
+        "current_vulnerability": current_vulnerability,
+        "tested_vulnerabilities": tested_vulnerabilities,
     }
     if "updated_at" not in extras_allowed:
         payload["updated_at"] = progress_timestamp_iso()

@@ -27,7 +27,7 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for minimal test envs
                 return func
             return decorator
 
-        def emit(self, _event, _payload):
+        def emit(self, event, data=None, **_kwargs):
             return None
 
         def run(self, app, **kwargs):
@@ -41,7 +41,7 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for minimal test envs
         def sleep(self, seconds):
             time.sleep(seconds)
 
-    def emit(_event, _payload=None):  # type: ignore[override]
+    def emit(event, data=None, **_kwargs):  # type: ignore[override]
         return None
 
 
@@ -243,7 +243,7 @@ class WebServer:
 
         # Register routes with authentication
         app = self.register_routes(app, self, login_required)
-        self._register_socket_handlers(login_required)
+        self._register_socket_handlers()
         self._start_progress_monitor()
 
         # Determine the host based on the expose setting
@@ -261,7 +261,7 @@ class WebServer:
         thread.start()
         return thread
 
-    def _register_socket_handlers(self, login_required):
+    def _register_socket_handlers(self):
         if not self.socketio:
             return
 
@@ -287,7 +287,7 @@ class WebServer:
         self._progress_monitor_started = False
 
     def _progress_monitor_loop(self):
-        while not self._stop_progress_monitor and self.socketio and not (hasattr(self.socketio, "server") and getattr(self.socketio, "server") is None):
+        while not self._stop_progress_monitor and self.socketio:
             try:
                 self.collect_report_data()
                 payload = self._build_scan_progress_payload()
@@ -846,23 +846,16 @@ class WebServer:
         if from_sidecar is not None and from_embedded is not None:
             ts_side = WebServer._scan_progress_updated_at_key(from_sidecar)
             ts_emb = WebServer._scan_progress_updated_at_key(from_embedded)
-            if ts_side is not None and ts_emb is not None:
-                if ts_side > ts_emb:
-                    return from_sidecar
-                if ts_side < ts_emb:
-                    return from_embedded
+            if ts_side is not None:
+                if ts_emb is not None:
+                    if ts_side > ts_emb:
+                        return from_sidecar
+                    return from_embedded if ts_side < ts_emb else from_sidecar
                 return from_sidecar
-            if ts_side is not None and ts_emb is None:
-                return from_sidecar
-            if ts_side is None and ts_emb is not None:
-                return from_embedded
-            return from_sidecar
-
+            return from_embedded if ts_emb is not None else from_sidecar
         if from_sidecar is not None:
             return from_sidecar
-        if from_embedded is not None:
-            return from_embedded
-        return {}
+        return from_embedded if from_embedded is not None else {}
 
     @staticmethod
     def _summary_progress_from_markdown_report_file(report_file: Path) -> dict:
