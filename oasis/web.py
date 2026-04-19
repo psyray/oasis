@@ -1,6 +1,7 @@
 import contextlib
 from datetime import datetime, timezone
 import logging
+from typing import Any
 import json
 from pathlib import Path
 import re
@@ -46,8 +47,27 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for minimal test envs
 
 from .config import REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS, LANGUAGES
 from .export.filenames import artifact_filename, report_dir_glob_for_format
-from .report import Report
+from .helpers.pipeline_phase_md import parse_phase_counts_from_progress_cell
+from .helpers.progress_constants import SCAN_PROGRESS_EXTENDED_KEYS
+from .report import Report, executive_summary_progress_sidecar_path
 from .tools import parse_iso_date, parse_report_date
+
+
+def _coerce_scan_progress_event_version(raw: Any) -> int:
+    """Normalize ``event_version`` to int for Socket.IO / REST consumers (matches dashboard coercion).
+
+    Integer-like values (non-boolean ints or integer strings) are returned as ints; all other
+    values (including booleans and empty/invalid strings) fall back to ``1``.
+    """
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return 1
+    try:
+        text = str(raw).strip()
+        return int(text, 10) if text else 1
+    except (TypeError, ValueError):
+        return 1
 
 logger = logging.getLogger(__name__)
 
@@ -275,8 +295,13 @@ class WebServer:
                     payload.get("completed_vulnerabilities"),
                     payload.get("total_vulnerabilities"),
                     payload.get("is_partial"),
+                    str(payload.get("status") or ""),
                     payload.get("model"),
                     payload.get("path"),
+                    payload.get("updated_at"),
+                    payload.get("active_phase"),
+                    repr(payload.get("phases")),
+                    repr(payload.get("adaptive_subphases")),
                 ) if payload else None
                 if payload and progress_key != self._last_emitted_progress_key:
                     self.socketio.emit("scan_progress", payload)
@@ -300,7 +325,7 @@ class WebServer:
         if not progress:
             return {}
         payload = self._normalize_scan_progress_payload(progress, has_progress=True)
-        payload["event_version"] = 1
+        payload["event_version"] = _coerce_scan_progress_event_version(payload.get("event_version"))
         return payload
 
     @staticmethod
@@ -380,7 +405,7 @@ class WebServer:
         total = int(progress.get("total_vulnerabilities", 0))
         is_partial = bool(progress.get("is_partial", False))
         status = str(progress.get("status") or ("in_progress" if is_partial else "complete"))
-        return {
+        payload = {
             "has_progress": has_progress,
             "completed_vulnerabilities": completed,
             "total_vulnerabilities": total,
@@ -394,6 +419,10 @@ class WebServer:
             ),
             "tested_vulnerabilities": tested_vulnerabilities,
         }
+        for key in SCAN_PROGRESS_EXTENDED_KEYS:
+            if key in progress:
+                payload[key] = progress[key]
+        return payload
 
     def _latest_scan_progress_from_report_data(self) -> dict:
         """Resolve latest executive-summary progress from indexed report data."""
@@ -747,24 +776,26 @@ class WebServer:
             return {}
 
     @staticmethod
-    def _summary_progress_from_json_report_file(report_file: Path) -> dict:
-        """Load optional executive summary progress metadata from JSON report."""
-        try:
-            with open(report_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return {}
+    def _scan_progress_updated_at_key(payload: dict) -> str | None:
+        """Lexicographic ordering key for ``updated_at`` (ISO Z suffix matches chronological order)."""
+        raw = payload.get("updated_at")
+        if raw is None:
+            return None
+        text = str(raw).strip()
+        return text or None
 
+    @staticmethod
+    def _parse_summary_progress_from_json_data(data: dict) -> dict | None:
         progress = data.get("progress")
         if not isinstance(progress, dict):
-            return {}
+            return None
 
         try:
             completed = int(progress.get("completed_vulnerabilities", 0))
             total = int(progress.get("total_vulnerabilities", 0))
             is_partial = bool(progress.get("is_partial", False))
         except (TypeError, ValueError):
-            return {}
+            return None
 
         tested_vulnerabilities = [
             str(item).strip()
@@ -773,14 +804,65 @@ class WebServer:
         ]
         current_vulnerability = str(progress.get("current_vulnerability") or "").strip()
 
-        return {
+        result = {
             "completed_vulnerabilities": completed,
             "total_vulnerabilities": total,
             "is_partial": is_partial,
-            "status": str(progress.get("status") or ("in_progress" if is_partial else "complete")).strip().lower(),
+            "status": str(
+                progress.get("status")
+                or ("in_progress" if is_partial else "complete")
+            ).strip().lower(),
             "current_vulnerability": current_vulnerability,
             "tested_vulnerabilities": tested_vulnerabilities,
         }
+        for key in SCAN_PROGRESS_EXTENDED_KEYS:
+            if key in progress:
+                result[key] = progress[key]
+        return result
+
+    @staticmethod
+    def _load_summary_progress_json_file(path: Path) -> dict | None:
+        if not path.is_file():
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+        return WebServer._parse_summary_progress_from_json_data(data)
+
+    @staticmethod
+    def _summary_progress_from_json_report_file(report_file: Path) -> dict:
+        """Load optional executive summary progress metadata from JSON report.
+
+        When both a sidecar (``*.progress.json``) and embedded ``progress`` exist, the newer
+        ``updated_at`` wins so a stale partial sidecar cannot override fresher embedded data.
+        When timestamps are absent on both, sidecar is preferred first (legacy behavior).
+        """
+        sidecar_path = executive_summary_progress_sidecar_path(report_file)
+        from_sidecar = WebServer._load_summary_progress_json_file(sidecar_path)
+        from_embedded = WebServer._load_summary_progress_json_file(report_file)
+
+        if from_sidecar is not None and from_embedded is not None:
+            ts_side = WebServer._scan_progress_updated_at_key(from_sidecar)
+            ts_emb = WebServer._scan_progress_updated_at_key(from_embedded)
+            if ts_side is not None and ts_emb is not None:
+                if ts_side > ts_emb:
+                    return from_sidecar
+                if ts_side < ts_emb:
+                    return from_embedded
+                return from_sidecar
+            if ts_side is not None and ts_emb is None:
+                return from_sidecar
+            if ts_side is None and ts_emb is not None:
+                return from_embedded
+            return from_sidecar
+
+        if from_sidecar is not None:
+            return from_sidecar
+        if from_embedded is not None:
+            return from_embedded
+        return {}
 
     @staticmethod
     def _summary_progress_from_markdown_report_file(report_file: Path) -> dict:
@@ -811,7 +893,7 @@ class WebServer:
             ]
         else:
             tested_vulnerabilities = []
-        return {
+        result = {
             "completed_vulnerabilities": int(match[2]),
             "total_vulnerabilities": int(match[3]),
             "is_partial": status.startswith("partial"),
@@ -827,6 +909,65 @@ class WebServer:
             ),
             "tested_vulnerabilities": tested_vulnerabilities,
         }
+        if phases := WebServer._pipeline_phases_from_executive_summary_markdown(
+            content
+        ):
+            result["phases"] = phases
+        return result
+
+    @staticmethod
+    def _pipeline_phases_from_executive_summary_markdown(content: str) -> list[dict]:
+        """Parse optional ``### Pipeline phases`` markdown table into phase dict rows.
+
+        Rows are split on ``|`` so minor spacing/extra text in the progress column (e.g.
+        percentages) still yields counts when at least two integers appear.
+        """
+        if "### Pipeline phases" not in content:
+            return []
+        phases: list[dict] = []
+        capture = False
+        for raw in content.splitlines():
+            line = raw.strip()
+            if "### Pipeline phases" in line:
+                capture = True
+                continue
+            if capture:
+                if line.startswith("### ") and "Pipeline phases" not in line:
+                    break
+                if not line.startswith("|"):
+                    continue
+                if "---" in line:
+                    continue
+                cells = [c.strip() for c in line.split("|")]
+                if cells and cells[0] == "":
+                    cells = cells[1:]
+                if cells and cells[-1] == "":
+                    cells = cells[:-1]
+                if len(cells) < 3:
+                    continue
+                cl0, cl1 = cells[0].lower(), cells[1].lower()
+                if "phase" in cl0 and "status" in cl1:
+                    continue
+                if not cells[0].strip("-"):
+                    continue
+                label, status, prog_cell = cells[0], cells[1], cells[2]
+                pair = parse_phase_counts_from_progress_cell(prog_cell)
+                if pair is None:
+                    logger.debug(
+                        "Skipping pipeline phase row without parseable counts: %s",
+                        line[:120],
+                    )
+                    continue
+                c, t = pair
+                phases.append(
+                    {
+                        "label": label.strip(),
+                        "status": status.strip(),
+                        "completed": max(c, 0),
+                        "total": max(t, 0),
+                    }
+                )
+        return phases
 
     @staticmethod
     def _language_from_json_report_file(report_file: Path) -> str | None:
@@ -1207,7 +1348,10 @@ class WebServer:
         progress = self._latest_scan_progress_from_report_data() if filtered_reports is None else self._latest_scan_progress_from_filtered_reports(reports_to_analyze)
         if not progress:
             return self._normalize_scan_progress_payload({}, has_progress=False)
-        return self._normalize_scan_progress_payload(progress, has_progress=True)
+        normalized = self._normalize_scan_progress_payload(progress, has_progress=True)
+        if "event_version" in normalized:
+            normalized["event_version"] = _coerce_scan_progress_event_version(normalized.get("event_version"))
+        return normalized
 
     @staticmethod
     def _latest_scan_progress_from_filtered_reports(reports_to_analyze) -> dict:

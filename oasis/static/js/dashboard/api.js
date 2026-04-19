@@ -124,8 +124,49 @@ DashboardApp.fetchStats = function(forceRefresh = false, options = {}) {
         });
 };
 
+/** Matches ``oasis.enums.PhaseRowStatus`` wire strings (incremental scan payloads). */
+DashboardApp.PhaseRowStatus = Object.freeze({
+    PENDING: 'pending',
+    IN_PROGRESS: 'in_progress',
+    COMPLETE: 'complete',
+});
+
+/** Coerce progress counters to non-negative finite numbers for stable UI formatting. */
+DashboardApp.normalizeProgressNumber = function(value) {
+    const raw = Number(value || 0);
+    return Number.isFinite(raw) ? Math.max(0, raw) : 0;
+};
+
+/** Escape label and optional phase status for progress rows (shared by phases / adaptive_subphases). */
+DashboardApp.htmlProgressPhaseLabelWithStatus = function(h, labelText, statusText) {
+    const esc = typeof h === 'function' ? h : function(s) { return String(s); };
+    const labelHtml = esc(String(labelText || ''));
+    const st = String(statusText || '').trim();
+    return labelHtml + (st ? (' · ' + esc(st)) : '');
+};
+
+/** True when `/api/stats` payload includes `risk_summary` (stats strip + progress card can render). */
+DashboardApp.hasRenderableStats = function() {
+    const rs = DashboardApp.stats && DashboardApp.stats.risk_summary;
+    return Boolean(rs && typeof rs === 'object');
+};
+
 DashboardApp.applyProgressPayload = function(payload) {
     if (!payload || typeof payload !== 'object') {
+        return;
+    }
+
+    // Stale guard — must stay aligned with oasis.report.progress_timestamp_iso() docstring:
+    // compare ``updated_at`` strings lexicographically (UTC ISO-8601 with optional fractional
+    // seconds, ``Z`` suffix). Lexical order matches chronological order for ISO-8601 shapes; if the
+    // server format changes, switch both sides (e.g. numeric epoch) or ordering breaks.
+    const incomingTs = typeof payload.updated_at === 'string' ? payload.updated_at : '';
+    const prevTs =
+        DashboardApp.progressState && typeof DashboardApp.progressState.updated_at === 'string'
+            ? DashboardApp.progressState.updated_at
+            : '';
+    if (incomingTs && prevTs && incomingTs < prevTs) {
+        DashboardApp.debug('Ignoring stale progress payload (updated_at)', { incomingTs, prevTs });
         return;
     }
 
@@ -142,8 +183,25 @@ DashboardApp.applyProgressPayload = function(payload) {
         tested_vulnerabilities: Array.isArray(payload.tested_vulnerabilities)
             ? payload.tested_vulnerabilities
             : [],
+        updated_at: payload.updated_at || '',
+        active_phase: payload.active_phase || '',
+        phases: Array.isArray(payload.phases) ? payload.phases : [],
+        adaptive_subphases:
+            payload.adaptive_subphases && typeof payload.adaptive_subphases === 'object'
+                ? payload.adaptive_subphases
+                : null,
+        overall: payload.overall && typeof payload.overall === 'object' ? payload.overall : null,
+        scan_mode: payload.scan_mode || '',
+        event_version: typeof payload.event_version === 'number' ? payload.event_version : Number(payload.event_version || 0) || 0,
+        vulnerability_types_total:
+            payload.vulnerability_types_total === undefined || payload.vulnerability_types_total === null || payload.vulnerability_types_total === ''
+                ? null
+                : typeof payload.vulnerability_types_total === 'number'
+                  ? payload.vulnerability_types_total
+                  : Number(payload.vulnerability_types_total),
     };
-    if (typeof DashboardApp.renderStats === 'function') {
+    // Avoid rendering before `refreshDashboard` / `fetchStats` sets `stats` (socket can win the race).
+    if (typeof DashboardApp.renderStats === 'function' && DashboardApp.hasRenderableStats()) {
         DashboardApp.renderStats();
     }
 };

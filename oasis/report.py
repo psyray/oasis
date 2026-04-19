@@ -1,5 +1,7 @@
 import base64
+import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -16,7 +18,7 @@ from .config import REPORT, LANGUAGES
 from .export import artifact_filename
 from .export.vulnerability import write_vulnerability_artifacts
 from .export.markdown_outputs import write_rendered_markdown_formats
-from .export.writers import write_markdown_lines
+from .export.writers import write_markdown_lines, write_utf8_text
 from .schemas.analysis import (
     ChunkDeepAnalysis,
     FileReportEntry,
@@ -28,6 +30,39 @@ from .tools import extract_clean_path, logger, sanitize_name, generate_timestamp
 
 # Package metadata (process constant; avoid lazy imports in hot paths)
 from . import __version__ as oasis_version
+from .helpers.progress_constants import SCAN_PROGRESS_EXTENDED_KEYS
+
+
+def progress_timestamp_iso() -> str:
+    """UTC ISO-8601 timestamp used as incremental scan ``updated_at``.
+
+    **Contract**
+
+    - **Shape**: UTC with millisecond precision, ``Z`` suffix (never ``+00:00``). Built from
+      :meth:`datetime.datetime.isoformat` + ``.replace("+00:00", "Z")``. Milliseconds reduce
+      collisions when multiple updates occur within the same wall-clock second.
+    - **Ordering**: for this shape, lexicographic string order matches chronological order.
+      The dashboard (`DashboardApp.applyProgressPayload` in ``api.js``) compares incoming
+      and previous ``updated_at`` strings without ``Date.parse`` to reject stale snapshots.
+    - **Where written**: :func:`publish_incremental_summary` injects a default when callers
+      omit ``updated_at``; final / milestone updates often pass ``updated_at=progress_timestamp_iso()``.
+
+    If the format ever changes, update the client comparison (or switch both sides to a
+    numeric epoch) so staleness detection stays correct.
+    """
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def executive_summary_progress_sidecar_path(json_path: Path) -> Path:
+    """Sibling path for incremental scan progress JSON (does not replace canonical reports).
+
+    Example: ``.../json/_executive_summary.json`` → ``.../json/_executive_summary.progress.json``.
+    """
+    return json_path.with_name(f"{json_path.stem}.progress{json_path.suffix}")
 
 
 class Report:
@@ -77,6 +112,7 @@ class Report:
         self._last_summary_results: Dict[str, List[Dict]] = {}
         self._last_summary_model_name: str = ""
         self._last_progress_payload: Dict[str, Any] = {}
+        self._executive_summary_sidecar_write_failed = False
 
 
         # Configure the Jinja2 environment
@@ -98,6 +134,8 @@ class Report:
 
         progress = dict(self._last_progress_payload)
         progress["status"] = "aborted"
+        # Fresh timestamp so dashboard readers / Socket.IO dedupe see a new snapshot (status-only changes).
+        progress["updated_at"] = progress_timestamp_iso()
 
         self.generate_executive_summary(
             self._last_summary_results,
@@ -552,6 +590,35 @@ class Report:
 
         self._generate_and_save_report(output_files, report, report_type='Executive Summary')
 
+        json_path = output_files.get("json")
+        if progress and json_path:
+            try:
+                progress_path = executive_summary_progress_sidecar_path(Path(json_path))
+                doc = {
+                    "report_type": "executive_summary",
+                    "model": model_name,
+                    "progress": dict(self._last_progress_payload),
+                    "generated_at": progress_timestamp_iso(),
+                    "oasis_version": oasis_version,
+                }
+                write_utf8_text(
+                    progress_path,
+                    json.dumps(doc, indent=2, ensure_ascii=False),
+                )
+            except Exception:
+                if not self._executive_summary_sidecar_write_failed:
+                    self._executive_summary_sidecar_write_failed = True
+                    logger.warning(
+                        "Failed to write executive summary progress sidecar JSON "
+                        "(subsequent failures will be logged at debug level only)",
+                        exc_info=True,
+                    )
+                else:
+                    logger.debug(
+                        "Failed to write executive summary progress sidecar JSON",
+                        exc_info=True,
+                    )
+
         notifier = getattr(self, "progress_notifier", None)
         if progress and callable(notifier):
             self._notify_progress_update(progress=progress, model_name=model_name, notifier=notifier)
@@ -600,7 +667,52 @@ class Report:
             report.append(
                 "- Tested vulnerabilities: " + ", ".join(tested_vulnerabilities)
             )
-        self._last_progress_payload = {
+
+        phases = progress.get("phases")
+        if isinstance(phases, list) and phases:
+            report.append("\n### Pipeline phases")
+            report.extend(
+                [
+                    "| Phase | Status | Progress |",
+                    "|-------|--------|----------|",
+                ]
+            )
+            for row in phases:
+                if not isinstance(row, dict):
+                    continue
+                label = str(row.get("label") or row.get("id") or "").strip() or "—"
+                st = str(row.get("status") or "").strip() or "—"
+                try:
+                    c = int(row.get("completed", 0))
+                except (TypeError, ValueError):
+                    c = 0
+                try:
+                    t = int(row.get("total", 0))
+                except (TypeError, ValueError):
+                    t = 0
+                c = max(c, 0)
+                t = max(t, 0)
+                report.append(f"| {label} | {st} | {c}/{t} |")
+
+        adaptive_subphases = progress.get("adaptive_subphases")
+        if isinstance(adaptive_subphases, dict) and adaptive_subphases:
+            report.append("\n#### Adaptive sub-phases")
+            for sub_id, sub in adaptive_subphases.items():
+                if not isinstance(sub, dict):
+                    continue
+                slabel = str(sub.get("label") or sub_id)
+                try:
+                    sc = int(sub.get("completed", 0))
+                except (TypeError, ValueError):
+                    sc = 0
+                try:
+                    stot = int(sub.get("total", 0))
+                except (TypeError, ValueError):
+                    stot = 0
+                sst = str(sub.get("status") or "")
+                report.append(f"- {slabel}: {sst} ({sc}/{stot})")
+
+        payload: Dict[str, Any] = {
             "completed_vulnerabilities": completed,
             "total_vulnerabilities": total,
             "is_partial": is_partial,
@@ -608,6 +720,10 @@ class Report:
             "current_vulnerability": current_vulnerability,
             "tested_vulnerabilities": tested_vulnerabilities,
         }
+        for key in SCAN_PROGRESS_EXTENDED_KEYS:
+            if key in progress:
+                payload[key] = progress[key]
+        self._last_progress_payload = payload
 
     def _build_progress_notifier_payload(
         self, progress: Dict[str, Any], model_name: str
@@ -632,7 +748,7 @@ class Report:
         total = max(total, 0)
         total = max(total, completed)
 
-        return {
+        out: Dict[str, Any] = {
             "completed_vulnerabilities": completed,
             "total_vulnerabilities": total,
             "is_partial": bool(progress.get("is_partial", False)),
@@ -648,6 +764,10 @@ class Report:
                 if str(item).strip()
             ],
         }
+        for key in SCAN_PROGRESS_EXTENDED_KEYS:
+            if key in progress:
+                out[key] = progress[key]
+        return out
 
     def _notify_progress_update(self, progress: Dict[str, Any], model_name: str, notifier) -> None:
         """Call progress notifier with a re-entrancy guard."""
@@ -877,20 +997,38 @@ def publish_incremental_summary(
     total_vulnerabilities: int,
     current_vulnerability: str | None,
     tested_vulnerabilities: List[str],
+    **progress_extras: Any,
 ) -> None:
-    """Centralize executive-summary updates for standard/adaptive/final flows."""
-    report.generate_executive_summary(
-        all_results,
-        llm_model,
-        progress={
-            "completed_vulnerabilities": completed_vulnerabilities,
-            "total_vulnerabilities": total_vulnerabilities,
-            "is_partial": completed_vulnerabilities < total_vulnerabilities,
-            "status": "in_progress" if completed_vulnerabilities < total_vulnerabilities else "complete",
-            "current_vulnerability": current_vulnerability,
-            "tested_vulnerabilities": tested_vulnerabilities,
-        },
-    )
+    """Centralize executive-summary updates for standard/adaptive/final flows.
+
+    ``total_vulnerabilities`` is the denominator for ``completed_vulnerabilities`` /
+    ``is_partial`` for the **current** reporting step (phase workload). In adaptive
+    mode it equals the identification sweep size while identifying files, then switches
+    to the collection workload once results are aggregated—see optional
+    ``vulnerability_types_total`` in ``progress_extras`` for the stable configured
+    vulnerability-type count.
+
+    Keyword arguments beyond the explicit parameters are merged only when the key is in
+    ``SCAN_PROGRESS_EXTENDED_KEYS``, matching ``Report._append_scan_progress_section`` so
+    arbitrary caller data cannot be persisted into executive-summary artifacts.
+    """
+    payload: Dict[str, Any] = {
+        "completed_vulnerabilities": completed_vulnerabilities,
+        "total_vulnerabilities": total_vulnerabilities,
+        "is_partial": completed_vulnerabilities < total_vulnerabilities,
+        "status": "in_progress" if completed_vulnerabilities < total_vulnerabilities else "complete",
+        "current_vulnerability": current_vulnerability,
+        "tested_vulnerabilities": tested_vulnerabilities,
+    }
+    extras_allowed = {
+        key: val
+        for key, val in progress_extras.items()
+        if key in SCAN_PROGRESS_EXTENDED_KEYS and val is not None
+    }
+    if "updated_at" not in extras_allowed:
+        payload["updated_at"] = progress_timestamp_iso()
+    payload |= extras_allowed
+    report.generate_executive_summary(all_results, llm_model, progress=payload)
 
 
 def build_adaptive_deep_phase_markdown(

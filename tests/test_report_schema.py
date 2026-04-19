@@ -14,6 +14,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from oasis.enums import PhaseRowStatus
+from oasis.helpers import adaptive_subphases_payload, standard_scan_phases, standard_scan_phases_vuln_types
+from oasis.helpers.pipeline_phase_md import parse_phase_counts_from_progress_cell
+from oasis.helpers.progress_constants import (
+    EXEC_SUMMARY_PROGRESS_EVENT_VERSION,
+    SCAN_PROGRESS_EXTENDED_KEYS,
+)
+
 try:
     from oasis.schemas.analysis import (
         ChunkDeepAnalysis,
@@ -53,14 +61,20 @@ except ModuleNotFoundError:
     SecurityAnalyzer = None
 
 try:
-    from oasis.report import Report
+    from oasis.report import Report, publish_incremental_summary
 except ModuleNotFoundError:
     Report = None
+    publish_incremental_summary = None
 
 try:
     from oasis.web import WebServer
 except ModuleNotFoundError:
     WebServer = None
+
+try:
+    from oasis.embedding import EmbeddingProgressThrottle
+except ModuleNotFoundError:
+    EmbeddingProgressThrottle = None
 
 
 class TestReportSchema(unittest.TestCase):
@@ -93,17 +107,51 @@ class TestReportSchema(unittest.TestCase):
 
         analyzer._perform_deep_analysis(suspicious_data, args, report)
 
-        self.assertEqual(len(summary_calls), 2)
-        self.assertEqual(summary_calls[0]["progress"]["completed_vulnerabilities"], 1)
-        self.assertEqual(summary_calls[0]["progress"]["total_vulnerabilities"], 2)
-        self.assertTrue(summary_calls[0]["progress"]["is_partial"])
-        self.assertEqual(summary_calls[0]["progress"]["current_vulnerability"], "sql")
-        self.assertEqual(summary_calls[0]["progress"]["tested_vulnerabilities"], ["sql"])
-        self.assertEqual(summary_calls[1]["progress"]["completed_vulnerabilities"], 2)
-        self.assertEqual(summary_calls[1]["progress"]["total_vulnerabilities"], 2)
-        self.assertFalse(summary_calls[1]["progress"]["is_partial"])
-        self.assertEqual(summary_calls[1]["progress"]["current_vulnerability"], "xss")
-        self.assertEqual(summary_calls[1]["progress"]["tested_vulnerabilities"], ["sql", "xss"])
+        progresses = [c["progress"] for c in summary_calls]
+        self.assertTrue(
+            any(
+                p["completed_vulnerabilities"] == 0
+                and p.get("active_phase") == "deep_analysis"
+                and p.get("event_version") == EXEC_SUMMARY_PROGRESS_EVENT_VERSION
+                for p in progresses
+            ),
+            "expected an initial deep_analysis snapshot with canonical event_version",
+        )
+        self.assertTrue(
+            all(
+                p.get("event_version") == EXEC_SUMMARY_PROGRESS_EVENT_VERSION for p in progresses
+            ),
+        )
+        self.assertTrue(
+            any(
+                p["completed_vulnerabilities"] == 0
+                and p["current_vulnerability"] == "sql"
+                and p["tested_vulnerabilities"] == []
+                for p in progresses
+            )
+        )
+        self.assertTrue(
+            any(
+                p["completed_vulnerabilities"] == 1
+                and p["current_vulnerability"] is None
+                and p["tested_vulnerabilities"] == ["sql"]
+                for p in progresses
+            )
+        )
+        self.assertTrue(
+            any(
+                p["completed_vulnerabilities"] == 1
+                and p["current_vulnerability"] == "xss"
+                and p["tested_vulnerabilities"] == ["sql"]
+                for p in progresses
+            )
+        )
+        finals = [p for p in progresses if p["completed_vulnerabilities"] == 2]
+        self.assertTrue(finals)
+        self.assertEqual(finals[-1]["total_vulnerabilities"], 2)
+        self.assertFalse(finals[-1]["is_partial"])
+        self.assertIsNone(finals[-1]["current_vulnerability"])
+        self.assertEqual(finals[-1]["tested_vulnerabilities"], ["sql", "xss"])
 
     @unittest.skipIf(SecurityAnalyzer is None, "oasis.analyze dependencies are unavailable")
     def test_deep_analysis_updates_main_progress_by_one_per_vulnerability(self):
@@ -123,8 +171,13 @@ class TestReportSchema(unittest.TestCase):
         main_pbar = SimpleNamespace(
             set_postfix_str=lambda _text: None,
             update=lambda value: updates.append(value),
+            reset=lambda **_kw: None,
+            set_description=lambda *_a, **_kw: None,
         )
-        report = SimpleNamespace(generate_vulnerability_report=lambda **kwargs: None)
+        report = SimpleNamespace(
+            generate_vulnerability_report=lambda **kwargs: None,
+            generate_executive_summary=lambda *args, **kwargs: None,
+        )
         args = SimpleNamespace(silent=True)
 
         analyzer._perform_deep_analysis(suspicious_data, args, report, main_pbar)
@@ -363,16 +416,64 @@ class TestReportSchema(unittest.TestCase):
 
         pipeline.perform_adaptive_analysis(vulnerabilities, args, report)
 
-        self.assertEqual(len(summary_calls), 2)
-        self.assertEqual(summary_calls[0]["completed_vulnerabilities"], 1)
-        self.assertEqual(summary_calls[0]["total_vulnerabilities"], 2)
-        self.assertTrue(summary_calls[0]["is_partial"])
-        self.assertEqual(summary_calls[0]["current_vulnerability"], "SQL Injection")
-        self.assertEqual(summary_calls[0]["tested_vulnerabilities"], ["SQL Injection"])
-        self.assertEqual(summary_calls[1]["completed_vulnerabilities"], 2)
-        self.assertFalse(summary_calls[1]["is_partial"])
-        self.assertEqual(summary_calls[1]["current_vulnerability"], "XSS")
-        self.assertEqual(summary_calls[1]["tested_vulnerabilities"], ["SQL Injection", "XSS"])
+        nv = len(vulnerabilities)
+        self.assertTrue(
+            all(
+                p.get("event_version") == EXEC_SUMMARY_PROGRESS_EVENT_VERSION
+                for p in summary_calls
+            )
+        )
+
+        identifying = [
+            p
+            for p in summary_calls
+            if p.get("total_vulnerabilities") == nv
+            and (p.get("adaptive_subphases") or {}).get("identify_files", {}).get("total") == nv
+        ]
+        self.assertTrue(identifying, "expected identification payloads with denominator nv")
+
+        progress_total_while_collecting = 2
+        collecting = [
+            p
+            for p in summary_calls
+            if p.get("total_vulnerabilities") == progress_total_while_collecting
+            and (p.get("adaptive_subphases") or {}).get("collect_results", {}).get("total")
+            == progress_total_while_collecting
+            and (p.get("adaptive_subphases") or {}).get("collect_results", {}).get("status")
+            == PhaseRowStatus.IN_PROGRESS.value
+        ]
+        self.assertTrue(collecting, "expected collection payloads with collection denominator")
+
+        batch_in_progress = [
+            p
+            for p in summary_calls
+            if (p.get("adaptive_subphases") or {}).get("batch_process", {}).get("status")
+            == PhaseRowStatus.IN_PROGRESS.value
+        ]
+        self.assertTrue(batch_in_progress)
+
+        self.assertGreaterEqual(len(summary_calls), 2)
+        collect_before_sql = [
+            p
+            for p in summary_calls
+            if p.get("current_vulnerability") == "SQL Injection"
+            and p.get("completed_vulnerabilities") == 0
+            and (p.get("adaptive_subphases") or {}).get("batch_process", {}).get("status")
+            == PhaseRowStatus.COMPLETE.value
+            and (p.get("adaptive_subphases") or {}).get("collect_results", {}).get("status")
+            == PhaseRowStatus.IN_PROGRESS.value
+        ]
+        self.assertTrue(collect_before_sql)
+
+        final_updates = [
+            p
+            for p in summary_calls
+            if p.get("completed_vulnerabilities") == 2
+            and not p.get("current_vulnerability")
+            and p.get("tested_vulnerabilities") == ["SQL Injection", "XSS"]
+        ]
+        self.assertTrue(final_updates)
+        self.assertFalse(final_updates[-1].get("is_partial"))
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_executive_summary_includes_partial_progress_block(self):
@@ -398,6 +499,34 @@ class TestReportSchema(unittest.TestCase):
         self.assertIn("Scan Progress", content)
         self.assertIn("1/3", content)
         self.assertIn("partial", content.lower())
+
+    @unittest.skipIf(publish_incremental_summary is None, "oasis.report dependencies are unavailable")
+    def test_publish_incremental_summary_strips_unknown_progress_extras(self):
+        progresses: list = []
+
+        report = SimpleNamespace(
+            generate_executive_summary=lambda all_results, llm_model, progress=None: progresses.append(
+                progress
+            )
+        )
+
+        publish_incremental_summary(
+            report,
+            "model-x",
+            {},
+            completed_vulnerabilities=0,
+            total_vulnerabilities=2,
+            current_vulnerability=None,
+            tested_vulnerabilities=[],
+            scan_mode="standard",
+            unwanted_blob={"nested": "unsanitized"},
+            leaked_secret="token",
+        )
+
+        payload = progresses[-1]
+        self.assertEqual(payload["scan_mode"], "standard")
+        self.assertNotIn("unwanted_blob", payload)
+        self.assertNotIn("leaked_secret", payload)
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_executive_summary_notifier_receives_progress_payload(self):
@@ -448,6 +577,16 @@ class TestReportSchema(unittest.TestCase):
             "status": "in_progress",
             "current_vulnerability": "SQL Injection",
             "tested_vulnerabilities": ["SQL Injection"],
+            "phases": [
+                {
+                    "id": "embeddings",
+                    "label": "Embeddings",
+                    "status": "complete",
+                    "completed": 2,
+                    "total": 2,
+                }
+            ],
+            "active_phase": "deep_analysis",
         }
         captured = {}
         report.generate_executive_summary = lambda all_results, model_name, progress=None: captured.update(
@@ -459,6 +598,12 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(captured["model_name"], "test-model")
         self.assertEqual(captured["progress"]["status"], "aborted")
         self.assertTrue(captured["progress"]["is_partial"])
+        aborted_ts = captured["progress"].get("updated_at")
+        self.assertIsInstance(aborted_ts, str)
+        self.assertTrue(aborted_ts.endswith("Z"), "aborted progress should carry a fresh UTC updated_at for the dashboard")
+        self.assertEqual(captured["progress"]["active_phase"], "deep_analysis")
+        self.assertIsInstance(captured["progress"].get("phases"), list)
+        self.assertEqual(captured["progress"]["phases"][0]["id"], "embeddings")
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_web_stats_reader_returns_empty_dict_on_partial_json(self):
@@ -492,6 +637,117 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(progress["tested_vulnerabilities"], ["SQL Injection", "XSS"])
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_json_progress_reader_preserves_phases_and_active_phase(self):
+        payload = {
+            "report_type": "executive_summary",
+            "progress": {
+                "completed_vulnerabilities": 0,
+                "total_vulnerabilities": 2,
+                "is_partial": True,
+                "active_phase": "initial_scan",
+                "vulnerability_types_total": 7,
+                "phases": [
+                    {
+                        "id": "a",
+                        "label": "A",
+                        "status": PhaseRowStatus.IN_PROGRESS.value,
+                        "completed": 0,
+                        "total": 1,
+                    }
+                ],
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "ex.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            progress = WebServer._summary_progress_from_json_report_file(path)
+        self.assertEqual(progress["active_phase"], "initial_scan")
+        self.assertEqual(progress["vulnerability_types_total"], 7)
+        self.assertEqual(len(progress["phases"]), 1)
+        self.assertEqual(progress["phases"][0]["id"], "a")
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_json_progress_reader_prefers_progress_sidecar(self):
+        from oasis.report import executive_summary_progress_sidecar_path
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            main = Path(tmp_dir) / "_executive_summary.json"
+            sidecar = executive_summary_progress_sidecar_path(main)
+            main.write_text(
+                json.dumps(
+                    {
+                        "report_type": "executive_summary",
+                        "progress": {
+                            "completed_vulnerabilities": 1,
+                            "total_vulnerabilities": 10,
+                            "is_partial": True,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            sidecar.write_text(
+                json.dumps(
+                    {
+                        "report_type": "executive_summary",
+                        "progress": {
+                            "completed_vulnerabilities": 9,
+                            "total_vulnerabilities": 10,
+                            "is_partial": True,
+                            "adaptive_subphases": {
+                                "embeddings": {"status": "running"},
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            progress = WebServer._summary_progress_from_json_report_file(main)
+        self.assertEqual(progress["completed_vulnerabilities"], 9)
+        adaptive_subphases = progress.get("adaptive_subphases")
+        self.assertIsInstance(adaptive_subphases, dict)
+        self.assertIn("embeddings", adaptive_subphases)
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_json_progress_reader_prefers_embedded_when_sidecar_older(self):
+        from oasis.report import executive_summary_progress_sidecar_path
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            main = Path(tmp_dir) / "_executive_summary.json"
+            sidecar = executive_summary_progress_sidecar_path(main)
+            main.write_text(
+                json.dumps(
+                    {
+                        "report_type": "executive_summary",
+                        "progress": {
+                            "completed_vulnerabilities": 7,
+                            "total_vulnerabilities": 10,
+                            "is_partial": True,
+                            "updated_at": "2026-04-18T12:00:00Z",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            sidecar.write_text(
+                json.dumps(
+                    {
+                        "report_type": "executive_summary",
+                        "progress": {
+                            "completed_vulnerabilities": 1,
+                            "total_vulnerabilities": 10,
+                            "is_partial": True,
+                            "updated_at": "2020-01-01T00:00:00Z",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            progress = WebServer._summary_progress_from_json_report_file(main)
+        self.assertEqual(progress["completed_vulnerabilities"], 7)
+        self.assertEqual(progress["updated_at"], "2026-04-18T12:00:00Z")
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_web_summary_markdown_progress_reader_extracts_vulnerability_details(self):
         markdown = """# Executive Summary
 
@@ -512,6 +768,142 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(progress["status"], "in_progress")
         self.assertEqual(progress["current_vulnerability"], "XSS")
         self.assertEqual(progress["tested_vulnerabilities"], ["SQL Injection", "XSS"])
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_summary_markdown_progress_reader_extracts_pipeline_phases_table(self):
+        markdown = """# Executive Summary
+
+## Scan Progress
+| Status | Completed vulnerabilities |
+|--------|----------------------------|
+| Partial (scan in progress) | 1/3 |
+
+### Pipeline phases
+| Phase | Status | Progress |
+|-------|--------|----------|
+| Embeddings | complete | 10/10 |
+| Initial scanning | in_progress | 2/5 |
+"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            report_file = Path(tmp_dir) / "summary.md"
+            report_file.write_text(markdown, encoding="utf-8")
+            progress = WebServer._summary_progress_from_markdown_report_file(report_file)
+        phases = progress.get("phases") or []
+        self.assertEqual(len(phases), 2)
+        self.assertEqual(phases[0]["label"], "Embeddings")
+        self.assertEqual(phases[0]["completed"], 10)
+        self.assertEqual(phases[1]["label"], "Initial scanning")
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_pipeline_phases_parse_tolerates_progress_suffix_text(self):
+        markdown = """# Executive Summary
+
+## Scan Progress
+| Status | Completed vulnerabilities |
+|--------|----------------------------|
+| Partial (scan in progress) | 1/3 |
+
+### Pipeline phases
+| Phase | Status | Progress |
+|-------|--------|----------|
+| Embeddings | complete | 10/10 (100%) |
+| Initial scanning | in_progress | 2 / 5 extra text |
+"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            report_file = Path(tmp_dir) / "summary.md"
+            report_file.write_text(markdown, encoding="utf-8")
+            progress = WebServer._summary_progress_from_markdown_report_file(report_file)
+        phases = progress.get("phases") or []
+        self.assertEqual(len(phases), 2)
+        self.assertEqual(phases[0]["completed"], 10)
+        self.assertEqual(phases[0]["total"], 10)
+        self.assertEqual(phases[1]["completed"], 2)
+        self.assertEqual(phases[1]["total"], 5)
+
+    @unittest.skipIf(EmbeddingProgressThrottle is None, "oasis.embedding unavailable")
+    def test_embedding_progress_hook_throttled_between_intermediates(self):
+        calls = []
+        hook = lambda c, t: calls.append((c, t))
+        throttle = EmbeddingProgressThrottle()
+        throttle.maybe_emit(hook, 1, 5, min_interval_sec=3600.0, force=True)
+        throttle.maybe_emit(hook, 2, 5, min_interval_sec=3600.0, force=False)
+        self.assertEqual(len(calls), 1)
+        throttle.maybe_emit(hook, 5, 5, min_interval_sec=3600.0, force=True)
+        self.assertEqual(calls[-1], (5, 5))
+
+    def test_scan_progress_extended_keys_contract_matches_expected_set(self):
+        """Guardrail: extend this set when adding wire keys; keeps report/web filtering aligned."""
+        expected = frozenset(
+            {
+                "updated_at",
+                "active_phase",
+                "phases",
+                "adaptive_subphases",
+                "overall",
+                "scan_mode",
+                "event_version",
+                "vulnerability_types_total",
+            }
+        )
+        self.assertEqual(SCAN_PROGRESS_EXTENDED_KEYS, expected)
+
+    def test_exec_summary_progress_event_version_contract(self):
+        self.assertEqual(EXEC_SUMMARY_PROGRESS_EVENT_VERSION, 2)
+
+    def test_progress_timestamp_iso_utc_z_with_millisecond_precision(self):
+        from oasis.report import progress_timestamp_iso
+
+        ts = progress_timestamp_iso()
+        self.assertTrue(ts.endswith("Z"), ts)
+        self.assertRegex(ts, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$", msg=ts)
+
+    def test_pipeline_phase_counts_parses_progress_cells(self):
+        self.assertEqual(parse_phase_counts_from_progress_cell("10/10"), (10, 10))
+        self.assertEqual(parse_phase_counts_from_progress_cell("2 / 5 extra"), (2, 5))
+        self.assertEqual(parse_phase_counts_from_progress_cell("7/10 (100%)"), (7, 10))
+        self.assertEqual(parse_phase_counts_from_progress_cell("3"), (3, 3))
+        self.assertIsNone(parse_phase_counts_from_progress_cell("no digits"))
+        self.assertIsNone(parse_phase_counts_from_progress_cell(""))
+
+    @unittest.skipIf(EmbeddingProgressThrottle is None, "oasis.embedding unavailable")
+    def test_embedding_progress_throttle_rejects_invalid_or_non_positive_total(self):
+        calls = []
+        hook = lambda c, t: calls.append((c, t))
+        throttle = EmbeddingProgressThrottle()
+        throttle.maybe_emit(hook, 1, -5, min_interval_sec=0.0, force=True)
+        throttle.maybe_emit(hook, 1, 0, min_interval_sec=0.0, force=True)
+        throttle.maybe_emit(hook, 1, "bad", min_interval_sec=0.0, force=True)
+        self.assertEqual(calls, [])
+        throttle.maybe_emit(hook, 2, 5, min_interval_sec=0.0, force=True)
+        self.assertEqual(calls, [(2, 5)])
+        throttle.maybe_emit(hook, 1, 5.9, min_interval_sec=0.0, force=True)
+        self.assertEqual(calls[-1], (1, 5))
+
+    def test_scan_progress_helpers_build_consistent_labels(self):
+        phases = standard_scan_phases(
+            2,
+            initial=(PhaseRowStatus.IN_PROGRESS.value, 0, 3),
+            deep=(PhaseRowStatus.PENDING.value, 0, 3),
+        )
+        uniform = standard_scan_phases_vuln_types(
+            2,
+            3,
+            initial_status=PhaseRowStatus.IN_PROGRESS,
+            initial_completed=1,
+            deep_status=PhaseRowStatus.PENDING,
+            deep_completed=0,
+        )
+        self.assertEqual(uniform[1]["total"], uniform[2]["total"])
+        self.assertEqual([p["id"] for p in phases], ["embeddings", "initial_scan", "deep_analysis"])
+        self.assertEqual(phases[0]["label"], "Embeddings")
+        sub = adaptive_subphases_payload(
+            identify_files=(PhaseRowStatus.IN_PROGRESS.value, 0, 3),
+            batch_process=(PhaseRowStatus.PENDING.value, 0, 1),
+            collect_results=(PhaseRowStatus.PENDING.value, 0, 3),
+        )
+        self.assertEqual(sub["identify_files"]["label"], "Identify vulnerable files")
+        self.assertEqual(sub["batch_process"]["label"], "Batch processing")
+        self.assertEqual(sub["collect_results"]["label"], "Collect results")
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_web_get_scan_progress_returns_latest_summary_progress(self):
@@ -609,6 +1001,29 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(emitted["payload"]["tested_vulnerabilities"], [])
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_emit_scan_progress_coerces_event_version_to_int(self):
+        from oasis.web import _coerce_scan_progress_event_version
+
+        self.assertEqual(_coerce_scan_progress_event_version("2"), 2)
+        self.assertEqual(_coerce_scan_progress_event_version("v2"), 1)
+        self.assertEqual(_coerce_scan_progress_event_version(None), 1)
+        self.assertEqual(_coerce_scan_progress_event_version(True), 1)
+        self.assertEqual(_coerce_scan_progress_event_version(False), 1)
+
+        server = WebServer.__new__(WebServer)
+        emitted = {}
+        server.socketio = SimpleNamespace(emit=lambda event, payload: emitted.update({"event": event, "payload": payload}))
+        server.emit_scan_progress(
+            {
+                "completed_vulnerabilities": 0,
+                "total_vulnerabilities": 1,
+                "is_partial": True,
+                "event_version": "2",
+            }
+        )
+        self.assertEqual(emitted["payload"]["event_version"], 2)
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_filter_reports_keeps_executive_summary_visible_with_vulnerability_filter(self):
         server = WebServer.__new__(WebServer)
         server.report_data = [
@@ -670,7 +1085,7 @@ class TestReportSchema(unittest.TestCase):
         content = api_js.read_text(encoding="utf-8")
         match = re.search(r"transports\s*:\s*\[([^\]]+)\]", content)
         self.assertIsNotNone(match, "Socket.IO transports option not found in api.js")
-        inner = match.group(1)
+        inner = match[1]
         polling_m = re.search(r"\bpolling\b", inner)
         websocket_m = re.search(r"\bwebsocket\b", inner)
         self.assertIsNotNone(polling_m, "Expected 'polling' in transports array")
