@@ -15,7 +15,7 @@ from .config import CHUNK_ANALYZE_TIMEOUT, LANGUAGES, MODEL_EMOJIS, VULNERABILIT
 
 # Import from other modules
 from .ollama_manager import OllamaManager
-from .snippet_lines import absolute_snippet_lines_in_file
+from .helpers.misc import absolute_snippet_lines_in_file
 from .tools import chunk_content_with_spans, logger, calculate_similarity, sanitize_name
 from .report import (
     Report,
@@ -37,7 +37,7 @@ from .helpers import (
     standard_initial_iteration_extras,
     standard_initial_sweep_extras,
 )
-from .helpers.progress_constants import EXEC_SUMMARY_PROGRESS_EVENT_VERSION
+from .helpers.progress import EXEC_SUMMARY_PROGRESS_EVENT_VERSION
 from .embedding import EmbeddingManager, build_vulnerability_embedding_prompt
 from .cache import CacheManager
 from .enums import AnalysisMode, AnalysisType

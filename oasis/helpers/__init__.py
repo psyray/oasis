@@ -1,8 +1,9 @@
-"""Internal helper submodules for OASIS (non–entry-point utilities)."""
+"""Internal helper submodules for OASIS (grouped by area: dashboard, embedding, progress, scan, misc)."""
 
-from .progress_constants import EXEC_SUMMARY_PROGRESS_EVENT_VERSION, SCAN_PROGRESS_EXTENDED_KEYS
-from .tqdm_phase import reset_tqdm_phase_bar
-from .exec_summary_progress import (
+from .embedding import EMBEDDING_PROGRESS_MIN_INTERVAL_SEC, EmbeddingProgressThrottle
+from .progress import (
+    EXEC_SUMMARY_PROGRESS_EVENT_VERSION,
+    SCAN_PROGRESS_EXTENDED_KEYS,
     adaptive_after_batch_extras,
     adaptive_after_identification_extras,
     adaptive_collect_step_extras,
@@ -10,13 +11,15 @@ from .exec_summary_progress import (
     adaptive_identification_start_extras,
     adaptive_identifying_loop_extras,
     adaptive_progress_extras,
+    coerce_scan_progress_event_version,
+    reset_tqdm_phase_bar,
     standard_deep_phase_extras,
     standard_final_complete_extras,
     standard_initial_iteration_extras,
     standard_initial_sweep_extras,
     standard_progress_extras,
 )
-from .scan_progress import (
+from .scan import (
     PhaseTriple,
     adaptive_phases_identifying,
     adaptive_scan_phases,
@@ -33,7 +36,8 @@ from .scan_progress import (
 __all__ = [
     "EXEC_SUMMARY_PROGRESS_EVENT_VERSION",
     "SCAN_PROGRESS_EXTENDED_KEYS",
-    "reset_tqdm_phase_bar",
+    "EMBEDDING_PROGRESS_MIN_INTERVAL_SEC",
+    "EmbeddingProgressThrottle",
     "PhaseTriple",
     "adaptive_after_batch_extras",
     "adaptive_after_identification_extras",
@@ -46,9 +50,11 @@ __all__ = [
     "adaptive_scan_phases",
     "adaptive_subphases_during_identification",
     "adaptive_subphases_payload",
+    "coerce_scan_progress_event_version",
     "embedding_phase_row",
     "phase_progress_row",
     "phase_triple",
+    "reset_tqdm_phase_bar",
     "safe_code_base_file_count",
     "standard_deep_phase_extras",
     "standard_final_complete_extras",

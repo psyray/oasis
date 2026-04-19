@@ -1,13 +1,44 @@
-"""
-Helpers for building scan progress payloads passed to executive-summary updates.
+"""Scan helpers: phase rows, wire typing, and executive-summary phase structures.
 
-Centralizes repeated ``phases`` / ``adaptive_subphases`` structures for standard and
-adaptive analysis flows so field names and labels stay consistent.
+Includes lightweight TypedDict shapes for dashboard/JSON and phase row builders
+for standard and adaptive flows.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Tuple, TypedDict, Any, Dict, List, Optional, Union
+
+try:
+    from typing import NotRequired  # py3.11+
+except ImportError:
+    from typing_extensions import NotRequired  # py3.9–3.10
+
+
+class AdaptiveSubphaseSnapshot(TypedDict):
+    label: str
+    status: str
+    completed: int
+    total: int
+
+
+AdaptiveSubphasesWire = Dict[str, AdaptiveSubphaseSnapshot]
+
+
+class PhaseRowPayload(TypedDict):
+    id: str
+    label: str
+    status: str
+    completed: int
+    total: int
+    current_item: NotRequired[str]
+
+
+PhaseRowsWire = List[PhaseRowPayload]
+
+
+
+
+
 
 from ..enums import PhaseRowStatus, ProgressPhaseRowId
 

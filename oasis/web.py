@@ -1,7 +1,5 @@
-import contextlib
 from datetime import datetime, timezone
 import logging
-from typing import Any
 import json
 from pathlib import Path
 import re
@@ -47,106 +45,17 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for minimal test envs
 
 from .config import REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS, LANGUAGES
 from .export.filenames import artifact_filename, report_dir_glob_for_format
-from .helpers.pipeline_phase_md import parse_phase_counts_from_progress_cell
-from .helpers.progress_constants import SCAN_PROGRESS_EXTENDED_KEYS
+from .helpers.dashboard import (
+    dashboard_format_display_order,
+    expand_socketio_cors_config_entries,
+    parse_phase_counts_from_progress_cell,
+    socketio_lan_http_origins,
+)
+from .helpers.progress import SCAN_PROGRESS_EXTENDED_KEYS, coerce_scan_progress_event_version
 from .report import Report, executive_summary_progress_sidecar_path
 from .tools import parse_iso_date, parse_report_date
 
-
-def _coerce_scan_progress_event_version(raw: Any) -> int:
-    """Normalize ``event_version`` to int for Socket.IO / REST consumers (matches dashboard coercion).
-
-    Integer-like values (non-boolean ints or integer strings) are returned as ints; all other
-    values (including booleans and empty/invalid strings) fall back to ``1``.
-    """
-    if isinstance(raw, int) and not isinstance(raw, bool):
-        return raw
-    if raw is None:
-        return 1
-    try:
-        text = str(raw).strip()
-        return int(text, 10) if text else 1
-    except (TypeError, ValueError):
-        return 1
-
 logger = logging.getLogger(__name__)
-
-
-def _dashboard_format_display_order() -> list[str]:
-    """Ordered formats for dashboard chips, date-picker open preference, and /api/dates.
-
-    Matching between DASHBOARD_FORMAT_DISPLAY_ORDER and OUTPUT_FORMATS is
-    case-insensitive, but the returned list preserves the original casing
-    from OUTPUT_FORMATS.
-    """
-    preferred = REPORT.get("DASHBOARD_FORMAT_DISPLAY_ORDER") or []
-    allowed = list(REPORT.get("OUTPUT_FORMATS") or [])
-
-    normalized_to_original: dict[str, str] = {}
-    for fmt in allowed:
-        key = fmt.lower()
-        if key not in normalized_to_original:
-            normalized_to_original[key] = fmt
-
-    seen_normalized: set[str] = set()
-    out: list[str] = []
-
-    for fmt in preferred:
-        key = fmt.lower()
-        original = normalized_to_original.get(key)
-        if original is not None and key not in seen_normalized:
-            out.append(original)
-            seen_normalized.add(key)
-
-    for fmt in allowed:
-        key = fmt.lower()
-        if key not in seen_normalized:
-            out.append(fmt)
-            seen_normalized.add(key)
-
-    return out
-
-def _socketio_lan_http_origins(port: int) -> list[str]:
-    """Best-effort LAN URLs for Socket.IO CORS when the server binds to all interfaces.
-
-    Browsers send ``Origin`` with the host the user typed (e.g. ``http://192.168.1.10:5001``).
-    We discover likely interface addresses without requiring extra dependencies.
-    """
-    out: list[str] = []
-    seen: set[str] = set()
-
-    def add_origin(url: str) -> None:
-        if url not in seen:
-            seen.add(url)
-            out.append(url)
-
-    with contextlib.suppress(OSError):
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
-            udp.connect(("192.0.2.1", 80))
-            ip = udp.getsockname()[0]
-            if ip and not ip.startswith("127."):
-                add_origin(f"http://{ip}:{port}")
-    with contextlib.suppress(OSError):
-        hostname = socket.gethostname()
-        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
-            ip = info[4][0]
-            if ip and not ip.startswith("127."):
-                add_origin(f"http://{ip}:{port}")
-    return out
-
-def _expand_socketio_cors_config_entries(entries: list[str] | tuple[str, ...], port: int) -> list[str]:
-    """Replace ``{port}`` in configured origin strings."""
-    expanded: list[str] = []
-    for raw in entries:
-        if not raw or not isinstance(raw, str):
-            continue
-        s = raw.strip()
-        if not s:
-            continue
-        if "{port}" in s:
-            s = s.format(port=port)
-        expanded.append(s)
-    return expanded
 
 
 class WebServer:
@@ -325,7 +234,7 @@ class WebServer:
         if not progress:
             return {}
         payload = self._normalize_scan_progress_payload(progress, has_progress=True)
-        payload["event_version"] = _coerce_scan_progress_event_version(payload.get("event_version"))
+        payload["event_version"] = coerce_scan_progress_event_version(payload.get("event_version"))
         return payload
 
     @staticmethod
@@ -356,7 +265,7 @@ class WebServer:
         else:
             cors_list = list(configured or [])
 
-        expanded_config = _expand_socketio_cors_config_entries(cors_list, port)
+        expanded_config = expand_socketio_cors_config_entries(cors_list, port)
 
         # Always allow this instance: same port as ``socketio.run(..., port=web_port)``.
         runtime: list[str] = [
@@ -365,7 +274,7 @@ class WebServer:
         ]
         expose = str(self.web_expose or "local").strip().lower()
         if expose != "local":
-            runtime.extend(_socketio_lan_http_origins(port))
+            runtime.extend(socketio_lan_http_origins(port))
 
         merged: list[str] = []
         seen: set[str] = set()
@@ -506,7 +415,7 @@ class WebServer:
                 dashboard_socketio_client_url=str(REPORT.get("DASHBOARD_SOCKETIO_CLIENT_URL") or "").strip(),
                 debug=self.debug,
                 report_output_formats=REPORT.get('OUTPUT_FORMATS', []),
-                dashboard_format_display_order=_dashboard_format_display_order(),
+                dashboard_format_display_order=dashboard_format_display_order(),
             )
             
         @app.route('/api/reports')
@@ -723,7 +632,7 @@ class WebServer:
                     open_path = None
                     open_fmt = None
                     # Prefer human-readable formats first (same order as dashboard)
-                    for fmt in _dashboard_format_display_order():
+                    for fmt in dashboard_format_display_order():
                         if af.get(fmt):
                             open_path = af[fmt]
                             open_fmt = fmt
@@ -1343,7 +1252,7 @@ class WebServer:
             return self._normalize_scan_progress_payload({}, has_progress=False)
         normalized = self._normalize_scan_progress_payload(progress, has_progress=True)
         if "event_version" in normalized:
-            normalized["event_version"] = _coerce_scan_progress_event_version(normalized.get("event_version"))
+            normalized["event_version"] = coerce_scan_progress_event_version(normalized.get("event_version"))
         return normalized
 
     @staticmethod

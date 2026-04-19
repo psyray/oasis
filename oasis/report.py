@@ -30,7 +30,7 @@ from .tools import extract_clean_path, logger, sanitize_name, generate_timestamp
 
 # Package metadata (process constant; avoid lazy imports in hot paths)
 from . import __version__ as oasis_version
-from .helpers.progress_constants import (
+from .helpers.progress import (
     SCAN_PROGRESS_EXTENDED_KEYS,
     SCAN_PROGRESS_NON_PARTIAL_STATUSES,
     SCAN_PROGRESS_STATUS_EXPLICIT,

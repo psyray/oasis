@@ -1,16 +1,11 @@
-"""
-Builders for keyword arguments passed to incremental executive-summary progress updates.
-
-Keeps ``active_phase`` / ``scan_mode`` / phase structures aligned between standard and
-adaptive pipelines so ``SecurityAnalyzer`` call sites stay small and consistent.
-"""
+"""Progress helpers: wire constants, tqdm, REST/Socket.IO coercion, executive-summary extras."""
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
 from ..enums import AnalysisType, PhaseRowStatus, ProgressActivePhase
-from .scan_progress import (
+from .scan import (
     adaptive_phases_identifying,
     adaptive_scan_phases,
     adaptive_subphases_during_identification,
@@ -18,6 +13,72 @@ from .scan_progress import (
     phase_triple,
     standard_scan_phases_vuln_types,
 )
+
+# Canonical keys for executive-summary progress payload extensions (wire JSON / Markdown).
+# Keep in sync across publish_incremental_summary, Report, and oasis.web dashboard readers.
+
+EXEC_SUMMARY_PROGRESS_EVENT_VERSION = 2
+
+SCAN_PROGRESS_STATUS_EXPLICIT = frozenset(
+    {
+        "in_progress",
+        "complete",
+        "aborted",
+        "failed",
+        "succeeded",
+        "finished",
+    }
+)
+
+SCAN_PROGRESS_NON_PARTIAL_STATUSES = frozenset({"complete", "succeeded", "finished"})
+
+SCAN_PROGRESS_EXTENDED_KEYS = frozenset(
+    {
+        "updated_at",
+        "active_phase",
+        "phases",
+        "adaptive_subphases",
+        "overall",
+        "scan_mode",
+        "event_version",
+        "vulnerability_types_total",
+        "status",
+    }
+)
+
+
+def reset_tqdm_phase_bar(
+    pbar: Any,
+    *,
+    total: int,
+    description: Optional[str] = None,
+) -> None:
+    """Reset tqdm to n=0 with a new total when starting a new high-level scan phase (tqdm>=4.67)."""
+    if pbar is None:
+        return
+    reset_fn = getattr(pbar, "reset", None)
+    if callable(reset_fn):
+        reset_fn(total=total)
+    set_desc = getattr(pbar, "set_description", None)
+    if description is not None and callable(set_desc):
+        set_desc(description, refresh=False)
+
+
+def coerce_scan_progress_event_version(raw: Any) -> int:
+    """Normalize ``event_version`` to int for Socket.IO / REST consumers (matches dashboard coercion).
+
+    Integer-like values (non-boolean ints or integer strings) are returned as ints; all other
+    values (including booleans and empty/invalid strings) fall back to ``1``.
+    """
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return 1
+    try:
+        text = str(raw).strip()
+        return int(text, 10) if text else 1
+    except (TypeError, ValueError):
+        return 1
 
 
 def standard_progress_extras(
