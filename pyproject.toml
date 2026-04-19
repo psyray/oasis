@@ -27,6 +27,11 @@ dependencies = [
     "flask-socketio>=5.3.6",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "coverage>=7.0.0",
+]
+
 [project.scripts]
 oasis = "oasis:main"
 

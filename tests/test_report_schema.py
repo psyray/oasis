@@ -566,6 +566,60 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(progresses[-1]["status"], "succeeded")
         self.assertFalse(progresses[-1]["is_partial"])
 
+    @unittest.skipIf(publish_incremental_summary is None, "oasis.report dependencies are unavailable")
+    def test_publish_incremental_summary_passes_allowed_extended_progress_fields(self):
+        progresses: list = []
+
+        report = SimpleNamespace(
+            generate_executive_summary=lambda all_results, llm_model, progress=None: progresses.append(
+                progress
+            )
+        )
+
+        publish_incremental_summary(
+            report,
+            "model-z",
+            {"SQL Injection": []},
+            completed_vulnerabilities=1,
+            total_vulnerabilities=2,
+            current_vulnerability="sqli",
+            tested_vulnerabilities=["sqli"],
+            event_version=2,
+            vulnerability_types_total=7,
+            active_phase="deep_analysis",
+        )
+
+        payload = progresses[-1]
+        self.assertEqual(payload["event_version"], 2)
+        self.assertEqual(payload["vulnerability_types_total"], 7)
+        self.assertEqual(payload["active_phase"], "deep_analysis")
+
+    def test_sanitize_name_strips_path_suffix_and_special_characters(self):
+        from oasis.tools import sanitize_name
+
+        self.assertEqual(sanitize_name("group/sub/Vuln Name!.md"), "Vuln_Name__md")
+
+    @unittest.skipIf(
+        WebServer is None or Report is None,
+        "oasis.web or oasis.report dependencies are unavailable",
+    )
+    def test_web_get_report_statistics_empty_filtered_list(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            inp = base / "scan_root"
+            inp.mkdir()
+            (inp / "module.py").write_text("#", encoding="utf-8")
+            report = Report(str(inp), ["json"])
+            server = WebServer(report)
+            server.report_data = []
+            server.collect_report_data = lambda: None
+            app = Flask(__name__)
+            with app.test_request_context("/api/stats"):
+                stats = server.get_report_statistics(filtered_reports=[])
+
+        self.assertEqual(stats.get("formats"), {})
+        self.assertEqual(stats["risk_summary"]["total_findings"], 0)
+
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_executive_summary_notifier_receives_progress_payload(self):
         report = Report.__new__(Report)
@@ -650,6 +704,48 @@ class TestReportSchema(unittest.TestCase):
             report_file.write_text('{"stats":', encoding="utf-8")
             stats = WebServer._stats_from_json_report_file(report_file)
         self.assertEqual(stats, {})
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_update_stats_for_report_aggregates_model_vuln_language_date_and_risk(self):
+        server = WebServer.__new__(WebServer)
+        stats = {
+            "total_reports": 0,
+            "models": {},
+            "vulnerabilities": {},
+            "languages": {},
+            "dates": {},
+            "risk_summary": {
+                "total_findings": 0,
+                "high": 0,
+                "medium": 0,
+                "low": 0,
+            },
+        }
+        server._update_stats_for_report(
+            stats,
+            {
+                "format": "json",
+                "model": "ModelA",
+                "vulnerability_type": "SQL Injection",
+                "language": "FR",
+                "date": "2026-04-19 10:00:00",
+                "stats": {
+                    "total_findings": 5,
+                    "high_risk": 2,
+                    "medium_risk": 2,
+                    "low_risk": 1,
+                },
+            },
+        )
+        self.assertEqual(stats["total_reports"], 1)
+        self.assertEqual(stats["models"]["ModelA"], 1)
+        self.assertEqual(stats["vulnerabilities"]["SQL Injection"], 1)
+        self.assertEqual(stats["languages"]["fr"], 1)
+        self.assertEqual(stats["dates"]["2026-04-19"], 1)
+        self.assertEqual(stats["risk_summary"]["total_findings"], 5)
+        self.assertEqual(stats["risk_summary"]["high"], 2)
+        self.assertEqual(stats["risk_summary"]["medium"], 2)
+        self.assertEqual(stats["risk_summary"]["low"], 1)
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_web_summary_progress_reader_extracts_partial_status(self):
