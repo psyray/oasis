@@ -41,7 +41,7 @@ body {
     color: var(--white);
     text-decoration: none;
     font-weight: bold;
-    font-size: 0.9rem;
+    font-size: 1.1rem;
     padding: 6px 12px;
     border-radius: 4px;
     transition: background-color 0.2s ease;
@@ -57,8 +57,8 @@ body {
 }
 
 .logo-circle {
-    width: 80px;
-    height: 80px;
+    width: 50px;
+    height: 50px;
     border-radius: 50%;
     background-color: #e1dcc8;
     display: flex;
@@ -70,8 +70,8 @@ body {
 } 
 
 .oasis-logo-img {
-    width: 60px;
-    height: 60px;
+    width: 40px;
+    height: 40px;
     object-fit: contain;
     margin-top: 0px;
 }
@@ -87,7 +87,7 @@ body {
 
 .title {
     color: white;
-    font-size: 24px;
+    font-size: 35px;
     font-weight: bold;
     margin: 0;
 }
@@ -179,6 +179,133 @@ body {
     color: var(--medium-gray);
 }
 
+.progress-card .progress-meta {
+    font-size: 14px;
+    margin-bottom: 8px;
+    color: var(--dark-blue);
+}
+
+.progress-phases {
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    background: rgba(64, 180, 196, 0.08);
+    border-radius: 6px;
+    border: 1px solid rgba(26, 58, 95, 0.12);
+    font-size: 13px;
+}
+
+.progress-active-phase {
+    margin-bottom: 6px;
+    font-size: 12px;
+    color: var(--medium-gray);
+}
+
+.progress-active-phase code {
+    font-size: 12px;
+    background: var(--light-gray);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.progress-phase-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 4px;
+    color: var(--dark-blue);
+}
+
+.progress-phase-label {
+    flex: 1;
+}
+
+.progress-phase-count {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--medium-gray);
+}
+
+.progress-adaptive-wrap {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--border-color);
+}
+
+.progress-phase-sub {
+    font-size: 12px;
+    margin-bottom: 3px;
+    color: var(--dark-blue);
+    opacity: 0.92;
+}
+
+.progress-track {
+    width: 100%;
+    height: 10px;
+    background-color: var(--light-gray);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background-color: var(--turquoise);
+    transition: width 0.25s ease;
+}
+
+.progress-footer {
+    margin-top: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+
+.progress-model {
+    font-size: 12px;
+    color: var(--medium-gray);
+    text-align: right;
+}
+
+.progress-current-vulnerability {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--dark-blue);
+}
+
+.progress-current-emoji {
+    font-size: 16px;
+}
+
+.progress-tested-vulnerabilities {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: 22px;
+}
+
+.progress-vuln-emoji {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--light-gray);
+    font-size: 14px;
+    cursor: help;
+}
+
+.progress-vuln-empty {
+    font-size: 12px;
+    color: var(--medium-gray);
+}
+
 .card-icon {
     position: absolute;
     right: 15px;
@@ -240,6 +367,31 @@ body {
 .badge-low {
     background-color: #ddffdd;
     color: #2cbe4e;
+}
+
+/* Scan progress chip (distinct from vulnerability severity badges above) */
+.badge-status-aborted {
+    background-color: #fde8e8;
+    color: #8b1538;
+    border: 1px solid #f5c2c7;
+}
+
+.badge-status-failed {
+    background-color: #ffe8e8;
+    color: #cf222e;
+    border: 1px solid #ee9999;
+}
+
+.badge-status-in-progress {
+    background-color: #e8f4fc;
+    color: #0969da;
+    border: 1px solid #b6daff;
+}
+
+.badge-status-complete {
+    background-color: #eefbf0;
+    color: #1a7f37;
+    border: 1px solid #aceebb;
 }
 
 .risk-indicator {

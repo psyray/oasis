@@ -379,13 +379,14 @@ DashboardApp.renderListViewWithTemplate = function() {
 DashboardApp.renderStats = function() {
     DashboardApp.debug("Rendering stats...");
     const statsContainer = document.getElementById('stats-container');
+    const h = DashboardApp._escapeHtml;
     
     if (!statsContainer) {
         console.error("Stats container not found");
         return;
     }
     
-    if (!DashboardApp.stats || !DashboardApp.stats.risk_summary) {
+    if (!DashboardApp.hasRenderableStats()) {
         console.error("Stats data not available");
         return;
     }
@@ -395,6 +396,145 @@ DashboardApp.renderStats = function() {
     const highPct = (DashboardApp.stats.risk_summary.high / totalRisks * 100) || 0;
     const mediumPct = (DashboardApp.stats.risk_summary.medium / totalRisks * 100) || 0;
     const lowPct = (DashboardApp.stats.risk_summary.low / totalRisks * 100) || 0;
+    const progress = DashboardApp.progressState || {};
+    const hasRun = Boolean(progress.has_progress);
+    const totalVulns = Math.max(0, Number(progress.total_vulnerabilities || 0));
+    const hasProgress = totalVulns > 0;
+    const completedVulns = Math.max(0, Number(progress.completed_vulnerabilities || 0));
+    const progressPct = totalVulns > 0 ? Math.min(100, Math.round((completedVulns / totalVulns) * 100)) : 0;
+    const statusKey = String(progress.status || '').toLowerCase();
+    const isAborted = statusKey === 'aborted';
+    const isFailed = statusKey === 'failed';
+    const isSucceeded = statusKey === 'succeeded';
+    const isFinished = statusKey === 'finished' || statusKey === 'complete' || isSucceeded;
+
+    const progressStatus = (() => {
+        if (isAborted) {
+            return 'Aborted';
+        }
+        if (isFailed) {
+            return 'Failed';
+        }
+        if (!isFinished && progress.is_partial) {
+            return 'In progress';
+        }
+        if (isFinished) {
+            return 'Complete';
+        }
+        return progress.is_partial ? 'In progress' : 'Complete';
+    })();
+
+    const statusBadgeClass = (() => {
+        if (isAborted) {
+            return 'badge-status-aborted';
+        }
+        if (isFailed) {
+            return 'badge-status-failed';
+        }
+        if (!isFinished && progress.is_partial) {
+            return 'badge-status-in-progress';
+        }
+        return 'badge-status-complete';
+    })();
+    const testedVulnerabilities = Array.isArray(progress.tested_vulnerabilities)
+        ? progress.tested_vulnerabilities.filter(Boolean)
+        : [];
+    const testedVulnerabilitiesHtml = testedVulnerabilities.length > 0
+        ? testedVulnerabilities.map(vuln => {
+            const emoji = DashboardApp.getVulnerabilityEmoji(String(vuln).toLowerCase().replace(/ /g, '_')).trim() || '🔒';
+            return `<span class="progress-vuln-emoji" title="${h(vuln)}">${h(emoji)}</span>`;
+        }).join('')
+        : '<span class="progress-vuln-empty">No vulnerabilities completed yet</span>';
+    const currentVulnerabilityRaw = String(progress.current_vulnerability || '').trim();
+    const currentVulnerabilityEmoji = currentVulnerabilityRaw
+        ? (DashboardApp.getVulnerabilityEmoji(currentVulnerabilityRaw.toLowerCase().replace(/ /g, '_')).trim() || '🔒')
+        : (isAborted ? '🛑' : isFailed ? '⚠️' : (hasRun ? '⏳' : '📭'));
+    const currentVulnerabilityText = currentVulnerabilityRaw
+        || (isAborted ? 'Scan aborted by user' : isFailed ? 'Scan failed' : (hasRun ? 'Waiting for first vulnerability' : 'No active scan'));
+
+    const normalizePhaseNumber =
+        typeof DashboardApp.normalizeProgressNumber === 'function'
+            ? DashboardApp.normalizeProgressNumber
+            : (value) => {
+                  const raw = Number(value || 0);
+                  return Number.isFinite(raw) ? Math.max(0, raw) : 0;
+              };
+
+    const phases = Array.isArray(progress.phases) ? progress.phases : [];
+    const phaseRowsHtml = phases
+        .map((p) => {
+            if (!p || typeof p !== 'object') {
+                return '';
+            }
+            const label = String(p.label || p.id || 'Phase');
+            const done = normalizePhaseNumber(p.completed);
+            const tot = normalizePhaseNumber(p.total);
+            const pct = tot > 0 ? Math.min(100, Math.round((done / tot) * 100)) : 0;
+            const st = String(p.status || '').trim();
+            const labelWithStatus =
+                typeof DashboardApp.htmlProgressPhaseLabelWithStatus === 'function'
+                    ? DashboardApp.htmlProgressPhaseLabelWithStatus(h, label, st)
+                    : h(label) + (st ? (' · ' + h(st)) : '');
+            return `<div class="progress-phase-row"><span class="progress-phase-label">${labelWithStatus}</span><span class="progress-phase-count">${done}/${tot} (${pct}%)</span></div>`;
+        })
+        .filter(Boolean)
+        .join('');
+
+    let adaptiveHtml = '';
+    const asub = progress.adaptive_subphases;
+    if (asub && typeof asub === 'object') {
+        adaptiveHtml = Object.keys(asub)
+            .map((key) => {
+                const sub = asub[key];
+                if (!sub || typeof sub !== 'object') {
+                    return '';
+                }
+                const labelText = String(sub.label || key);
+                const done = normalizePhaseNumber(sub.completed);
+                const tot = normalizePhaseNumber(sub.total);
+                const pct = tot > 0 ? Math.min(100, Math.round((done / tot) * 100)) : 0;
+                const st = String(sub.status || '').trim();
+                const labelWithStatus =
+                    typeof DashboardApp.htmlProgressPhaseLabelWithStatus === 'function'
+                        ? DashboardApp.htmlProgressPhaseLabelWithStatus(h, labelText, st)
+                        : h(labelText) + (st ? (' · ' + h(st)) : '');
+                return `<div class="progress-phase-sub">${labelWithStatus} — ${done}/${tot} (${pct}%)</div>`;
+            })
+            .filter(Boolean)
+            .join('');
+    }
+
+    const activePhaseRaw = String(progress.active_phase || '').trim();
+    const activePhaseHtml = activePhaseRaw
+        ? `<div class="progress-active-phase">Phase: <code>${h(activePhaseRaw)}</code>${progress.scan_mode ? ` · ${h(String(progress.scan_mode))}` : ''}</div>`
+        : '';
+
+    const phasesSection =
+        phaseRowsHtml || adaptiveHtml || activePhaseHtml
+            ? `<div class="progress-phases">${activePhaseHtml}${phaseRowsHtml}${adaptiveHtml ? `<div class="progress-adaptive-wrap">${adaptiveHtml}</div>` : ''}</div>`
+            : '';
+
+    const progressCard = hasProgress
+        ? `
+            <div class="card progress-card">
+                <div class="card-title">⏱️ Scan progress</div>
+                <div class="progress-meta">${completedVulns}/${totalVulns} vulnerabilities</div>
+                ${phasesSection}
+                <div class="progress-track">
+                    <div class="progress-fill" style="width: ${progressPct}%;"></div>
+                </div>
+                <div class="progress-current-vulnerability">
+                    <span class="progress-current-emoji">${h(currentVulnerabilityEmoji)}</span>
+                    <span class="progress-current-text">${h(currentVulnerabilityText)}</span>
+                </div>
+                <div class="progress-tested-vulnerabilities">${testedVulnerabilitiesHtml}</div>
+                <div class="progress-footer">
+                    <span class="badge ${statusBadgeClass}">${progressStatus}</span>
+                    <span class="progress-model">${h(String(progress.model || ''))}</span>
+                </div>
+            </div>
+        `
+        : '';
     
     statsContainer.innerHTML = `
         <div class="dashboard-cards">
@@ -428,6 +568,7 @@ DashboardApp.renderStats = function() {
                     <span class="badge badge-low">📌 ${DashboardApp.stats.risk_summary.low || 0} Low</span>
                 </div>
             </div>
+            ${progressCard}
         </div>
     `;
 };

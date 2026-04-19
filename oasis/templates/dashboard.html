@@ -15,6 +15,8 @@
     window.__OASIS_DASHBOARD__.outputFormats = {{ report_output_formats|tojson|safe }};
     window.__OASIS_DASHBOARD__.formatDisplayOrder = {{ dashboard_format_display_order|tojson|safe }};
     window.__OASIS_DASHBOARD__.languages = languageConfig;
+    window.__OASIS_DASHBOARD__.realtimeEnabled = {{ dashboard_realtime_enabled|tojson|safe }};
+    window.__OASIS_DASHBOARD__.socketioClientUrl = {{ dashboard_socketio_client_url|tojson|safe }};
 </script>
 {% endblock %}
 
@@ -36,6 +38,13 @@
             <div class="filter-section">
                 <h2 class="filter-title">🛡️ Filter by vulnerability</h2>
                 <div class="filter-options" id="vulnerability-filters">
+                    <div class="loading"><div class="loading-spinner"></div></div>
+                </div>
+            </div>
+
+            <div class="filter-section">
+                <h2 class="filter-title">🌐 Filter by language</h2>
+                <div class="filter-options" id="language-filters">
                     <div class="loading"><div class="loading-spinner"></div></div>
                 </div>
             </div>
@@ -100,6 +109,11 @@
 {% endblock %}
 
 {% block scripts %}
+    {% if dashboard_realtime_enabled %}
+    {% if dashboard_socketio_client_url %}
+    <script src="{{ dashboard_socketio_client_url }}"></script>
+    {% endif %}
+    {% endif %}
     <!-- Include only the main app file - it will load the other modules -->
     <script src="{{ url_for('static', filename='js/dashboard-app.js') }}"></script>
 {% endblock %} 

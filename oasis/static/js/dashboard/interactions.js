@@ -33,6 +33,7 @@ DashboardApp.filterByModel = function(model) {
     DashboardApp.activeFilters = {
         models: [model],
         formats: [],
+        languages: [],
         vulnerabilities: [],
         dateRange: null
     };

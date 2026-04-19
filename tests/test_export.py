@@ -1,14 +1,17 @@
 """Tests for export helpers and SARIF generation."""
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from oasis.export.filenames import artifact_filename, report_dir_glob_for_format
+from oasis.export.writers import write_utf8_text
 from oasis.export.sarif import vulnerability_document_to_sarif
 from oasis.schemas.analysis import (
     ChunkDeepAnalysis,
@@ -145,3 +148,20 @@ class TestSarifExport(unittest.TestCase):
         region = payload["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"]
         self.assertEqual(region.get("startLine"), 12)
         self.assertEqual(region.get("endLine"), 14)
+
+
+class TestWriterAtomicity(unittest.TestCase):
+    def test_write_utf8_text_uses_atomic_replace(self):
+        target = Path("/tmp/oasis_atomic_writer_test.txt")
+        with patch("oasis.export.writers.os.replace") as replace_mock:
+            write_utf8_text(target, "hello")
+        self.assertTrue(replace_mock.called)
+
+    def test_write_utf8_text_cleans_tmp_file_when_replace_fails(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "report.json"
+            with self.assertRaises(OSError):
+                with patch("oasis.export.writers.os.replace", side_effect=OSError("replace failed")):
+                    write_utf8_text(target, "hello")
+            leftovers = [p for p in Path(tmp_dir).iterdir() if p.name != target.name]
+            self.assertEqual(leftovers, [])

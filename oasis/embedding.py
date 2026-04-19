@@ -1,10 +1,11 @@
 import argparse
 import hashlib
 import json
+import time
 from pathlib import Path
 import pickle
 from datetime import datetime
-from typing import List, Tuple, Dict, Any, Optional, Union
+from typing import List, Tuple, Dict, Any, Optional, Union, Callable
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 import re
@@ -18,6 +19,88 @@ from .ollama_manager import OllamaManager
 from .schemas.function_extract import FunctionExtractResponse
 from .tools import create_cache_dir, logger, chunk_content, parse_input, sanitize_name, open_file
 from pydantic import ValidationError
+
+EMBEDDING_PROGRESS_MIN_INTERVAL_SEC = 2.0
+
+# Minimum spacing between throttle checks when ``min_interval_sec`` is very small or zero:
+# avoids tight loops from hammering embedding hooks while still allowing frequent updates.
+EMBEDDING_THROTTLE_MIN_INTERVAL_FLOOR_SEC = 0.05
+
+# --- Embedding progress hook (throttle) ---------------------------------------
+# Used by EmbeddingManager when reporting file embedding progress to optional
+# callbacks; complements ``oasis.helpers.scan_progress`` for scan-level phases.
+
+
+class EmbeddingProgressThrottle:
+    """Holds throttle state for optional embedding ``(completed, total)`` callbacks."""
+
+    __slots__ = ("_last_emit_mono",)
+
+    def __init__(self) -> None:
+        self._last_emit_mono = 0.0
+
+    def maybe_emit(
+        self,
+        hook: Optional[Callable[[int, int], None]],
+        completed: int,
+        total: int,
+        *,
+        min_interval_sec: float,
+        force: bool = False,
+    ) -> None:
+        """Emit at most once per ``min_interval_sec`` while work is incomplete."""
+        if hook is None:
+            return
+
+        safe_total: int
+        safe_completed: int
+
+        try:
+            total_n = total
+        except (TypeError, ValueError):
+            logger.debug(
+                "EmbeddingProgressThrottle.maybe_emit: invalid total=%r; skipping emit",
+                total,
+            )
+            if not force:
+                return
+            safe_total = 0
+            safe_completed = 0
+        else:
+            total_n = max(0, total_n)
+            if total_n <= 0:
+                logger.debug(
+                    "EmbeddingProgressThrottle.maybe_emit: non-positive total=%r",
+                    total,
+                )
+                if not force:
+                    return
+                safe_total = 0
+                safe_completed = 0
+            else:
+                safe_total = total_n
+                try:
+                    completed_n = completed
+                except (TypeError, ValueError):
+                    completed_n = 0
+                safe_completed = max(0, min(completed_n, safe_total))
+
+        now = time.monotonic()
+
+        if force:
+            self._last_emit_mono = now
+            hook(safe_completed, safe_total)
+            return
+
+        if (
+            safe_completed < safe_total
+            and now - self._last_emit_mono
+            < max(EMBEDDING_THROTTLE_MIN_INTERVAL_FLOOR_SEC, min_interval_sec)
+        ):
+            return
+        self._last_emit_mono = now
+        hook(safe_completed, safe_total)
+
 
 class EmbeddingManager:
     def __init__(self, args, ollama_manager: OllamaManager):
@@ -113,11 +196,19 @@ class EmbeddingManager:
         """
         return file_path.suffix.lower()[1:] in self.supported_extensions
 
-    def index_code_files(self, files: List[Path]) -> None:
+    def index_code_files(
+        self,
+        files: List[Path],
+        *,
+        embedding_progress_hook: Optional[Callable[[int, int], None]] = None,
+        embedding_progress_min_interval_sec: float = EMBEDDING_PROGRESS_MIN_INTERVAL_SEC,
+    ) -> None:
         """
         Generate embeddings for code files in parallel
         Args:
             files: List of file paths to analyze
+            embedding_progress_hook: Optional ``(completed, total)`` callback for progress consumers.
+            embedding_progress_min_interval_sec: Minimum seconds between intermediate emissions.
         """
         try:
             # Calculate optimal number of processes
@@ -137,6 +228,16 @@ class EmbeddingManager:
             ]
             if not process_args:
                 return
+
+            throttle = EmbeddingProgressThrottle()
+            total_embed = len(process_args)
+            throttle.maybe_emit(
+                embedding_progress_hook,
+                0,
+                total_embed,
+                min_interval_sec=embedding_progress_min_interval_sec,
+                force=True,
+            )
 
             # Process files in parallel with progress bar
             with Pool(processes=num_processes) as pool:
@@ -168,6 +269,21 @@ class EmbeddingManager:
                                     }
 
                         pbar.update(1)
+                        throttle.maybe_emit(
+                            embedding_progress_hook,
+                            int(pbar.n),
+                            total_embed,
+                            min_interval_sec=embedding_progress_min_interval_sec,
+                            force=False,
+                        )
+
+            throttle.maybe_emit(
+                embedding_progress_hook,
+                total_embed,
+                total_embed,
+                min_interval_sec=embedding_progress_min_interval_sec,
+                force=True,
+            )
 
             # Save after batch processing
             self.save_cache()
@@ -175,12 +291,20 @@ class EmbeddingManager:
         except Exception as e:
             logger.exception(f"Error during parallel embedding generation: {str(e)}")
 
-    def process_input_files(self, args):
+    def process_input_files(
+        self,
+        args,
+        *,
+        embedding_progress_hook: Optional[Callable[[int, int], None]] = None,
+        embedding_progress_min_interval_sec: float = EMBEDDING_PROGRESS_MIN_INTERVAL_SEC,
+    ):
         """
         Process input files and update embeddings
 
         Args:
             args: Arguments
+            embedding_progress_hook: Optional callback ``(completed_files, total_files)`` during embedding pass.
+            embedding_progress_min_interval_sec: Throttle interval between intermediate hook calls.
         """
         # Parse input files and generate embeddings
         files_to_analyze = parse_input(args.input_path)
@@ -220,7 +344,11 @@ class EmbeddingManager:
 
         if new_files:
             logger.info(f"Generating embeddings for {len(new_files)} new files")
-            self.index_code_files(new_files)
+            self.index_code_files(
+                new_files,
+                embedding_progress_hook=embedding_progress_hook,
+                embedding_progress_min_interval_sec=embedding_progress_min_interval_sec,
+            )
         else:
             logger.debug("All files found in cache with valid structure")
 

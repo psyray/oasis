@@ -11,4 +11,6 @@ alwaysApply: true
 - When a CLI flag or behavior changes, update `README.md` in the same change to avoid drift.
 - When install or upgrade steps change, keep `README.md` aligned with the **pipx** workflow (`pipx uninstall oasis && pipx install -e .`).
 - When structured output or report schema changes, align `oasis/schemas/`, report templates, and contract tests (e.g., `tests/test_report_schema.py`) in the same change set.
+- When the **incremental scan progress wire contract** changes (`EXEC_SUMMARY_PROGRESS_EVENT_VERSION`, `SCAN_PROGRESS_EXTENDED_KEYS`, stripping in `publish_incremental_summary`, `web.py` aggregation, or dashboard handlers), ship the coordinated updates together—especially `oasis/helpers/progress_constants.py`, `oasis/report.py`, `oasis/web.py`, `oasis/static/js/dashboard/*.js`, and contract tests in `tests/test_report_schema.py` when behavior is contract-visible—so `main` never exposes mismatched producers and consumers.
 - Prefer incremental commits focused on one concern (e.g., caching, web UI bugfixes, model integration).
+- Avoid landing **duplicated** behavior across commits: if you introduce shared logic, migrate all call sites in the same change set (or follow immediately with a `refactor:`) so `main` does not retain two competing implementations.

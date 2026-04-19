@@ -11,6 +11,7 @@ const DashboardApp = {
     activeFilters: {
         models: [],
         formats: [],
+        languages: [],
         vulnerabilities: [],
         dateRange: null
     },
@@ -18,6 +19,8 @@ const DashboardApp = {
     currentReportPath: '',
     currentReportFormat: '',
     currentResizeObserver: null,
+    socket: null,
+    progressState: null,
     debugMode: false, // Initialize debug flag
     
     // Debug logging function that only logs when debug mode is active
@@ -187,12 +190,19 @@ const DashboardApp = {
                 if (typeof this.loadVulnerabilityFiltersFromStorage === 'function') {
                     this.loadVulnerabilityFiltersFromStorage();
                 }
+                if (typeof this.loadLanguageFiltersFromStorage === 'function') {
+                    this.loadLanguageFiltersFromStorage();
+                }
 
                 // Initialize the dashboard only after templates are loaded
-                this.fetchReports();
-                // Keep vulnerability options complete on page reload.
-                this.fetchStats(false, { includeVulnerability: false });
                 this.initializeFilters();
+                // Match previous startup: stats omit vulnerability in the query so filter options stay complete.
+                this.refreshDashboard({ statsIncludeVulnerability: false });
+                if (typeof this.ensureRealtimeProgress === 'function') {
+                    this.ensureRealtimeProgress();
+                } else {
+                    this.initRealtimeProgress();
+                }
 
                 // Initialize modal events if available
                 if (this.initializeModalEvents) {
@@ -226,11 +236,15 @@ const DashboardApp = {
                 self.activeFilters = {
                     models: [],
                     formats: [],
+                    languages: [],
                     vulnerabilities: [],
                     dateRange: null
                 };
                 if (typeof self.clearVulnerabilityFilterStorage === 'function') {
                     self.clearVulnerabilityFilterStorage();
+                }
+                if (typeof self.clearLanguageFilterStorage === 'function') {
+                    self.clearLanguageFilterStorage();
                 }
                 
                 // Reset checkboxes

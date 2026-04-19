@@ -17,7 +17,27 @@ from .config import CHUNK_ANALYZE_TIMEOUT, LANGUAGES, MODEL_EMOJIS, VULNERABILIT
 from .ollama_manager import OllamaManager
 from .snippet_lines import absolute_snippet_lines_in_file
 from .tools import chunk_content_with_spans, logger, calculate_similarity, sanitize_name
-from .report import Report
+from .report import (
+    Report,
+    build_adaptive_deep_phase_markdown,
+    progress_timestamp_iso,
+    publish_incremental_summary,
+)
+from .helpers import (
+    adaptive_after_batch_extras,
+    adaptive_after_identification_extras,
+    adaptive_collect_step_extras,
+    adaptive_final_summary_extras,
+    adaptive_identification_start_extras,
+    adaptive_identifying_loop_extras,
+    reset_tqdm_phase_bar,
+    safe_code_base_file_count,
+    standard_deep_phase_extras,
+    standard_final_complete_extras,
+    standard_initial_iteration_extras,
+    standard_initial_sweep_extras,
+)
+from .helpers.progress_constants import EXEC_SUMMARY_PROGRESS_EVENT_VERSION
 from .embedding import EmbeddingManager, build_vulnerability_embedding_prompt
 from .cache import CacheManager
 from .enums import AnalysisMode, AnalysisType
@@ -43,6 +63,31 @@ from .structured_output.json_repair import (
 )
 
 STRUCTURED_OUTPUT_RAW_PREVIEW_MAX_LEN = 500
+
+
+def _publish_exec_summary_progress(
+    analyzer: Any,
+    report: Report,
+    all_results: Dict[str, Any],
+    *,
+    completed_vulnerabilities: int,
+    total_vulnerabilities: int,
+    current_vulnerability: Optional[str],
+    tested_vulnerabilities: List[str],
+    **progress_extras: Any,
+) -> None:
+    """Emit executive-summary progress; pins ``event_version`` and model from ``analyzer``."""
+    publish_incremental_summary(
+        report,
+        analyzer.llm_model,
+        all_results,
+        completed_vulnerabilities=completed_vulnerabilities,
+        total_vulnerabilities=total_vulnerabilities,
+        current_vulnerability=current_vulnerability,
+        tested_vulnerabilities=tested_vulnerabilities,
+        event_version=EXEC_SUMMARY_PROGRESS_EVENT_VERSION,
+        **progress_extras,
+    )
 
 
 def _enrich_findings_with_snippet_file_lines(
@@ -337,7 +382,7 @@ class SecurityAnalyzer:
             )
             sample_json = json.dumps(samples, ensure_ascii=True, default=str)
             if len(sample_json) > 800:
-                sample_json = sample_json[:800] + "... [truncated]"
+                sample_json = f"{sample_json[:800]}... [truncated]"
             logger.debug(
                 "Normalized structured output fields (%s): %s; sample_changes=%s",
                 model_display,
@@ -781,7 +826,39 @@ Code to analyze:
         
         # Generate final executive summary
         logger.info("GENERATING FINAL REPORT")
-        report.generate_executive_summary(all_results, self.llm_model)
+        n_files = safe_code_base_file_count(self)
+        nv_final = len(vulnerabilities)
+        if adaptive:
+            _publish_exec_summary_progress(
+                self,
+                report,
+                all_results,
+                completed_vulnerabilities=nv_final,
+                total_vulnerabilities=nv_final,
+                current_vulnerability=None,
+                tested_vulnerabilities=list(all_results.keys()),
+                **adaptive_final_summary_extras(
+                    n_files=n_files,
+                    nv_final=nv_final,
+                    n_collect_completed=len(all_results),
+                    updated_at=progress_timestamp_iso(),
+                ),
+            )
+        else:
+            _publish_exec_summary_progress(
+                self,
+                report,
+                all_results,
+                completed_vulnerabilities=nv_final,
+                total_vulnerabilities=nv_final,
+                current_vulnerability=None,
+                tested_vulnerabilities=list(all_results.keys()),
+                **standard_final_complete_extras(
+                    n_files,
+                    nv_final,
+                    updated_at=progress_timestamp_iso(),
+                ),
+            )
         
         return all_results
 
@@ -800,20 +877,40 @@ Code to analyze:
             Dictionary with analysis results
         """
         all_results = {}
-        
-        # Main progress bar for vulnerabilities
-        with tqdm(total=len(vulnerabilities), desc="Overall vulnerability progress", 
-                 position=0, leave=True, disable=args.silent) as vuln_pbar:
-            
+        n_vuln_types = len(vulnerabilities)
+
+        # Initial sweep progress is emitted once inside _perform_initial_scanning when report is set.
+
+        # Main progress bar for vulnerabilities (per-phase totals applied via reset)
+        with tqdm(
+            total=n_vuln_types,
+            desc="Overall vulnerability progress",
+            position=0,
+            leave=True,
+            disable=args.silent,
+        ) as vuln_pbar:
+
             # Phase 1: Initial scanning of all suspicious files with lightweight model
-            suspicious_data = self._perform_initial_scanning(vulnerabilities, args, vuln_pbar)
-            
+            suspicious_data = self._perform_initial_scanning(
+                vulnerabilities, args, vuln_pbar, report, n_vuln_types=n_vuln_types
+            )
+
             # Phase 2: Deep analysis of suspicious chunks with the powerful model
-            all_results = self._perform_deep_analysis(suspicious_data, args, report, vuln_pbar)
+            all_results = self._perform_deep_analysis(
+                suspicious_data, args, report, vuln_pbar, n_vuln_types=n_vuln_types
+            )
         
         return all_results
 
-    def _perform_initial_scanning(self, vulnerabilities, args, main_pbar=None):
+    def _perform_initial_scanning(
+        self,
+        vulnerabilities,
+        args,
+        main_pbar=None,
+        report: Optional[Report] = None,
+        *,
+        n_vuln_types: int,
+    ):
         """
         Perform initial scanning on all files for all vulnerabilities using lightweight model
         
@@ -821,6 +918,8 @@ Code to analyze:
             vulnerabilities: List of vulnerability types to analyze
             args: Command-line arguments
             main_pbar: Optional main progress bar to update
+            report: Report for incremental executive-summary progress
+            n_vuln_types: Configured vulnerability-type count (used for executive-summary totals)
             
         Returns:
             Dictionary with suspicious data for later deep analysis
@@ -836,13 +935,34 @@ Code to analyze:
         # First, find potentially vulnerable files for each vulnerability type
         suspicious_files_by_vuln = self._identify_suspicious_files(vulnerabilities, args.threshold)
 
+        n_files = safe_code_base_file_count(self)
+        phase1_items = list(suspicious_files_by_vuln.items())
+        phase1_total = len(phase1_items)
+        reset_tqdm_phase_bar(
+            main_pbar,
+            total=phase1_total,
+            description="Overall vulnerability progress",
+        )
+
+        if report is not None:
+            _publish_exec_summary_progress(
+                self,
+                report,
+                {},
+                completed_vulnerabilities=0,
+                total_vulnerabilities=len(vulnerabilities),
+                current_vulnerability=None,
+                tested_vulnerabilities=[],
+                **standard_initial_sweep_extras(n_files, phase1_total),
+            )
+
         # Scan all suspicious files with lightweight model
         logger.debug("\nPerforming initial scan on all suspicious files...")
 
-        # Progress bar for vulnerabilities in initial scan phase
-        with tqdm(total=len(suspicious_files_by_vuln), desc="Vulnerabilities analyzed (initial scan)", 
-                 position=1, leave=False, disable=args.silent) as vuln_scan_pbar:
-            for vuln_name, data in suspicious_files_by_vuln.items():
+        # Progress bar for vulnerabilities in initial scan phase (denominator = types with work)
+        with tqdm(total=phase1_total, desc="Vulnerabilities analyzed (initial scan)",
+                     position=1, leave=False, disable=args.silent) as vuln_scan_pbar:
+            for vuln_name, data in phase1_items:
                 vuln = data['vuln_data']
                 vuln_details = self._get_vulnerability_details(vuln)
                 vuln_name = vuln_details[0]  # Extract name from details tuple
@@ -851,6 +971,23 @@ Code to analyze:
                 # Update main progress bar to show current vulnerability
                 if main_pbar:
                     main_pbar.set_postfix_str(f"Scanning: {vuln_name}")
+
+                if report is not None:
+                    _publish_exec_summary_progress(
+                        self,
+                        report,
+                        {},
+                        completed_vulnerabilities=0,
+                        total_vulnerabilities=len(vulnerabilities),
+                        current_vulnerability=vuln_name,
+                        tested_vulnerabilities=[],
+                        **standard_initial_iteration_extras(
+                            n_files,
+                            phase1_total,
+                            vuln_scan_pbar.n,
+                            scanning_item=vuln_name,
+                        ),
+                    )
 
                 # Progress bar for files for this vulnerability
                 with tqdm(total=len(suspicious_files), desc=f"Scanning files for {vuln_name}", 
@@ -880,6 +1017,22 @@ Code to analyze:
                 vuln_scan_pbar.update(1)
                 if main_pbar:
                     main_pbar.update(1)
+
+                if report is not None:
+                    _publish_exec_summary_progress(
+                        self,
+                        report,
+                        {},
+                        completed_vulnerabilities=0,
+                        total_vulnerabilities=len(vulnerabilities),
+                        current_vulnerability=None,
+                        tested_vulnerabilities=[],
+                        **standard_initial_iteration_extras(
+                            n_files,
+                            phase1_total,
+                            vuln_scan_pbar.n,
+                        ),
+                    )
 
         return {
             'suspicious_data': all_suspicious_data,
@@ -962,7 +1115,15 @@ Code to analyze:
         
         return suspicious_chunks
     
-    def _perform_deep_analysis(self, suspicious_data, args, report, main_pbar=None):
+    def _perform_deep_analysis(
+        self,
+        suspicious_data,
+        args,
+        report,
+        main_pbar=None,
+        *,
+        n_vuln_types: Optional[int] = None,
+    ):
         """
         Perform deep analysis on all suspicious chunks using powerful model
         
@@ -971,6 +1132,7 @@ Code to analyze:
             args: Command-line arguments
             report: Report object
             main_pbar: Optional main progress bar to update
+            n_vuln_types: Vulnerability-type denominator for progress (defaults to files_by_vuln size)
             
         Returns:
             Dictionary with analysis results for all vulnerabilities
@@ -981,25 +1143,66 @@ Code to analyze:
         
         all_suspicious_chunks = suspicious_data['suspicious_data']
         suspicious_files_by_vuln = suspicious_data['files_by_vuln']
-        
+        vuln_types_total = (
+            n_vuln_types if n_vuln_types is not None else len(suspicious_files_by_vuln)
+        )
+        n_files = safe_code_base_file_count(self)
+
+        reset_tqdm_phase_bar(
+            main_pbar,
+            total=vuln_types_total,
+            description="Overall vulnerability progress",
+        )
+
+        _publish_exec_summary_progress(
+            self,
+            report,
+            {},
+            completed_vulnerabilities=0,
+            total_vulnerabilities=vuln_types_total,
+            current_vulnerability=None,
+            tested_vulnerabilities=[],
+            **standard_deep_phase_extras(
+                n_files,
+                vuln_types_total,
+                deep_completed=0,
+            ),
+        )
+
         # Dictionary to store results for all vulnerabilities
         all_results = {}
         
         # Process each vulnerability separately for reporting
-        with tqdm(total=len(suspicious_files_by_vuln), desc="Vulnerabilities analyzed (deep analysis)", 
+        with tqdm(total=vuln_types_total, desc="Vulnerabilities analyzed (deep analysis)",
                  position=1, leave=False, disable=args.silent) as deep_vuln_pbar:
-            for vuln_name, data in suspicious_files_by_vuln.items():
+            for completed_count, (vuln_name, data) in enumerate(suspicious_files_by_vuln.items(), start=1):
                 vuln = data['vuln_data']
 
                 # Update main progress bar before starting the deep analysis
                 if main_pbar:
                     main_pbar.set_postfix_str(f"Analyzing: {vuln_name}")
-                
+
+                _publish_exec_summary_progress(
+                    self,
+                    report,
+                    all_results,
+                    completed_vulnerabilities=completed_count - 1,
+                    total_vulnerabilities=vuln_types_total,
+                    current_vulnerability=vuln_name,
+                    tested_vulnerabilities=list(all_results.keys()),
+                    **standard_deep_phase_extras(
+                        n_files,
+                        vuln_types_total,
+                        deep_completed=max(0, completed_count - 1),
+                        deep_current_item=vuln_name,
+                    ),
+                )
+
                 detailed_results = self._analyze_vulnerability_deep(vuln, vuln_name, all_suspicious_chunks, args.silent)
-                
+
                 # Store results for this vulnerability
                 all_results[vuln_name] = detailed_results
-                
+
                 # Generate vulnerability report
                 if detailed_results:
                     report.generate_vulnerability_report(
@@ -1009,7 +1212,22 @@ Code to analyze:
                     )
                 else:
                     logger.info(f"No suspicious code found for {vuln_name}")
-                
+
+                _publish_exec_summary_progress(
+                    self,
+                    report,
+                    all_results,
+                    completed_vulnerabilities=completed_count,
+                    total_vulnerabilities=vuln_types_total,
+                    current_vulnerability=None,
+                    tested_vulnerabilities=list(all_results.keys()),
+                    **standard_deep_phase_extras(
+                        n_files,
+                        vuln_types_total,
+                        deep_completed=completed_count,
+                    ),
+                )
+
                 # Update progress bars
                 deep_vuln_pbar.update(1)
                 if main_pbar:
@@ -2218,56 +2436,24 @@ Analyze this code segment for {vuln_name} vulnerabilities ONLY.
         vulnerable_chunks = [
             item for item in parsed_deep_results if item["model"].findings
         ]
+        vulnerable_items = [
+            (item["result"]["chunk_idx"], item["model"]) for item in vulnerable_chunks
+        ]
 
-        # 1. Summary section
-        summary = f"""## Adaptive Security Analysis for {Path(file_path).name}
-
-### Analysis Summary:
-- **Total code chunks analyzed**: {total_chunks}
-- **Suspicious chunks identified**: {suspicious_count} ({(suspicious_count/total_chunks*100):.1f}%)
-- **Context-sensitive chunks analyzed**: {medium_analyzed}
-- **Medium-analysis validation errors**: {medium_validation_errors}
-- **High-risk chunks deeply analyzed**: {deep_analyzed}
-- **Vulnerable chunks found**: {len(vulnerable_chunks)}
-- **Unparseable deep-analysis chunks**: {len(unparsed_deep_chunks)}
-- **Potential vulnerabilities (parse-failure suspects)**: {len(suspect_deep_chunks)}
-"""
-        report_parts = [summary]
-        
-        # 2. Vulnerabilities section (only if vulnerabilities found)
-        if vulnerable_chunks:
-            report_parts.append("\n## Identified Vulnerabilities\n")
-
-            for i, item in enumerate(vulnerable_chunks):
-                result = item["result"]
-                chunk_model = item["model"]
-                chunk_idx = result["chunk_idx"]
-                analysis_body = chunk_analysis_to_markdown(chunk_model, chunk_idx)
-                section_header = f"### Vulnerability #{i+1} - Chunk {chunk_idx+1}\n"
-                report_parts.extend((section_header + analysis_body, "\n<div class=\"page-break\"></div>\n"))
-        else:
-            report_parts.append("\n## No vulnerabilities were found in the deep analysis phase.\n")
-
-        if unparsed_deep_chunks:
-            report_parts.append("\n## Unparseable deep analyses\n")
-            for chunk in unparsed_deep_chunks:
-                chunk_idx = chunk.get("chunk_idx", "unknown")
-                raw = str(chunk.get("analysis", "") or "")
-                note = raw if len(raw) <= 300 else f"{raw[:300]}... [truncated]"
-                escaped_note = note.replace("```", "``\\`")
-                report_parts.append(
-                    "- Chunk {idx}: structured deep analysis could not be parsed.\n\n"
-                    "  Notes (raw model output, truncated & escaped):\n\n"
-                    "  ```\n"
-                    "{note}\n"
-                    "  ```\n".format(
-                        idx=chunk_idx,
-                        note=escaped_note,
-                    )
-                )
+        markdown = build_adaptive_deep_phase_markdown(
+            Path(file_path).name,
+            total_chunks=total_chunks,
+            suspicious_count=suspicious_count,
+            medium_analyzed=medium_analyzed,
+            medium_validation_errors=medium_validation_errors,
+            deep_analyzed=deep_analyzed,
+            vulnerable_items=vulnerable_items,
+            unparsed_deep_chunks=unparsed_deep_chunks,
+            suspect_deep_count=len(suspect_deep_chunks),
+        )
 
         return {
-            "markdown": "\n".join(report_parts),
+            "markdown": markdown,
             "structured_chunks": structured_chunks,
             "suspect_deep_chunks": suspect_deep_chunks,
         }
@@ -2288,6 +2474,9 @@ Analyze this code segment for {vuln_name} vulnerabilities ONLY.
         logger.info(f"Using {self.ollama_manager.get_model_display_name(self.llm_model)} for adaptive analysis")
 
         all_results = {}
+        n_files = safe_code_base_file_count(self)
+        nv = len(vulnerabilities)
+        progress_total_while_identifying = nv
 
         # Initialize batch processor if not exists
         if not hasattr(self, '_batch_processor'):
@@ -2297,50 +2486,187 @@ Analyze this code segment for {vuln_name} vulnerabilities ONLY.
         all_vulnerability_files = {}
         all_tasks = []
 
+        # Progress payload denominators intentionally differ by phase:
+        # - Identification: ``total_vulnerabilities`` follows the vuln-type sweep (``nv``).
+        # - Collection: ``total_vulnerabilities`` switches to ``progress_total_while_collecting``.
+        # ``vulnerability_types_total`` is always ``nv`` so consumers can tell the two apart.
+        # Adaptive phase rows still use ``nv`` for the top-level adaptive row during identification.
+
+        # Denominator = ``nv`` (identification sweep).
+        _publish_exec_summary_progress(
+            self,
+            report,
+            {},
+            completed_vulnerabilities=0,
+            total_vulnerabilities=progress_total_while_identifying,
+            current_vulnerability=None,
+            tested_vulnerabilities=[],
+            **adaptive_identification_start_extras(
+                n_files=n_files,
+                nv=nv,
+                n_batch_tasks=len(all_tasks),
+                collect_results_total=nv,
+            ),
+        )
+
         # Main progress bar for vulnerabilities identification
-        with tqdm(total=len(vulnerabilities), desc="Identifying vulnerable files", 
-                      position=0, leave=True, disable=args.silent) as vuln_pbar:
-            
-            for vuln in vulnerabilities:
+        with tqdm(
+                total=nv,
+                desc="Identifying vulnerable files",
+                position=0,
+                leave=False,
+                disable=args.silent,
+            ) as vuln_pbar:
+
+            for _vuln_ix, vuln in enumerate(vulnerabilities):
                 vuln_name = vuln['name']
                 vuln_pbar.set_postfix_str(f"Scanning: {vuln_name}")
 
+                # Denominator = ``nv`` (same identification sweep).
+                _publish_exec_summary_progress(
+                    self,
+                    report,
+                    {},
+                    completed_vulnerabilities=0,
+                    total_vulnerabilities=progress_total_while_identifying,
+                    current_vulnerability=vuln_name,
+                    tested_vulnerabilities=[],
+                    **adaptive_identifying_loop_extras(
+                        n_files=n_files,
+                        nv=nv,
+                        vuln_pbar_n=vuln_pbar.n,
+                        n_batch_tasks=len(all_tasks),
+                        n_vulns_with_files=len(all_vulnerability_files),
+                        phase_current_item=vuln_name,
+                    ),
+                )
+
                 # Find potentially vulnerable files using embeddings
                 results = self.analyzer.search_vulnerabilities(vuln, threshold=args.threshold)
-                filtered_results = [(path, score) for path, score in results if score >= args.threshold]
+                if filtered_results := [
+                    (path, score)
+                    for path, score in results
+                    if score >= args.threshold
+                ]:
+                    # Store for later use
+                    all_vulnerability_files[vuln_name] = {
+                        'files': filtered_results,
+                        'vuln_data': vuln
+                    }
 
-                # Skip if no files found
-                if not filtered_results:
+                    # Create batch tasks for these files
+                    all_tasks.extend(
+                        (file_path, vuln, args.threshold)
+                        for file_path, _ in filtered_results
+                    )
+                else:
                     logger.info(f"No files found above threshold for {vuln_name}")
-                    vuln_pbar.update(1)
-                    continue
-
-                # Store for later use
-                all_vulnerability_files[vuln_name] = {
-                    'files': filtered_results,
-                    'vuln_data': vuln
-                }
-
-                # Create batch tasks for these files
-                all_tasks.extend(
-                    (file_path, vuln, args.threshold)
-                    for file_path, _ in filtered_results
-                )
                 vuln_pbar.update(1)
+                # Denominator = ``nv`` (identification sweep end-of-step).
+                _publish_exec_summary_progress(
+                    self,
+                    report,
+                    {},
+                    completed_vulnerabilities=0,
+                    total_vulnerabilities=progress_total_while_identifying,
+                    current_vulnerability=None,
+                    tested_vulnerabilities=[],
+                    **adaptive_identifying_loop_extras(
+                        n_files=n_files,
+                        nv=nv,
+                        vuln_pbar_n=vuln_pbar.n,
+                        n_batch_tasks=len(all_tasks),
+                        n_vulns_with_files=len(all_vulnerability_files),
+                    ),
+                )
+
+        n_collect = len(all_vulnerability_files)
+        n_batch_tasks = len(all_tasks)
+        progress_total_while_collecting = max(n_collect, 1)
+
+        # Denominator switches to ``progress_total_while_collecting`` (collection workload).
+        _publish_exec_summary_progress(
+            self,
+            report,
+            {},
+            completed_vulnerabilities=0,
+            total_vulnerabilities=progress_total_while_collecting,
+            current_vulnerability=None,
+            tested_vulnerabilities=[],
+            **adaptive_after_identification_extras(
+                n_files=n_files,
+                nv=nv,
+                n_batch_tasks=n_batch_tasks,
+                progress_total_while_collecting=progress_total_while_collecting,
+            ),
+        )
 
         # 2. Process all tasks at once with optimized model loading
         if all_tasks:
             logger.info(f"Processing {len(all_tasks)} tasks with optimized model loading")
-            self._batch_processor.process_all_tasks_in_batches(all_tasks)
+            with tqdm(
+                total=1,
+                desc="Adaptive batch processing",
+                position=0,
+                leave=False,
+                disable=args.silent,
+            ) as batch_pbar:
+                self._batch_processor.process_all_tasks_in_batches(all_tasks)
+                batch_pbar.update(1)
+
+        # Denominator = ``progress_total_while_collecting`` (batch done, collection starting).
+        _publish_exec_summary_progress(
+            self,
+            report,
+            {},
+            completed_vulnerabilities=0,
+            total_vulnerabilities=progress_total_while_collecting,
+            current_vulnerability=None,
+            tested_vulnerabilities=[],
+            **adaptive_after_batch_extras(
+                n_files=n_files,
+                nv=nv,
+                n_batch_tasks=n_batch_tasks,
+                progress_total_while_collecting=progress_total_while_collecting,
+            ),
+        )
 
         # 3. Now collect results and organize by vulnerability for reporting
-        with tqdm(total=len(all_vulnerability_files), desc="Collecting results", 
-                 position=0, leave=True, disable=args.silent) as vuln_pbar:
+        with tqdm(
+            total=progress_total_while_collecting,
+            desc="Collecting results",
+            position=0,
+            leave=True,
+            disable=args.silent,
+        ) as vuln_pbar:
 
-            for vuln_name, data in all_vulnerability_files.items():
+            if n_collect == 0:
+                vuln_pbar.update(1)
+
+            for completed_count, (vuln_name, data) in enumerate(all_vulnerability_files.items(), start=1):
                 vuln = data['vuln_data']
                 filtered_results = data['files']
                 vuln_pbar.set_postfix_str(f"Analyzing: {vuln_name}")
+
+                # Denominator = ``progress_total_while_collecting``; top adaptive row tracks collection.
+                _publish_exec_summary_progress(
+                    self,
+                    report,
+                    all_results,
+                    completed_vulnerabilities=completed_count - 1,
+                    total_vulnerabilities=progress_total_while_collecting,
+                    current_vulnerability=vuln_name,
+                    tested_vulnerabilities=list(all_results.keys()),
+                    **adaptive_collect_step_extras(
+                        n_files=n_files,
+                        nv=nv,
+                        n_batch_tasks=n_batch_tasks,
+                        progress_total_while_collecting=progress_total_while_collecting,
+                        collect_completed=max(0, completed_count - 1),
+                        adaptive_row_completed=max(0, completed_count - 1),
+                        phase_current_item=vuln_name,
+                    ),
+                )
 
                 # Process all files for this vulnerability using adaptive approach
                 detailed_results = self._collect_vulnerability_results(filtered_results, vuln)
@@ -2356,10 +2682,29 @@ Analyze this code segment for {vuln_name} vulnerabilities ONLY.
                         model_name=self.llm_model,
                     )
 
+                # Same collection denominator; milestone after finishing this vuln type.
+                _publish_exec_summary_progress(
+                    self,
+                    report,
+                    all_results,
+                    completed_vulnerabilities=completed_count,
+                    total_vulnerabilities=progress_total_while_collecting,
+                    current_vulnerability=None,
+                    tested_vulnerabilities=list(all_results.keys()),
+                    **adaptive_collect_step_extras(
+                        n_files=n_files,
+                        nv=nv,
+                        n_batch_tasks=n_batch_tasks,
+                        progress_total_while_collecting=progress_total_while_collecting,
+                        collect_completed=completed_count,
+                        adaptive_row_completed=completed_count,
+                    ),
+                )
+
                 vuln_pbar.update(1)
 
         return all_results
-    
+
     def _collect_vulnerability_results(self, filtered_results, vuln):
         """
         Collect analysis results for a specific vulnerability

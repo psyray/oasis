@@ -1,19 +1,73 @@
+import contextlib
 from datetime import datetime, timezone
 import logging
+from typing import Any
 import json
 from pathlib import Path
 import re
 import secrets
+import socket
 import string
+from threading import Thread
 
 from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect, url_for
 from functools import wraps
+try:
+    from flask_socketio import SocketIO, emit
+except ModuleNotFoundError:  # pragma: no cover - fallback for minimal test envs
+    from threading import Thread
+    import time
+
+    class SocketIO:  # type: ignore[override]
+        def __init__(self, app, **_kwargs):
+            self.app = app
+
+        def on(self, _event):
+            def decorator(func):
+                return func
+            return decorator
+
+        def emit(self, event, data=None, **_kwargs):
+            return None
+
+        def run(self, app, **kwargs):
+            app.run(**kwargs)
+
+        def start_background_task(self, target, *args, **kwargs):
+            thread = Thread(target=target, args=args, kwargs=kwargs, daemon=True)
+            thread.start()
+            return thread
+
+        def sleep(self, seconds):
+            time.sleep(seconds)
+
+    def emit(event, data=None, **_kwargs):  # type: ignore[override]
+        return None
 
 
 from .config import REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS, LANGUAGES
 from .export.filenames import artifact_filename, report_dir_glob_for_format
-from .report import Report
+from .helpers.pipeline_phase_md import parse_phase_counts_from_progress_cell
+from .helpers.progress_constants import SCAN_PROGRESS_EXTENDED_KEYS
+from .report import Report, executive_summary_progress_sidecar_path
 from .tools import parse_iso_date, parse_report_date
+
+
+def _coerce_scan_progress_event_version(raw: Any) -> int:
+    """Normalize ``event_version`` to int for Socket.IO / REST consumers (matches dashboard coercion).
+
+    Integer-like values (non-boolean ints or integer strings) are returned as ints; all other
+    values (including booleans and empty/invalid strings) fall back to ``1``.
+    """
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return 1
+    try:
+        text = str(raw).strip()
+        return int(text, 10) if text else 1
+    except (TypeError, ValueError):
+        return 1
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +106,68 @@ def _dashboard_format_display_order() -> list[str]:
 
     return out
 
+def _socketio_lan_http_origins(port: int) -> list[str]:
+    """Best-effort LAN URLs for Socket.IO CORS when the server binds to all interfaces.
+
+    Browsers send ``Origin`` with the host the user typed (e.g. ``http://192.168.1.10:5001``).
+    We discover likely interface addresses without requiring extra dependencies.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add_origin(url: str) -> None:
+        if url not in seen:
+            seen.add(url)
+            out.append(url)
+
+    with contextlib.suppress(OSError):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+            udp.connect(("192.0.2.1", 80))
+            ip = udp.getsockname()[0]
+            if ip and not ip.startswith("127."):
+                add_origin(f"http://{ip}:{port}")
+    with contextlib.suppress(OSError):
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127."):
+                add_origin(f"http://{ip}:{port}")
+    return out
+
+def _expand_socketio_cors_config_entries(entries: list[str] | tuple[str, ...], port: int) -> list[str]:
+    """Replace ``{port}`` in configured origin strings."""
+    expanded: list[str] = []
+    for raw in entries:
+        if not raw or not isinstance(raw, str):
+            continue
+        s = raw.strip()
+        if not s:
+            continue
+        if "{port}" in s:
+            s = s.format(port=port)
+        expanded.append(s)
+    return expanded
+
+
 class WebServer:
     def __init__(self, report, debug=False, web_expose='local', web_password=None, web_port=5000):
+        """Initialize a dashboard server bound to a single runtime session.
+
+        Runtime attributes (`app`, `socketio`, progress monitor flags) are reset
+        at each `run()` invocation so the same instance can be reused safely in
+        tests without carrying stale realtime state across runs.
+        """
         self.report = report
         self.debug = debug
         self.web_expose = web_expose
         self.web_password = web_password
         self.web_port = web_port
         self.report_data = None
+        self.socketio = None
+        self.app = None
+        self._progress_monitor_started = False
+        self._stop_progress_monitor = False
+        self._last_emitted_progress_key = None
         if not isinstance(report, Report):
             raise ValueError("Report must be an instance of Report")
         
@@ -70,16 +178,30 @@ class WebServer:
 
         self.security_dir = self.input_path_absolute.parent / "security_reports"
         if not self.security_dir.exists():
-            raise FileNotFoundError(f"Security reports directory not found at {self.security_dir}")
+            logger.warning(
+                "Security reports directory did not exist at %s; creating it now.",
+                self.security_dir,
+            )
+        self.security_dir.mkdir(parents=True, exist_ok=True)
 
     def run(self):
         """Serve reports via a web interface."""
         from .__init__ import __version__
 
+        # Reset runtime state for each run to avoid leaking previous session state
+        # when a WebServer instance is reused (common in tests).
+        self.socketio = None
+        self.app = None
+        self._progress_monitor_started = False
+        self._stop_progress_monitor = False
+        self._last_emitted_progress_key = None
+
         app = Flask(
             __name__, template_folder=str(Path(__file__).parent / "templates"),
             static_folder=str(Path(__file__).parent / "static")
         )
+        self.app = app
+        self.socketio = SocketIO(app, **self._socketio_options())
         
         # Generate a random secret key for session management
         app.secret_key = secrets.token_hex(16)
@@ -121,15 +243,210 @@ class WebServer:
 
         # Register routes with authentication
         app = self.register_routes(app, self, login_required)
+        self._register_socket_handlers()
+        self._start_progress_monitor()
 
         # Determine the host based on the expose setting
         host = '127.0.0.1' if self.web_expose == 'local' else '0.0.0.0'
         
         # Run the server
         if self.debug:
-            app.run(debug=True, host=host, port=self.web_port)
+            self.socketio.run(app, debug=True, host=host, port=self.web_port)
         else:
-            app.run(host=host, port=self.web_port)
+            self.socketio.run(app, host=host, port=self.web_port)
+
+    def run_in_background(self):
+        """Start the web dashboard server in a background thread."""
+        thread = Thread(target=self.run, daemon=True)
+        thread.start()
+        return thread
+
+    def _register_socket_handlers(self):
+        if not self.socketio:
+            return
+
+        @self.socketio.on("connect")
+        def handle_connect():
+            if self.web_password and not session.get("logged_in"):
+                return False
+            payload = self._build_scan_progress_payload()
+            if payload:
+                emit("scan_progress", payload)
+            return True
+
+    def _start_progress_monitor(self):
+        if not self.socketio or self._progress_monitor_started:
+            return
+        self._stop_progress_monitor = False
+        self._progress_monitor_started = True
+        self.socketio.start_background_task(self._progress_monitor_loop)
+
+    def stop_progress_monitor(self) -> None:
+        """Request background progress monitor shutdown."""
+        self._stop_progress_monitor = True
+        self._progress_monitor_started = False
+
+    def _progress_monitor_loop(self):
+        while not self._stop_progress_monitor and self.socketio:
+            try:
+                self.collect_report_data()
+                payload = self._build_scan_progress_payload()
+                progress_key = (
+                    payload.get("completed_vulnerabilities"),
+                    payload.get("total_vulnerabilities"),
+                    payload.get("is_partial"),
+                    str(payload.get("status") or ""),
+                    payload.get("model"),
+                    payload.get("path"),
+                    payload.get("updated_at"),
+                    payload.get("active_phase"),
+                    repr(payload.get("phases")),
+                    repr(payload.get("adaptive_subphases")),
+                ) if payload else None
+                if payload and progress_key != self._last_emitted_progress_key:
+                    self.socketio.emit("scan_progress", payload)
+                    self._last_emitted_progress_key = progress_key
+            except Exception:
+                logger.debug("Progress monitor loop failed", exc_info=True)
+            self.socketio.sleep(self._progress_monitor_interval_seconds())
+
+    def emit_scan_progress(self, progress: dict) -> None:
+        if not self.socketio:
+            return
+        if payload := self._build_scan_progress_payload(progress):
+            self.socketio.emit("scan_progress", payload)
+        else:
+            return
+
+    def _build_scan_progress_payload(self, progress: dict | None = None) -> dict:
+        """Build realtime progress event payload from explicit or latest report progress."""
+        if progress is None:
+            progress = self._latest_scan_progress_from_report_data()
+        if not progress:
+            return {}
+        payload = self._normalize_scan_progress_payload(progress, has_progress=True)
+        payload["event_version"] = _coerce_scan_progress_event_version(payload.get("event_version"))
+        return payload
+
+    @staticmethod
+    def _progress_monitor_interval_seconds() -> float:
+        """Polling interval for background progress monitor loop."""
+        raw_interval = REPORT.get("DASHBOARD_PROGRESS_MONITOR_INTERVAL_SECONDS", 2.0)
+        try:
+            return max(0.25, float(raw_interval))
+        except (TypeError, ValueError):
+            return 2.0
+
+    def _socketio_cors_allowed_origins(self) -> list[str]:
+        """Origins allowed for Socket.IO, aligned with ``web_port`` and ``web_expose``.
+
+        Must match how users open the dashboard (same host + port as the CLI).
+        Optional ``REPORT['DASHBOARD_SOCKETIO_CORS_ALLOWED_ORIGINS']`` entries may use
+        ``{port}`` and are merged after runtime origins.
+        """
+        try:
+            port = int(self.web_port)
+        except (TypeError, ValueError):
+            port = 5000
+
+        configured = REPORT.get("DASHBOARD_SOCKETIO_CORS_ALLOWED_ORIGINS")
+        if isinstance(configured, str):
+            parts = [p.strip() for p in configured.split(",") if p.strip()]
+            cors_list = parts or ([configured.strip()] if configured.strip() else [])
+        else:
+            cors_list = list(configured or [])
+
+        expanded_config = _expand_socketio_cors_config_entries(cors_list, port)
+
+        # Always allow this instance: same port as ``socketio.run(..., port=web_port)``.
+        runtime: list[str] = [
+            f"http://127.0.0.1:{port}",
+            f"http://localhost:{port}",
+        ]
+        expose = str(self.web_expose or "local").strip().lower()
+        if expose != "local":
+            runtime.extend(_socketio_lan_http_origins(port))
+
+        merged: list[str] = []
+        seen: set[str] = set()
+        for origin in runtime + expanded_config:
+            if origin and origin not in seen:
+                seen.add(origin)
+                merged.append(origin)
+
+        logger.debug(
+            "Socket.IO CORS allowed origins (web_port=%s, web_expose=%s): %s",
+            port,
+            self.web_expose,
+            merged,
+        )
+        return merged
+
+    def _socketio_options(self) -> dict:
+        """Build Socket.IO kwargs for ``SocketIO(app, **...)``."""
+        options: dict = {
+            "cors_allowed_origins": self._socketio_cors_allowed_origins(),
+        }
+        async_mode = str(REPORT.get("DASHBOARD_SOCKETIO_ASYNC_MODE", "auto") or "auto").strip().lower()
+        if async_mode and async_mode != "auto":
+            options["async_mode"] = async_mode
+        return options
+
+    @staticmethod
+    def _normalize_scan_progress_payload(progress: dict | None, has_progress: bool) -> dict:
+        """Normalize scan progress payload for REST and Socket.IO consumers."""
+        progress = dict(progress or {})
+        tested_vulnerabilities = [
+            str(item).strip()
+            for item in (progress.get("tested_vulnerabilities") or [])
+            if str(item).strip()
+        ]
+        completed = int(progress.get("completed_vulnerabilities", 0))
+        total = int(progress.get("total_vulnerabilities", 0))
+        is_partial = bool(progress.get("is_partial", False))
+        status = str(progress.get("status") or ("in_progress" if is_partial else "complete"))
+        payload = {
+            "has_progress": has_progress,
+            "completed_vulnerabilities": completed,
+            "total_vulnerabilities": total,
+            "is_partial": is_partial,
+            "status": status,
+            "model": progress.get("model"),
+            "date": progress.get("date"),
+            "path": progress.get("path"),
+            "current_vulnerability": str(
+                progress.get("current_vulnerability") or ""
+            ),
+            "tested_vulnerabilities": tested_vulnerabilities,
+        }
+        for key in SCAN_PROGRESS_EXTENDED_KEYS:
+            if key in progress:
+                payload[key] = progress[key]
+        return payload
+
+    def _latest_scan_progress_from_report_data(self) -> dict:
+        """Resolve latest executive-summary progress from indexed report data."""
+        reports = self.report_data or []
+        return self._latest_scan_progress_from_reports(reports)
+
+    @staticmethod
+    def _latest_scan_progress_from_reports(reports: list[dict]) -> dict:
+        """Extract latest executive-summary progress object from report rows."""
+        summary_reports = [
+            report
+            for report in (reports or [])
+            if report.get("vulnerability_type") == "Executive Summary"
+            and report.get("progress")
+        ]
+        summary_reports.sort(key=lambda report: report.get("date") or "", reverse=True)
+        if not summary_reports:
+            return {}
+        latest = summary_reports[0]
+        progress = dict(latest.get("progress") or {})
+        progress["model"] = latest.get("model")
+        progress["date"] = latest.get("date")
+        progress["path"] = latest.get("path")
+        return progress
 
     def _generate_random_password(self, length=10):
         """Generate a random password with letters, digits and special characters"""
@@ -185,6 +502,8 @@ class WebServer:
                 model_emojis=MODEL_EMOJIS,
                 vuln_emojis=VULN_EMOJIS,
                 languages=LANGUAGES,
+                dashboard_realtime_enabled=bool(REPORT.get("DASHBOARD_REALTIME_ENABLED", True)),
+                dashboard_socketio_client_url=str(REPORT.get("DASHBOARD_SOCKETIO_CLIENT_URL") or "").strip(),
                 debug=self.debug,
                 report_output_formats=REPORT.get('OUTPUT_FORMATS', []),
                 dashboard_format_display_order=_dashboard_format_display_order(),
@@ -197,6 +516,7 @@ class WebServer:
             model_filter = request.args.get('model', '')
             format_filter = request.args.get('format', '')
             vuln_filter = request.args.get('vulnerability', '')
+            language_filter = request.args.get('language', '')
             start_date = request.args.get('start_date', None)
             end_date = request.args.get('end_date', None)
             md_dates_only = request.args.get('md_dates_only', '1') == '1'
@@ -208,6 +528,7 @@ class WebServer:
                 model_filter=model_filter,
                 format_filter=format_filter,
                 vuln_filter=vuln_filter,
+                language_filter=language_filter,
                 start_date=start_date,
                 end_date=end_date,
                 md_dates_only=md_dates_only,
@@ -222,11 +543,26 @@ class WebServer:
                 model_filter=request.args.get('model', ''),
                 format_filter=request.args.get('format', ''),
                 vuln_filter=request.args.get('vulnerability', ''),
+                language_filter=request.args.get('language', ''),
                 start_date=request.args.get('start_date', None),
                 end_date=request.args.get('end_date', None),
                 md_dates_only=request.args.get('md_dates_only', '1') == '1',
             )
             return jsonify(self.get_report_statistics(filtered_reports=filtered_data))
+
+        @app.route('/api/progress')
+        @login_required
+        def get_progress():
+            filtered_data = self.filter_reports(
+                model_filter=request.args.get('model', ''),
+                format_filter='',
+                vuln_filter='Executive Summary',
+                language_filter=request.args.get('language', ''),
+                start_date=request.args.get('start_date', None),
+                end_date=request.args.get('end_date', None),
+                md_dates_only=request.args.get('md_dates_only', '1') == '1',
+            )
+            return jsonify(self.get_scan_progress(filtered_reports=filtered_data))
         
         @app.route('/reports/<path:filename>')
         @login_required
@@ -429,6 +765,8 @@ class WebServer:
                 'critical_risk': int(st.get('critical_risk', 0)),
                 'total_findings': int(st.get('total_findings', 0)),
             }
+        except (OSError, json.JSONDecodeError):
+            return {}
         except Exception as exc:
             logger.warning(
                 "Failed to load stats from JSON report '%s': %s",
@@ -436,6 +774,193 @@ class WebServer:
                 exc,
             )
             return {}
+
+    @staticmethod
+    def _scan_progress_updated_at_key(payload: dict) -> str | None:
+        """Lexicographic ordering key for ``updated_at`` (ISO Z suffix matches chronological order)."""
+        raw = payload.get("updated_at")
+        if raw is None:
+            return None
+        text = str(raw).strip()
+        return text or None
+
+    @staticmethod
+    def _parse_summary_progress_from_json_data(data: dict) -> dict | None:
+        progress = data.get("progress")
+        if not isinstance(progress, dict):
+            return None
+
+        try:
+            completed = int(progress.get("completed_vulnerabilities", 0))
+            total = int(progress.get("total_vulnerabilities", 0))
+            is_partial = bool(progress.get("is_partial", False))
+        except (TypeError, ValueError):
+            return None
+
+        tested_vulnerabilities = [
+            str(item).strip()
+            for item in (progress.get("tested_vulnerabilities") or [])
+            if str(item).strip()
+        ]
+        current_vulnerability = str(progress.get("current_vulnerability") or "").strip()
+
+        result = {
+            "completed_vulnerabilities": completed,
+            "total_vulnerabilities": total,
+            "is_partial": is_partial,
+            "status": str(
+                progress.get("status")
+                or ("in_progress" if is_partial else "complete")
+            ).strip().lower(),
+            "current_vulnerability": current_vulnerability,
+            "tested_vulnerabilities": tested_vulnerabilities,
+        }
+        for key in SCAN_PROGRESS_EXTENDED_KEYS:
+            if key in progress:
+                result[key] = progress[key]
+        return result
+
+    @staticmethod
+    def _load_summary_progress_json_file(path: Path) -> dict | None:
+        if not path.is_file():
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+        return WebServer._parse_summary_progress_from_json_data(data)
+
+    @staticmethod
+    def _summary_progress_from_json_report_file(report_file: Path) -> dict:
+        """Load optional executive summary progress metadata from JSON report.
+
+        When both a sidecar (``*.progress.json``) and embedded ``progress`` exist, the newer
+        ``updated_at`` wins so a stale partial sidecar cannot override fresher embedded data.
+        When timestamps are absent on both, sidecar is preferred first (legacy behavior).
+        """
+        sidecar_path = executive_summary_progress_sidecar_path(report_file)
+        from_sidecar = WebServer._load_summary_progress_json_file(sidecar_path)
+        from_embedded = WebServer._load_summary_progress_json_file(report_file)
+
+        if from_sidecar is not None and from_embedded is not None:
+            ts_side = WebServer._scan_progress_updated_at_key(from_sidecar)
+            ts_emb = WebServer._scan_progress_updated_at_key(from_embedded)
+            if ts_side is not None:
+                if ts_emb is not None:
+                    if ts_side > ts_emb:
+                        return from_sidecar
+                    return from_embedded if ts_side < ts_emb else from_sidecar
+                return from_sidecar
+            return from_embedded if ts_emb is not None else from_sidecar
+        if from_sidecar is not None:
+            return from_sidecar
+        return from_embedded if from_embedded is not None else {}
+
+    @staticmethod
+    def _summary_progress_from_markdown_report_file(report_file: Path) -> dict:
+        """Load optional executive summary progress metadata from markdown report."""
+        try:
+            content = report_file.read_text(encoding="utf-8")
+        except OSError:
+            return {}
+
+        if "## Scan Progress" not in content:
+            return {}
+
+        match = re.search(
+            r"\|\s*(Partial \(scan in progress\)|Complete|Aborted)\s*\|\s*(\d+)\s*/\s*(\d+)\s*\|",
+            content,
+            re.IGNORECASE,
+        )
+        if not match:
+            return {}
+
+        status = match[1].strip().lower()
+        current_match = re.search(r"-\s*Current vulnerability:\s*(.+)", content, re.IGNORECASE)
+        if tested_match := re.search(
+            r"-\s*Tested vulnerabilities:\s*(.+)", content, re.IGNORECASE
+        ):
+            tested_vulnerabilities = [
+                part.strip() for part in tested_match[1].split(",") if part.strip()
+            ]
+        else:
+            tested_vulnerabilities = []
+        result = {
+            "completed_vulnerabilities": int(match[2]),
+            "total_vulnerabilities": int(match[3]),
+            "is_partial": status.startswith("partial"),
+            "status": (
+                "aborted"
+                if status.startswith("aborted")
+                else (
+                    "in_progress" if status.startswith("partial") else "complete"
+                )
+            ),
+            "current_vulnerability": (
+                current_match[1].strip() if current_match else ""
+            ),
+            "tested_vulnerabilities": tested_vulnerabilities,
+        }
+        if phases := WebServer._pipeline_phases_from_executive_summary_markdown(
+            content
+        ):
+            result["phases"] = phases
+        return result
+
+    @staticmethod
+    def _pipeline_phases_from_executive_summary_markdown(content: str) -> list[dict]:
+        """Parse optional ``### Pipeline phases`` markdown table into phase dict rows.
+
+        Rows are split on ``|`` so minor spacing/extra text in the progress column (e.g.
+        percentages) still yields counts when at least two integers appear.
+        """
+        if "### Pipeline phases" not in content:
+            return []
+        phases: list[dict] = []
+        capture = False
+        for raw in content.splitlines():
+            line = raw.strip()
+            if "### Pipeline phases" in line:
+                capture = True
+                continue
+            if capture:
+                if line.startswith("### ") and "Pipeline phases" not in line:
+                    break
+                if not line.startswith("|"):
+                    continue
+                if "---" in line:
+                    continue
+                cells = [c.strip() for c in line.split("|")]
+                if cells and cells[0] == "":
+                    cells = cells[1:]
+                if cells and cells[-1] == "":
+                    cells = cells[:-1]
+                if len(cells) < 3:
+                    continue
+                cl0, cl1 = cells[0].lower(), cells[1].lower()
+                if "phase" in cl0 and "status" in cl1:
+                    continue
+                if not cells[0].strip("-"):
+                    continue
+                label, status, prog_cell = cells[0], cells[1], cells[2]
+                pair = parse_phase_counts_from_progress_cell(prog_cell)
+                if pair is None:
+                    logger.debug(
+                        "Skipping pipeline phase row without parseable counts: %s",
+                        line[:120],
+                    )
+                    continue
+                c, t = pair
+                phases.append(
+                    {
+                        "label": label.strip(),
+                        "status": status.strip(),
+                        "completed": max(c, 0),
+                        "total": max(t, 0),
+                    }
+                )
+        return phases
 
     @staticmethod
     def _language_from_json_report_file(report_file: Path) -> str | None:
@@ -521,6 +1046,12 @@ class WebServer:
         vulnerability_type = self._extract_vulnerability_type(report_file.stem)
 
         stats = self._stats_from_json_report_file(report_file) if fmt == 'json' else {}
+        progress = {}
+        if vulnerability_type == "Executive Summary":
+            if fmt == "json":
+                progress = self._summary_progress_from_json_report_file(report_file)
+            elif fmt == "md":
+                progress = self._summary_progress_from_markdown_report_file(report_file)
 
         # Build relative path for web access
         relative_path = report_file.relative_to(self.security_dir)
@@ -550,7 +1081,8 @@ class WebServer:
             "alternative_formats": alternative_formats,
             "date": report_date,
             "timestamp_dir": timestamp_dir,
-            "language": language
+            "language": language,
+            "progress": progress,
         }
         
     def _calculate_global_statistics(self, reports):
@@ -697,7 +1229,7 @@ class WebServer:
         report_format = report.get("format")
         return report_format == "json" or (report_format == "md" and not has_json)
 
-    def filter_reports(self, model_filter='', format_filter='', vuln_filter='', start_date=None, end_date=None, md_dates_only=True, mandatory_filters=None):
+    def filter_reports(self, model_filter='', format_filter='', vuln_filter='', language_filter='', start_date=None, end_date=None, md_dates_only=True, mandatory_filters=None):
         """Filter reports based on criteria"""
         if not self.report_data:
             self.collect_report_data()
@@ -709,6 +1241,7 @@ class WebServer:
                 "model": model_filter,
                 "format": format_filter,
                 "vulnerability": vuln_filter,
+                "language": language_filter,
                 "start_date": start_date,
                 "end_date": end_date,
             }
@@ -731,7 +1264,19 @@ class WebServer:
 
         if vuln_filter:
             vuln_filters = [v.lower() for v in vuln_filter.split(',')]
-            filtered = [r for r in filtered if any(v in r['vulnerability_type'].lower() for v in vuln_filters)]
+            filtered = [
+                r
+                for r in filtered
+                if r.get("vulnerability_type") == "Executive Summary"
+                or any(v in r['vulnerability_type'].lower() for v in vuln_filters)
+            ]
+
+        if language_filter:
+            language_filters = [lang.strip().lower() for lang in language_filter.split(',') if lang.strip()]
+            filtered = [
+                r for r in filtered
+                if ((r.get("language") or "en").strip().lower() in language_filters)
+            ]
 
         for report in filtered:
             report["date_visible"] = self._is_date_visible_for_report(report) if md_dates_only else True
@@ -759,6 +1304,7 @@ class WebServer:
             "total_reports": 0,
             "models": {},
             "vulnerabilities": {},
+            "languages": {},
             "formats": {},
             "dates": {},
             "risk_summary": {
@@ -783,6 +1329,27 @@ class WebServer:
         # Return the calculated statistics
         return stats
 
+    def get_scan_progress(self, filtered_reports=None):
+        """
+        Return latest executive summary progress metadata from JSON reports.
+        """
+        force_refresh = request.args.get('force', '0') == '1'
+        if force_refresh or not self.report_data:
+            self.collect_report_data()
+
+        reports_to_analyze = filtered_reports if filtered_reports is not None else self.report_data
+        progress = self._latest_scan_progress_from_report_data() if filtered_reports is None else self._latest_scan_progress_from_filtered_reports(reports_to_analyze)
+        if not progress:
+            return self._normalize_scan_progress_payload({}, has_progress=False)
+        normalized = self._normalize_scan_progress_payload(progress, has_progress=True)
+        if "event_version" in normalized:
+            normalized["event_version"] = _coerce_scan_progress_event_version(normalized.get("event_version"))
+        return normalized
+
+    @staticmethod
+    def _latest_scan_progress_from_filtered_reports(reports_to_analyze) -> dict:
+        return WebServer._latest_scan_progress_from_reports(reports_to_analyze)
+
     def _update_stats_for_report(self, stats: dict, report: dict) -> None:
         stats["total_reports"] += 1
         if model := report.get("model"):
@@ -792,6 +1359,9 @@ class WebServer:
             stats["vulnerabilities"][vulnerability_type] = (
                 stats["vulnerabilities"].get(vulnerability_type, 0) + 1
             )
+
+        language = (report.get("language") or "en").lower()
+        stats["languages"][language] = stats["languages"].get(language, 0) + 1
 
         if report_date := report.get("date"):
             date_only = report_date.split()[0]

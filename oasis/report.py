@@ -1,7 +1,9 @@
 import base64
+import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from bs4 import BeautifulSoup
 import markdown
@@ -16,17 +18,55 @@ from .config import REPORT, LANGUAGES
 from .export import artifact_filename
 from .export.vulnerability import write_vulnerability_artifacts
 from .export.markdown_outputs import write_rendered_markdown_formats
-from .export.writers import write_markdown_lines
+from .export.writers import write_markdown_lines, write_utf8_text
 from .schemas.analysis import (
     ChunkDeepAnalysis,
     FileReportEntry,
     VulnerabilityReportDocument,
     build_dashboard_stats,
+    chunk_analysis_to_markdown,
 )
 from .tools import extract_clean_path, logger, sanitize_name, generate_timestamp
 
 # Package metadata (process constant; avoid lazy imports in hot paths)
 from . import __version__ as oasis_version
+from .helpers.progress_constants import (
+    SCAN_PROGRESS_EXTENDED_KEYS,
+    SCAN_PROGRESS_NON_PARTIAL_STATUSES,
+    SCAN_PROGRESS_STATUS_EXPLICIT,
+)
+
+
+def progress_timestamp_iso() -> str:
+    """UTC ISO-8601 timestamp used as incremental scan ``updated_at``.
+
+    **Contract**
+
+    - **Shape**: UTC with millisecond precision, ``Z`` suffix (never ``+00:00``). Built from
+      :meth:`datetime.datetime.isoformat` + ``.replace("+00:00", "Z")``. Milliseconds reduce
+      collisions when multiple updates occur within the same wall-clock second.
+    - **Ordering**: for this shape, lexicographic string order matches chronological order.
+      The dashboard (`DashboardApp.applyProgressPayload` in ``api.js``) compares incoming
+      and previous ``updated_at`` strings without ``Date.parse`` to reject stale snapshots.
+    - **Where written**: :func:`publish_incremental_summary` injects a default when callers
+      omit ``updated_at``; final / milestone updates often pass ``updated_at=progress_timestamp_iso()``.
+
+    If the format ever changes, update the client comparison (or switch both sides to a
+    numeric epoch) so staleness detection stays correct.
+    """
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def executive_summary_progress_sidecar_path(json_path: Path) -> Path:
+    """Sibling path for incremental scan progress JSON (does not replace canonical reports).
+
+    Example: ``.../json/_executive_summary.json`` → ``.../json/_executive_summary.progress.json``.
+    """
+    return json_path.with_name(f"{json_path.stem}.progress{json_path.suffix}")
 
 
 class Report:
@@ -71,11 +111,41 @@ class Report:
             )
             self.language_code = "en"
         self.language = LANGUAGES[self.language_code]
+        self.progress_notifier = None
+        self._notifying_progress = False
+        self._last_summary_results: Dict[str, List[Dict]] = {}
+        self._last_summary_model_name: str = ""
+        self._last_progress_payload: Dict[str, Any] = {}
+        self._executive_summary_sidecar_write_failed = False
 
 
         # Configure the Jinja2 environment
         template_dir = Path(__file__).parent / 'templates'
         self.template_env = Environment(loader=FileSystemLoader(searchpath=str(template_dir)))
+
+    def set_progress_notifier(self, notifier) -> None:
+        """Register an optional callback receiving real-time scan progress payloads."""
+        self.progress_notifier = notifier
+
+    def mark_progress_aborted(self) -> None:
+        """Publish an aborted progress snapshot after a user interruption.
+
+        This method intentionally reuses ``generate_executive_summary`` so the
+        persisted summary and notifier payload stay aligned.
+        """
+        if not self._last_progress_payload:
+            return
+
+        progress = dict(self._last_progress_payload)
+        progress["status"] = "aborted"
+        # Fresh timestamp so dashboard readers / Socket.IO dedupe see a new snapshot (status-only changes).
+        progress["updated_at"] = progress_timestamp_iso()
+
+        self.generate_executive_summary(
+            self._last_summary_results,
+            self._last_summary_model_name or self.current_model or "",
+            progress=progress,
+        )
 
     def ensure_directory(self, directory: Path) -> None:
         """
@@ -421,9 +491,73 @@ class Report:
         self._generate_and_save_report(output_files, report, report_type='Audit')
 
         return output_files
+
+    @staticmethod
+    def _executive_summary_similarity_bucket(score: float) -> str:
+        if score >= 0.8:
+            return "High"
+        return "Medium" if score >= 0.6 else "Low"
+
+    def _executive_summary_severity_groups(
+        self, all_results: Dict[str, List[Dict]]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        severity_groups: Dict[str, List[Dict[str, Any]]] = {"High": [], "Medium": [], "Low": []}
+        for vuln_type, results in all_results.items():
+            for result in results:
+                score = result["similarity_score"]
+                severity = self._executive_summary_similarity_bucket(score)
+                severity_groups[severity].append(
+                    {
+                        "vuln_type": vuln_type,
+                        "file_path": result["file_path"],
+                        "score": score,
+                    }
+                )
+        return severity_groups
+
+    @staticmethod
+    def _extend_executive_summary_vulnerability_table(
+        report: List[str], all_results: Dict[str, List[Dict]]
+    ) -> None:
+        vulnerability_count = {vt: len(rs) for vt, rs in all_results.items()}
+        report.extend(
+            [
+                "\n## Vulnerability Summary",
+                "| Vulnerability Type | Files Analyzed |",
+                "|-------------------|----------------|",
+            ]
+        )
+        report.extend(f"| {vuln_type} | {count} |" for vuln_type, count in vulnerability_count.items())
+
+    @staticmethod
+    def _extend_executive_summary_severity_sections(
+        report: List[str], severity_groups: Dict[str, List[Dict[str, Any]]]
+    ) -> None:
+        for severity in ("High", "Medium", "Low"):
+            findings = severity_groups.get(severity) or []
+            if not findings:
+                continue
+            report.extend(
+                [
+                    f"\n## {severity} Risk Findings ({len(findings)} issues)",
+                    "| Vulnerability Type | File | Score | Report Link |",
+                    "|-------------------|------|-------|--------------|",
+                ]
+            )
+            for finding in sorted(findings, key=lambda x: x["score"], reverse=True):
+                vuln_file = finding["vuln_type"].lower().replace(" ", "_") + ".pdf"
+                report_path = f"../pdf/{vuln_file}"
+                report.append(
+                    f"| {finding['vuln_type']} | `{finding['file_path']}` | {finding['score']:.2f} | "
+                    f"[Details]({report_path}) |"
+                )
     
-    def generate_executive_summary(self, all_results: Dict[str, List[Dict]], 
-                                 model_name: str) -> Dict[str, Path]:
+    def generate_executive_summary(
+        self,
+        all_results: Dict[str, List[Dict]],
+        model_name: str,
+        progress: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Path]:
         """
         Generate executive summary report
         
@@ -434,87 +568,226 @@ class Report:
         Returns:
             Dictionary of report file paths
         """
-        # Set output file paths and filter by output format in one step
         output_files = self.filter_output_files("_executive_summary")
+        self._last_summary_results = dict(all_results or {})
+        self._last_summary_model_name = str(model_name or "")
 
-        # Start building the executive summary
         report = self.create_header("Executive Summary", model_name)
-        
         report.extend([
             "\n## Overview",
             f"\nAnalyzed {len(all_results)} vulnerability types across the codebase.",
             REPORT['EXPLAIN_EXECUTIVE_SUMMARY'],
         ])
-        
-        # Count vulnerabilities
-        vulnerability_count = {
-            vuln_type: len(results) for vuln_type, results in all_results.items()
-        }
-        
-        # Add vulnerability summary table
-        report.extend([
-            "\n## Vulnerability Summary",
-            "| Vulnerability Type | Files Analyzed |",
-            "|-------------------|----------------|"
-        ])
-        
-        report.extend(
-            f"| {vuln_type} | {count} |"
-            for vuln_type, count in vulnerability_count.items()
-        )
-        
-        # Organize findings by severity
-        severity_groups = {
-            'High': [],
-            'Medium': [],
-            'Low': []
-        }
-        
-        for vuln_type, results in all_results.items():
-            for result in results:
-                # Determine severity based on similarity score
-                score = result['similarity_score']
-                if score >= 0.8:
-                    severity = 'High'
-                elif score >= 0.6:
-                    severity = 'Medium'
-                else:
-                    severity = 'Low'
-                
-                severity_groups[severity].append({
-                    'vuln_type': vuln_type,
-                    'file_path': result['file_path'],
-                    'score': score
-                })
-        
-        # Add findings by severity
-        for severity in ['High', 'Medium', 'Low']:
-            if severity_groups[severity]:
-                report.extend([
-                    f"\n## {severity} Risk Findings ({len(severity_groups[severity])} issues)",
-                    "| Vulnerability Type | File | Score | Report Link |",
-                    "|-------------------|------|-------|--------------|"
-                ])
-                
-                # Sort by score within each severity group
-                for finding in sorted(severity_groups[severity], key=lambda x: x['score'], reverse=True):
-                    vuln_file = finding['vuln_type'].lower().replace(' ', '_') + '.pdf'
-                    report_path = f"../pdf/{vuln_file}"
-                    report.append(
-                        f"| {finding['vuln_type']} | `{finding['file_path']}` | {finding['score']:.2f} | [Details]({report_path}) |"
-                    )
-        
-        # Add timestamp at the bottom
+
+        if progress:
+            self._append_scan_progress_section(progress, report)
+
+        self._extend_executive_summary_vulnerability_table(report, all_results)
+        severity_groups = self._executive_summary_severity_groups(all_results)
+        self._extend_executive_summary_severity_sections(report, severity_groups)
+
         report.extend([
             "\n---",
             f"Report generated on: {generate_timestamp()}",
-            f"Model: {model_name}"
+            f"Model: {model_name}",
         ])
-        
-        # Generate and save report
+
         self._generate_and_save_report(output_files, report, report_type='Executive Summary')
-        
+
+        json_path = output_files.get("json")
+        if progress and json_path:
+            try:
+                progress_path = executive_summary_progress_sidecar_path(Path(json_path))
+                doc = {
+                    "report_type": "executive_summary",
+                    "model": model_name,
+                    "progress": dict(self._last_progress_payload),
+                    "generated_at": progress_timestamp_iso(),
+                    "oasis_version": oasis_version,
+                }
+                write_utf8_text(
+                    progress_path,
+                    json.dumps(doc, indent=2, ensure_ascii=False),
+                )
+            except Exception:
+                if not self._executive_summary_sidecar_write_failed:
+                    self._executive_summary_sidecar_write_failed = True
+                    logger.warning(
+                        "Failed to write executive summary progress sidecar JSON "
+                        "(subsequent failures will be logged at debug level only)",
+                        exc_info=True,
+                    )
+                else:
+                    logger.debug(
+                        "Failed to write executive summary progress sidecar JSON",
+                        exc_info=True,
+                    )
+
+        notifier = getattr(self, "progress_notifier", None)
+        if progress and callable(notifier):
+            self._notify_progress_update(progress=progress, model_name=model_name, notifier=notifier)
+
         return output_files
+
+    def _append_scan_progress_section(self, progress, report):
+        try:
+            completed = int(progress.get("completed_vulnerabilities", 0))
+        except (TypeError, ValueError):
+            completed = 0
+        try:
+            total = int(progress.get("total_vulnerabilities", 0))
+        except (TypeError, ValueError):
+            total = 0
+        completed = max(completed, 0)
+        total = max(total, 0)
+        total = max(total, completed)
+
+        is_partial = bool(progress.get("is_partial", False))
+        status_key = str(progress.get("status") or "").strip().lower()
+        if status_key not in SCAN_PROGRESS_STATUS_EXPLICIT:
+            status_key = "in_progress" if is_partial else "complete"
+        status_label = {
+            "in_progress": "Partial (scan in progress)",
+            "complete": "Complete",
+            "aborted": "Aborted",
+            "failed": "Failed",
+            "succeeded": "Succeeded",
+            "finished": "Finished",
+        }[status_key]
+        tested_vulnerabilities = [
+            str(item).strip()
+            for item in (progress.get("tested_vulnerabilities") or [])
+            if str(item).strip()
+        ]
+        current_vulnerability = str(progress.get("current_vulnerability") or "").strip()
+        report.extend(
+            [
+                "\n## Scan Progress",
+                "| Status | Completed vulnerabilities |",
+                "|--------|----------------------------|",
+                f"| {status_label} | {completed}/{total} |",
+            ]
+        )
+        if current_vulnerability:
+            report.append(f"- Current vulnerability: {current_vulnerability}")
+        if tested_vulnerabilities:
+            report.append(
+                "- Tested vulnerabilities: " + ", ".join(tested_vulnerabilities)
+            )
+
+        phases = progress.get("phases")
+        if isinstance(phases, list) and phases:
+            report.append("\n### Pipeline phases")
+            report.extend(
+                [
+                    "| Phase | Status | Progress |",
+                    "|-------|--------|----------|",
+                ]
+            )
+            for row in phases:
+                if not isinstance(row, dict):
+                    continue
+                label = str(row.get("label") or row.get("id") or "").strip() or "—"
+                st = str(row.get("status") or "").strip() or "—"
+                try:
+                    c = int(row.get("completed", 0))
+                except (TypeError, ValueError):
+                    c = 0
+                try:
+                    t = int(row.get("total", 0))
+                except (TypeError, ValueError):
+                    t = 0
+                c = max(c, 0)
+                t = max(t, 0)
+                report.append(f"| {label} | {st} | {c}/{t} |")
+
+        adaptive_subphases = progress.get("adaptive_subphases")
+        if isinstance(adaptive_subphases, dict) and adaptive_subphases:
+            report.append("\n#### Adaptive sub-phases")
+            for sub_id, sub in adaptive_subphases.items():
+                if not isinstance(sub, dict):
+                    continue
+                slabel = str(sub.get("label") or sub_id)
+                try:
+                    sc = int(sub.get("completed", 0))
+                except (TypeError, ValueError):
+                    sc = 0
+                try:
+                    stot = int(sub.get("total", 0))
+                except (TypeError, ValueError):
+                    stot = 0
+                sst = str(sub.get("status") or "")
+                report.append(f"- {slabel}: {sst} ({sc}/{stot})")
+
+        payload: Dict[str, Any] = {
+            "completed_vulnerabilities": completed,
+            "total_vulnerabilities": total,
+            "is_partial": is_partial,
+            "status": status_key,
+            "current_vulnerability": current_vulnerability,
+            "tested_vulnerabilities": tested_vulnerabilities,
+        }
+        for key in SCAN_PROGRESS_EXTENDED_KEYS:
+            if key in progress:
+                payload[key] = progress[key]
+        self._last_progress_payload = payload
+
+    def _build_progress_notifier_payload(
+        self, progress: Dict[str, Any], model_name: str
+    ) -> Dict[str, Any]:
+        """Normalize scan progress fields for realtime notifier callbacks."""
+        try:
+            completed = int(progress.get("completed_vulnerabilities", 0))
+        except (TypeError, ValueError):
+            completed = 0
+        completed = max(completed, 0)
+
+        total_raw = progress.get("total_vulnerabilities")
+        fallback_total = (
+            (self._last_progress_payload or {}).get("total_vulnerabilities")
+            if hasattr(self, "_last_progress_payload")
+            else None
+        )
+        try:
+            total = int(total_raw if total_raw is not None else fallback_total)
+        except (TypeError, ValueError):
+            total = completed
+        total = max(total, 0)
+        total = max(total, completed)
+
+        out: Dict[str, Any] = {
+            "completed_vulnerabilities": completed,
+            "total_vulnerabilities": total,
+            "is_partial": bool(progress.get("is_partial", False)),
+            "status": str(
+                progress.get("status")
+                or ("in_progress" if progress.get("is_partial") else "complete")
+            ),
+            "model": model_name,
+            "current_vulnerability": str(progress.get("current_vulnerability") or ""),
+            "tested_vulnerabilities": [
+                str(item).strip()
+                for item in (progress.get("tested_vulnerabilities") or [])
+                if str(item).strip()
+            ],
+        }
+        for key in SCAN_PROGRESS_EXTENDED_KEYS:
+            if key in progress:
+                out[key] = progress[key]
+        return out
+
+    def _notify_progress_update(self, progress: Dict[str, Any], model_name: str, notifier) -> None:
+        """Call progress notifier with a re-entrancy guard."""
+        if getattr(self, "_notifying_progress", False):
+            logger.debug("Skipping re-entrant progress notifier call")
+            return
+        try:
+            self._notifying_progress = True
+            notifier(self._build_progress_notifier_payload(progress, model_name))
+        except Exception:
+            logger.debug("Progress notifier failed", exc_info=True)
+        finally:
+            self._notifying_progress = False
     
     def convert_to_all_formats(self, markdown_file: Path) -> Dict[str, Path]:
         """
@@ -720,6 +993,134 @@ class Report:
         self.output_dir_name = f"{input_name}_{timestamp}"
         
         return base_reports_dir / self.output_dir_name
+
+
+def publish_incremental_summary(
+    report: Report,
+    llm_model: str,
+    all_results: Dict[str, List[Dict]],
+    *,
+    completed_vulnerabilities: int,
+    total_vulnerabilities: int,
+    current_vulnerability: str | None,
+    tested_vulnerabilities: List[str],
+    **progress_extras: Any,
+) -> None:
+    """Centralize executive-summary updates for standard/adaptive/final flows.
+
+    ``total_vulnerabilities`` is the denominator for ``completed_vulnerabilities`` /
+    ``is_partial`` for the **current** reporting step (phase workload). In adaptive
+    mode it equals the identification sweep size while identifying files, then switches
+    to the collection workload once results are aggregated—see optional
+    ``vulnerability_types_total`` in ``progress_extras`` for the stable configured
+    vulnerability-type count.
+
+    Keyword arguments beyond the explicit parameters are merged only when the key is in
+    ``SCAN_PROGRESS_EXTENDED_KEYS``, matching ``Report._append_scan_progress_section`` so
+    arbitrary caller data cannot be persisted into executive-summary artifacts.
+
+    If ``progress_extras`` includes a validated ``status`` string, it overrides the default
+    ``in_progress`` / ``complete`` pair derived from counts; ``is_partial`` is then derived
+    from that status (non-partial only for success-style terminals in
+    ``SCAN_PROGRESS_NON_PARTIAL_STATUSES``). Invalid status values are ignored.
+    """
+    status_override = str(progress_extras.get("status") or "").strip()
+    override_lower = status_override.lower()
+    if status_override and override_lower in SCAN_PROGRESS_STATUS_EXPLICIT:
+        effective_status = override_lower
+        is_partial = effective_status not in SCAN_PROGRESS_NON_PARTIAL_STATUSES
+    else:
+        derived_status_key = (
+            "in_progress" if completed_vulnerabilities < total_vulnerabilities else "complete"
+        )
+        effective_status = derived_status_key
+        derived_partial = completed_vulnerabilities < total_vulnerabilities
+        is_partial = derived_partial
+
+    extras_allowed = {
+        key: val
+        for key, val in progress_extras.items()
+        if key in SCAN_PROGRESS_EXTENDED_KEYS and val is not None
+    }
+    extras_allowed.pop("status", None)
+
+    payload: Dict[str, Any] = {
+        "completed_vulnerabilities": completed_vulnerabilities,
+        "total_vulnerabilities": total_vulnerabilities,
+        "is_partial": is_partial,
+        "status": effective_status,
+        "current_vulnerability": current_vulnerability,
+        "tested_vulnerabilities": tested_vulnerabilities,
+    }
+    if "updated_at" not in extras_allowed:
+        payload["updated_at"] = progress_timestamp_iso()
+    payload |= extras_allowed
+    report.generate_executive_summary(all_results, llm_model, progress=payload)
+
+
+def build_adaptive_deep_phase_markdown(
+    file_display_name: str,
+    *,
+    total_chunks: int,
+    suspicious_count: int,
+    medium_analyzed: int,
+    medium_validation_errors: int,
+    deep_analyzed: int,
+    vulnerable_items: List[Tuple[Any, ChunkDeepAnalysis]],
+    unparsed_deep_chunks: List[Dict[str, Any]],
+    suspect_deep_count: int,
+) -> str:
+    """
+    Assemble adaptive deep-phase Markdown (summary, vulnerability sections, parse-failure notes).
+
+    ``vulnerable_items`` is a list of (chunk_idx, chunk_model) pairs for chunks with findings.
+    """
+    suspicious_pct = (suspicious_count / total_chunks * 100) if total_chunks else 0.0
+
+    summary = f"""## Adaptive Security Analysis for {file_display_name}
+
+### Analysis Summary:
+- **Total code chunks analyzed**: {total_chunks}
+- **Suspicious chunks identified**: {suspicious_count} ({suspicious_pct:.1f}%)
+- **Context-sensitive chunks analyzed**: {medium_analyzed}
+- **Medium-analysis validation errors**: {medium_validation_errors}
+- **High-risk chunks deeply analyzed**: {deep_analyzed}
+- **Vulnerable chunks found**: {len(vulnerable_items)}
+- **Unparseable deep-analysis chunks**: {len(unparsed_deep_chunks)}
+- **Potential vulnerabilities (parse-failure suspects)**: {suspect_deep_count}
+"""
+    report_parts: List[str] = [summary]
+
+    if vulnerable_items:
+        report_parts.append("\n## Identified Vulnerabilities\n")
+
+        for i, (chunk_idx, chunk_model) in enumerate(vulnerable_items):
+            analysis_body = chunk_analysis_to_markdown(chunk_model, chunk_idx)
+            section_header = f"### Vulnerability #{i+1} - Chunk {chunk_idx+1}\n"
+            report_parts.extend((section_header + analysis_body, "\n<div class=\"page-break\"></div>\n"))
+    else:
+        report_parts.append("\n## No vulnerabilities were found in the deep analysis phase.\n")
+
+    if unparsed_deep_chunks:
+        report_parts.append("\n## Unparseable deep analyses\n")
+        for chunk in unparsed_deep_chunks:
+            chunk_idx = chunk.get("chunk_idx", "unknown")
+            raw = str(chunk.get("analysis", "") or "")
+            note = raw if len(raw) <= 300 else f"{raw[:300]}... [truncated]"
+            escaped_note = note.replace("```", "``\\`")
+            report_parts.append(
+                "- Chunk {idx}: structured deep analysis could not be parsed.\n\n"
+                "  Notes (raw model output, truncated & escaped):\n\n"
+                "  ```\n"
+                "{note}\n"
+                "  ```\n".format(
+                    idx=chunk_idx,
+                    note=escaped_note,
+                )
+            )
+
+    return "\n".join(report_parts)
+
 
 class PageBreakExtension(Extension):
     """

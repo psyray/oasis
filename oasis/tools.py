@@ -1,3 +1,4 @@
+import contextlib
 from datetime import datetime
 import logging
 from pathlib import Path
@@ -141,11 +142,8 @@ def setup_logging(debug=False, silent=False, error_log_file=None):
     ]
     for handler in existing_error_file_handlers:
         logger.removeHandler(handler)
-        try:
+        with contextlib.suppress(Exception):
             handler.close()
-        except Exception:
-            pass
-
     if error_log_file:
         error_log_file = Path(error_log_file)
         error_log_file.parent.mkdir(parents=True, exist_ok=True)
