@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 try:
-    from oasis.schemas.analysis import ChunkDeepAnalysis
+    from oasis.schemas.analysis import ChunkDeepAnalysis, ScanVerdict
 except ModuleNotFoundError:
     _spec = importlib.util.spec_from_file_location(
         "oasis_schemas_analysis",
@@ -24,6 +24,7 @@ except ModuleNotFoundError:
     assert _spec and _spec.loader is not None
     _spec.loader.exec_module(_analysis)
     ChunkDeepAnalysis = _analysis.ChunkDeepAnalysis
+    ScanVerdict = _analysis.ScanVerdict
 
 try:
     from oasis.structured_output.deep import (
@@ -418,6 +419,76 @@ class TestStructuredOutputParsing(unittest.TestCase):
         )
         parsed = ChunkDeepAnalysis.model_validate_json(repaired)
         self.assertEqual(parsed.notes, r"bad \x escape")
+
+    def test_structured_failure_handler_overrides_default_chunk_deep(self):
+        analyzer = SecurityAnalyzer.__new__(SecurityAnalyzer)
+        analyzer.run_id = None
+
+        def handler(_response_model, _raw, _error, _model_display):
+            return ChunkDeepAnalysis(
+                findings=[],
+                notes="handler-override",
+                validation_error=True,
+            ).model_dump_json()
+
+        analyzer.structured_output_failure_handler = handler
+        # Valid JSON but wrong type for ``findings`` — not a JSON-syntax repair case.
+        out = analyzer._parse_structured_output_response(
+            raw='{"findings":"not-a-list","notes":"n"}',
+            response_model=ChunkDeepAnalysis,
+            model_display="test-model",
+        )
+        parsed = json.loads(out)
+        self.assertEqual(parsed["notes"], "handler-override")
+        self.assertTrue(parsed.get("validation_error"))
+
+    def test_structured_failure_handler_none_uses_default_chunk_deep(self):
+        analyzer = SecurityAnalyzer.__new__(SecurityAnalyzer)
+        analyzer.run_id = None
+        analyzer.structured_output_failure_handler = None
+        out = analyzer._parse_structured_output_response(
+            raw='{"findings":"not-a-list","notes":"n"}',
+            response_model=ChunkDeepAnalysis,
+            model_display="test-model",
+        )
+        parsed = json.loads(out)
+        self.assertTrue(parsed.get("validation_error"))
+        self.assertIn("Structured output failure", parsed["notes"])
+
+    def test_parse_structured_output_response_raises_when_raise_validation_error_true(self):
+        analyzer = SecurityAnalyzer.__new__(SecurityAnalyzer)
+        analyzer.run_id = None
+        analyzer.structured_output_failure_handler = None
+        with self.assertRaises(ValidationError):
+            analyzer._parse_structured_output_response(
+                raw='{"findings":"not-a-list","notes":"n"}',
+                response_model=ChunkDeepAnalysis,
+                model_display="test-model",
+                raise_validation_error=True,
+            )
+
+    def test_default_structured_output_failure_scan_verdict_returns_error_token(self):
+        analyzer = SecurityAnalyzer.__new__(SecurityAnalyzer)
+        out = analyzer._default_structured_output_failure(
+            ScanVerdict,
+            ValueError("broken"),
+        )
+        self.assertEqual(out, "ERROR")
+
+    def test_resolve_structured_output_failure_delegates_to_handler(self):
+        analyzer = SecurityAnalyzer.__new__(SecurityAnalyzer)
+
+        def handler(_rm, _raw, _err, _md):
+            return '{"findings":[],"notes":"resolved"}'
+
+        analyzer.structured_output_failure_handler = handler
+        out = analyzer._resolve_structured_output_failure(
+            ChunkDeepAnalysis,
+            raw='{"broken"',
+            error=ValueError("simulated"),
+            model_display="m",
+        )
+        self.assertEqual(json.loads(out)["notes"], "resolved")
 
 
 if __name__ == "__main__":
