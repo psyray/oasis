@@ -1,9 +1,4 @@
-"""
-Resolve 1-based inclusive line ranges for vulnerable snippets inside a chunk.
-
-Used after LLM analysis so SARIF and JSON can point at the snippet when it is
-locatable in the analyzed segment (heuristic; not AST-based).
-"""
+"""Miscellaneous helpers (snippet line resolution for SARIF / JSON)."""
 
 from __future__ import annotations
 

@@ -16,8 +16,8 @@ if str(ROOT) not in sys.path:
 
 from oasis.enums import PhaseRowStatus
 from oasis.helpers import adaptive_subphases_payload, standard_scan_phases, standard_scan_phases_vuln_types
-from oasis.helpers.pipeline_phase_md import parse_phase_counts_from_progress_cell
-from oasis.helpers.progress_constants import (
+from oasis.helpers.dashboard import parse_phase_counts_from_progress_cell
+from oasis.helpers.progress import (
     EXEC_SUMMARY_PROGRESS_EVENT_VERSION,
     SCAN_PROGRESS_EXTENDED_KEYS,
 )
@@ -72,7 +72,7 @@ except ModuleNotFoundError:
     WebServer = None
 
 try:
-    from oasis.embedding import EmbeddingProgressThrottle
+    from oasis.helpers.embedding import EmbeddingProgressThrottle
 except ModuleNotFoundError:
     EmbeddingProgressThrottle = None
 
@@ -1049,13 +1049,13 @@ class TestReportSchema(unittest.TestCase):
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_web_emit_scan_progress_coerces_event_version_to_int(self):
-        from oasis.web import _coerce_scan_progress_event_version
+        from oasis.helpers.progress import coerce_scan_progress_event_version
 
-        self.assertEqual(_coerce_scan_progress_event_version("2"), 2)
-        self.assertEqual(_coerce_scan_progress_event_version("v2"), 1)
-        self.assertEqual(_coerce_scan_progress_event_version(None), 1)
-        self.assertEqual(_coerce_scan_progress_event_version(True), 1)
-        self.assertEqual(_coerce_scan_progress_event_version(False), 1)
+        self.assertEqual(coerce_scan_progress_event_version("2"), 2)
+        self.assertEqual(coerce_scan_progress_event_version("v2"), 1)
+        self.assertEqual(coerce_scan_progress_event_version(None), 1)
+        self.assertEqual(coerce_scan_progress_event_version(True), 1)
+        self.assertEqual(coerce_scan_progress_event_version(False), 1)
 
         server = WebServer.__new__(WebServer)
         emitted = {}

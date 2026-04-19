@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from oasis.snippet_lines import absolute_snippet_lines_in_file, substring_line_span_1based
+from oasis.helpers.misc import absolute_snippet_lines_in_file, substring_line_span_1based
 
 
 class TestSubstringLineSpan(unittest.TestCase):
