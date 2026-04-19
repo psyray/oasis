@@ -48,6 +48,7 @@ Details live in `.cursor/rules/oasis-python-architecture.mdc` (constants, sideca
 
 ## Done Criteria
 
+- Run the relevant **`tests/test_<area>.py`** module(s) (or `unittest discover -s tests`) for code you changed; add or extend tests in the file that matches the subsystem (same layout as in the project: report contract, CLI, cache, embedding, helpers, web, etc.).
 - **No new duplicated logic** (including near-duplicates); consolidation is part of the task, not optional follow-up.
 - No obvious module boundary violation; **no new helper-shaped logic** left outside `oasis/helpers/` without a strong, documented reason.
 - Any CLI option change is documented.

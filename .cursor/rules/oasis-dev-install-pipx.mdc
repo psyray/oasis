@@ -15,6 +15,17 @@ pipx uninstall oasis && pipx install -e .
 - Use this flow after dependency or entrypoint changes so the isolated venv matches the working tree.
 - Do not assume a global `pip install`; the project standard for local tooling is **pipx**.
 
+# Optional development dependencies
+
+- Optional dev tools (e.g. **coverage**) are declared in `pyproject.toml` under `[project.optional-dependencies] dev`.
+- Install the package **with** that extra so those tools are available in the pipx venv:
+
+```bash
+pipx uninstall oasis && pipx install -e ".[dev]"
+```
+
+- Use `pipx install -e .` (no extra) when you only need the runtime CLI without dev-only packages.
+
 # OASIS test execution (pipx)
 
 - Run Python tests through the pipx environment, not the system Python.
@@ -23,3 +34,14 @@ pipx uninstall oasis && pipx install -e .
 ```bash
 PYTHONPATH="$(pwd)" pipx run --spec . python -m unittest tests.<module_or_class>
 ```
+
+# Coverage (requires `[dev]`)
+
+- With `.[dev]` installed, run from the repository root so imports resolve:
+
+```bash
+PYTHONPATH="$(pwd)" coverage run -m unittest discover -s tests
+coverage report
+```
+
+- Prefer **discover** over hand-picking modules when validating a broader change; target a single `tests/test_<area>.py` file when the edit is localized.

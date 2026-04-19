@@ -34,4 +34,4 @@ Before finalizing:
 2. Confirm no stale option name remains after renames.
 3. Ensure change grouping is logical (avoid mixing unrelated concerns).
 4. Scan the diff for **duplication** (repeated blocks, mirrored constants, second implementations); merge into one canonical place before tagging.
-5. Run and review the report contract test path (at least `tests/test_report_schema.py`) before release tagging.
+5. Run and review automated tests before release tagging: at minimum `tests/test_report_schema.py` for report/progress contracts; run `unittest discover` on `tests/` (or coverage via optional `[dev]` — see `.cursor/rules/oasis-dev-install-pipx.mdc`) when the release touches multiple subsystems.

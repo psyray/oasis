@@ -22,3 +22,4 @@ alwaysApply: false
 - Preserve CLI backward compatibility when possible (short and long flags); if a rename is required, mirror it in docs.
 - Route logs through centralized project logging helpers; avoid ad-hoc print statements in production paths.
 - For resilience changes (cache, network/model calls), prefer defensive fallbacks and explicit error handling.
+- **Tests**: Integration-style checks live under `tests/` as `test_<area>.py` files aligned with product modules (report contract in `tests/test_report_schema.py`, CLI in `tests/test_oasis_cli.py`, embedding pure helpers in `tests/test_embedding_pure.py`, dashboard helpers in `tests/test_helpers_dashboard.py`, etc.). When you change behavior covered by those areas, update or add tests in the matching file rather than skipping coverage for new branches.
