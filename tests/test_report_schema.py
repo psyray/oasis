@@ -17,18 +17,17 @@ if str(ROOT) not in sys.path:
 
 from oasis.enums import PhaseRowStatus
 from oasis.helpers import adaptive_subphases_payload, standard_scan_phases, standard_scan_phases_vuln_types
-from oasis.helpers.dashboard import parse_phase_counts_from_progress_cell
-from oasis.helpers.executive_summary_similarity import (
+from oasis.helpers.dashboard import (
     EXEC_SUMMARY_EMBEDDING_TIER_ORDER,
-    executive_summary_similarity_tier_id,
-)
-from oasis.helpers.audit_metrics_markdown import (
     audit_metrics_from_markdown_content,
+    executive_summary_similarity_tier_id,
     iter_audit_metrics_table_rows,
+    parse_phase_counts_from_progress_cell,
 )
 from oasis.helpers.progress import (
     EXEC_SUMMARY_PROGRESS_EVENT_VERSION,
     SCAN_PROGRESS_EXTENDED_KEYS,
+    scan_progress_tested_and_current,
 )
 
 try:
@@ -1222,6 +1221,26 @@ Not a table line anymore.
         self.assertEqual(sub["batch_process"]["label"], "Batch processing")
         self.assertEqual(sub["collect_results"]["label"], "Collect results")
 
+    def test_scan_progress_tested_and_current_skips_non_sequence_tested_payloads(self):
+        pairs = [
+            ({"tested_vulnerabilities": ["sqli", " xss "]}, (["sqli", "xss"], "")),
+            (
+                {"tested_vulnerabilities": "sqli"},
+                ([], ""),
+            ),  # bare strings must not iterate character-by-character
+            (
+                {"current_vulnerability": None},
+                ([], ""),
+            ),
+            (
+                {"current_vulnerability": "  deep  ", "tested_vulnerabilities": ["a"]},
+                (["a"], "deep"),
+            ),
+        ]
+        for progress, expected in pairs:
+            with self.subTest(progress=progress):
+                self.assertEqual(scan_progress_tested_and_current(progress), expected)
+
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_web_get_scan_progress_returns_latest_summary_progress(self):
         server = WebServer.__new__(WebServer)
@@ -1659,9 +1678,9 @@ Not a table line anymore.
         from unittest.mock import patch
 
         from oasis.enums import AnalysisType
-        from oasis.helpers.graph_progress import graph_final_phases
+        from oasis.helpers.progress import graph_final_phases
 
-        with patch("oasis.helpers.graph_progress.safe_code_base_file_count", return_value=2):
+        with patch("oasis.helpers.progress.safe_code_base_file_count", return_value=2):
             out = graph_final_phases(
                 SimpleNamespace(), 1, updated_at="2026-01-01T00:00:00+00:00"
             )

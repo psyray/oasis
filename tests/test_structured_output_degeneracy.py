@@ -2,8 +2,9 @@
 
 import json
 import unittest
+from unittest import mock
 
-from oasis.helpers.structured_output_degeneracy import structured_deep_raw_looks_degenerate
+from oasis.helpers.misc import structured_deep_raw_looks_degenerate
 
 
 class StructuredOutputDegeneracyTests(unittest.TestCase):
@@ -45,6 +46,26 @@ class StructuredOutputDegeneracyTests(unittest.TestCase):
         )
         self.assertGreater(len(varied), 2000)
         self.assertFalse(structured_deep_raw_looks_degenerate(varied))
+
+    def test_invalid_repeat_unit_skips_regex_probe(self) -> None:
+        varied = json.dumps(
+            {"findings": [{"explanation": " ".join(f"w{i}" for i in range(500))}]},
+            ensure_ascii=True,
+        )
+        self.assertGreater(len(varied), 1600)
+        with mock.patch(
+            "oasis.helpers.misc.STRUCTURED_OUTPUT_DEGENERACY_REPEAT_UNIT_LEN",
+            0,
+        ):
+            with mock.patch("oasis.helpers.misc.re.search") as mock_search:
+                self.assertFalse(structured_deep_raw_looks_degenerate(varied))
+                mock_search.assert_not_called()
+
+    def test_zlib_compress_failure_returns_false(self) -> None:
+        block = "l'inclusion " * 600
+        raw = '{"findings":[{"explanation":"' + block + '"'
+        with mock.patch("oasis.helpers.misc.zlib.compress", side_effect=ValueError("bad level")):
+            self.assertFalse(structured_deep_raw_looks_degenerate(raw))
 
 
 if __name__ == "__main__":

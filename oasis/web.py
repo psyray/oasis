@@ -46,26 +46,24 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for minimal test envs
 from .config import REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS, LANGUAGES
 from .export.filenames import artifact_filename, report_dir_glob_for_format
 from .helpers.dashboard import (
-    dashboard_format_display_order,
-    expand_socketio_cors_config_entries,
-    parse_phase_counts_from_progress_cell,
-    socketio_lan_http_origins,
-)
-from .helpers.audit_metrics_markdown import (
     AUDIT_METRIC_LABELS,
     AUDIT_METRIC_TABLE_ROW_PATTERN,
     AUDIT_METRICS_SECTION_HEADING_PATTERN,
     AUDIT_METRICS_TABLE_HEADER_LABELS,
     audit_metric_key_from_label,
     audit_metrics_from_markdown_content,
+    dashboard_format_display_order,
+    expand_socketio_cors_config_entries,
     iter_audit_metrics_table_rows,
     normalize_audit_metric_label,
     parse_audit_metric_table_row,
     parse_first_float_metric,
     parse_first_int_metric,
+    parse_phase_counts_from_progress_cell,
+    rewrite_report_preview_anchor_hrefs,
     slice_markdown_section_after_heading,
+    socketio_lan_http_origins,
 )
-from .helpers.dashboard_report_html import rewrite_report_preview_anchor_hrefs
 from .helpers.progress import SCAN_PROGRESS_EXTENDED_KEYS, coerce_scan_progress_event_version
 from .report import Report, executive_summary_progress_sidecar_path, is_executive_summary_progress_sidecar
 from .tools import parse_iso_date, parse_report_date

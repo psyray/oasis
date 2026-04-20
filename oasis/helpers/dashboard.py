@@ -1,4 +1,4 @@
-"""Dashboard helpers: output format ordering, Socket.IO CORS / LAN origins, markdown phase parsing."""
+"""Dashboard helpers: formats, Socket.IO CORS, markdown phase parsing; re-exports focused submodules."""
 
 from __future__ import annotations
 
@@ -7,7 +7,33 @@ import re
 import socket
 from typing import Optional, Tuple
 
-from ..config import REPORT
+from .audit_metrics import (
+    AUDIT_METRIC_LABELS,
+    AUDIT_METRIC_TABLE_ROW_PATTERN,
+    AUDIT_METRICS_SECTION_HEADING_PATTERN,
+    AUDIT_METRICS_TABLE_HEADER_LABELS,
+    audit_metric_key_from_label,
+    audit_metrics_from_markdown_content,
+    iter_audit_metrics_table_rows,
+    normalize_audit_metric_label,
+    parse_audit_metric_table_row,
+    parse_first_float_metric,
+    parse_first_int_metric,
+    slice_markdown_section_after_heading,
+)
+from .dashboard_links import dashboard_reports_href, preferred_detail_relative_path_and_format
+from .exec_summary_tiers import (
+    EXEC_SUMMARY_EMBEDDING_TIER_ORDER,
+    EXEC_SUMMARY_EMBEDDING_TIERS,
+    ExecSummaryTier,
+    executive_summary_similarity_tier_id,
+    executive_summary_tier_heading,
+    executive_summary_tiers_inline_text,
+    executive_summary_tiers_markdown_bullets,
+)
+from .report_preview_html import rewrite_report_preview_anchor_hrefs
+
+# --- Output formats / Socket.IO / phase cell parsing ---------------------------------
 
 _PHASE_CELL_DIGITS = re.compile(r"\d+")
 
@@ -19,6 +45,8 @@ def dashboard_format_display_order() -> list[str]:
     case-insensitive, but the returned list preserves the original casing
     from OUTPUT_FORMATS.
     """
+    from ..config import REPORT
+
     preferred = REPORT.get("DASHBOARD_FORMAT_DISPLAY_ORDER") or []
     allowed = list(REPORT.get("OUTPUT_FORMATS") or [])
 

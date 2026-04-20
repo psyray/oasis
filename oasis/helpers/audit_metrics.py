@@ -1,4 +1,4 @@
-"""Pure helpers for parsing audit metrics from markdown reports."""
+"""Parse audit metrics tables from markdown security reports (dashboard / web aggregation)."""
 
 from __future__ import annotations
 
@@ -117,16 +117,31 @@ def iter_audit_metrics_table_rows(metrics_section: str) -> Iterator[tuple[str, s
         yield normalized_label, value
 
 
-def audit_metrics_from_markdown_content(content: str) -> dict:
+def audit_metrics_from_markdown_content(content: str) -> dict[str, int | float]:
     """
     Parse comparable audit metrics from markdown audit report content.
+
+    **Input contract (permissive)**
+
+    - ``content`` is full markdown text. The function searches for a section whose heading
+      matches :data:`AUDIT_METRICS_SECTION_HEADING_PATTERN` (flexible wording).
+    - Inside that section, it scans for the first GitHub-style pipe table (``| col | col |``).
+      Rows before the ``Metric`` / ``Value`` header are ignored; parsing stops at the first
+      non-table line after the table started.
+    - Label text is normalized (case/spacing); values are parsed by taking the first integer
+      or float substring—extra prose around numbers is tolerated.
+
+    **Output**
+
+    - Flat dict mapping canonical keys (e.g. ``avg_score``, ``count``) to numeric values.
+      Unknown or non-numeric labels are skipped. Missing section or table yields ``{}``.
     """
     heading_match = AUDIT_METRICS_SECTION_HEADING_PATTERN.search(content)
     if not heading_match:
         return {}
     metrics_section = slice_markdown_section_after_heading(content, heading_match)
 
-    metrics: dict = {}
+    metrics: dict[str, int | float] = {}
     for label, value in iter_audit_metrics_table_rows(metrics_section):
         kind, key = audit_metric_key_from_label(label)
         if not key:

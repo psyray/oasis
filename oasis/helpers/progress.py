@@ -1,24 +1,65 @@
-"""Progress helpers: wire constants, tqdm, REST/Socket.IO coercion, executive-summary extras."""
+"""Progress helpers: constants, tqdm, coercion, extras, markdown normalization, LangGraph pipeline rows."""
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from ..enums import AnalysisType, PhaseRowStatus, ProgressActivePhase
+from ..enums import AnalysisType, PhaseRowStatus, ProgressActivePhase, ProgressPhaseRowId
+from .progress_numbers import (
+    phase_row_completed_total,
+    vuln_completed_total_pair,
+    wire_nonneg_int,
+)
 from .scan import (
     adaptive_phases_identifying,
     adaptive_scan_phases,
     adaptive_subphases_during_identification,
     adaptive_subphases_payload,
+    embedding_phase_row,
+    phase_progress_row,
     phase_triple,
+    safe_code_base_file_count,
     standard_scan_phases_vuln_types,
 )
-from .progress_constants import (
-    EXEC_SUMMARY_PROGRESS_EVENT_VERSION,
-    SCAN_PROGRESS_EXTENDED_KEYS,
-    SCAN_PROGRESS_NON_PARTIAL_STATUSES,
-    SCAN_PROGRESS_STATUS_EXPLICIT,
+
+# Wire contract constants (sync with publish_incremental_summary, Report, web dashboard readers).
+EXEC_SUMMARY_PROGRESS_EVENT_VERSION = 3
+
+SCAN_PROGRESS_STATUS_EXPLICIT = frozenset(
+    {
+        "in_progress",
+        "complete",
+        "aborted",
+        "failed",
+        "succeeded",
+        "finished",
+    }
+)
+
+SCAN_PROGRESS_NON_PARTIAL_STATUSES = frozenset({"complete", "succeeded", "finished"})
+
+SCAN_PROGRESS_STATUS_MARKDOWN_LABELS: dict[str, str] = {
+    "in_progress": "Partial (scan in progress)",
+    "complete": "Complete",
+    "aborted": "Aborted",
+    "failed": "Failed",
+    "succeeded": "Succeeded",
+    "finished": "Finished",
+}
+
+SCAN_PROGRESS_EXTENDED_KEYS = frozenset(
+    {
+        "updated_at",
+        "active_phase",
+        "phases",
+        "adaptive_subphases",
+        "overall",
+        "scan_mode",
+        "event_version",
+        "vulnerability_types_total",
+        "status",
+    }
 )
 
 
@@ -361,3 +402,317 @@ def adaptive_final_summary_extras(
         nv=nv_final,
         updated_at=updated_at,
     )
+
+
+# --- Scan progress JSON / markdown (executive summary) --------------------------------
+
+def scan_progress_nonneg_int(raw: Any, *, default: int = 0) -> int:
+    """Parse a counter from JSON progress payloads; clamp to non-negative ints."""
+    return wire_nonneg_int(raw, default=default)
+
+
+def scan_progress_vulnerability_counts(progress: Dict[str, Any]) -> Tuple[int, int]:
+    """Return (completed, total) with total >= completed."""
+    return vuln_completed_total_pair(
+        progress.get("completed_vulnerabilities"),
+        progress.get("total_vulnerabilities"),
+    )
+
+
+def notifier_vulnerability_counts(
+    progress: Dict[str, Any],
+    *,
+    fallback_total: Optional[Any],
+) -> Tuple[int, int]:
+    """Normalize completed/total for realtime notifier (supports fallback when total omitted)."""
+    completed = scan_progress_nonneg_int(progress.get("completed_vulnerabilities"), default=0)
+    total_raw = progress.get("total_vulnerabilities")
+    try:
+        candidate = total_raw if total_raw is not None else fallback_total
+        total = int(candidate) if candidate is not None else completed
+    except (TypeError, ValueError):
+        total = completed
+    total = max(total, 0)
+    total = max(total, completed)
+    return completed, total
+
+
+def phase_row_counts(row: Dict[str, Any]) -> Tuple[int, int]:
+    """Normalize completed/total for a pipeline phase row."""
+    return phase_row_completed_total(row.get("completed", 0), row.get("total", 0))
+
+
+def scan_progress_status_meta(progress: Dict[str, Any]) -> Tuple[bool, str, str]:
+    """Derive ``is_partial``, canonical ``status_key``, and human ``status_label`` for markdown."""
+    is_partial = bool(progress.get("is_partial", False))
+    status_key = str(progress.get("status") or "").strip().lower()
+    if status_key not in SCAN_PROGRESS_STATUS_EXPLICIT:
+        status_key = "in_progress" if is_partial else "complete"
+    label = SCAN_PROGRESS_STATUS_MARKDOWN_LABELS.get(status_key, "Complete")
+    return is_partial, status_key, label
+
+
+def scan_progress_tested_and_current(progress: Dict[str, Any]) -> Tuple[List[str], str]:
+    """Extract tested vulnerability ids and the current vulnerability label from progress payloads.
+
+    **Input contract (permissive)**
+
+    - ``progress`` is the incremental executive-summary progress mapping (JSON-shaped).
+    - ``tested_vulnerabilities``: if missing or ``None``, treated as empty. If a list, tuple,
+      or set, each element is coerced with ``str()`` and stripped (empty strings omitted).
+      Other types (including bare strings) are treated as empty to avoid corrupting IDs.
+    - ``current_vulnerability``: missing, ``None``, or non-string values become ``""``.
+    """
+    raw_tested = progress.get("tested_vulnerabilities")
+    if isinstance(raw_tested, (list, tuple, set)):
+        iterable = raw_tested
+    else:
+        iterable = []
+
+    tested = [
+        str(item).strip()
+        for item in iterable
+        if str(item).strip()
+    ]
+    current_v = str(progress.get("current_vulnerability") or "").strip()
+    return tested, current_v
+
+
+def append_pipeline_phases_markdown(report: List[str], phases: Any) -> None:
+    if not isinstance(phases, list) or not phases:
+        return
+    report.append("\n### Pipeline phases")
+    report.extend(
+        [
+            "| Phase | Status | Progress |",
+            "|-------|--------|----------|",
+        ]
+    )
+    for row in phases:
+        if not isinstance(row, dict):
+            continue
+        label = str(row.get("label") or row.get("id") or "").strip() or "—"
+        st = str(row.get("status") or "").strip() or "—"
+        c, t = phase_row_counts(row)
+        report.append(f"| {label} | {st} | {c}/{t} |")
+
+
+def append_adaptive_subphases_markdown(report: List[str], adaptive_subphases: Any) -> None:
+    """Render legacy adaptive-shaped ``adaptive_subphases`` block when present in payloads."""
+    if not isinstance(adaptive_subphases, dict) or not adaptive_subphases:
+        return
+    report.append("\n#### Adaptive sub-phases")
+    for sub_id, sub in adaptive_subphases.items():
+        if not isinstance(sub, dict):
+            continue
+        slabel = str(sub.get("label") or sub_id)
+        sc, stot = phase_row_counts(sub)
+        sst = str(sub.get("status") or "")
+        report.append(f"- {slabel}: {sst} ({sc}/{stot})")
+
+
+# --- LangGraph pipeline progress extras ----------------------------------------------
+
+def graph_pipeline_phases(
+    n_files: int,
+    nv: int,
+    *,
+    discover_status: str,
+    discover_completed: int,
+    scan_status: str,
+    scan_completed: int,
+    scan_total: int,
+    expand_status: str,
+    expand_completed: int,
+    expand_total: int,
+    deep_status: str,
+    deep_completed: int,
+    deep_total: int,
+    verify_status: str,
+    verify_completed: int,
+    verify_total: int,
+) -> List[Dict[str, Any]]:
+    """Phase rows aligned with LangGraph nodes (Discover → Scan → Expand → Deep → Verify)."""
+    scan_total = max(scan_total, 1)
+    expand_total = max(expand_total, 1)
+    deep_total = max(deep_total, 1)
+    verify_total = max(verify_total, 1)
+    return [
+        embedding_phase_row(n_files),
+        phase_progress_row(
+            ProgressPhaseRowId.GRAPH_DISCOVER.value,
+            "Discover candidates",
+            status=discover_status,
+            completed=discover_completed,
+            total=max(nv, 1),
+        ),
+        phase_progress_row(
+            ProgressPhaseRowId.GRAPH_CHUNK_SCAN.value,
+            "Structured chunk scan",
+            status=scan_status,
+            completed=scan_completed,
+            total=scan_total,
+        ),
+        phase_progress_row(
+            ProgressPhaseRowId.GRAPH_CONTEXT_EXPAND.value,
+            "Context expansion",
+            status=expand_status,
+            completed=expand_completed,
+            total=expand_total,
+        ),
+        phase_progress_row(
+            ProgressPhaseRowId.GRAPH_DEEP.value,
+            "Deep analysis",
+            status=deep_status,
+            completed=deep_completed,
+            total=deep_total,
+        ),
+        phase_progress_row(
+            ProgressPhaseRowId.GRAPH_VERIFY.value,
+            "Verify structured output",
+            status=verify_status,
+            completed=verify_completed,
+            total=verify_total,
+        ),
+    ]
+
+
+def graph_progress_extras(
+    *,
+    analyzer: Any,
+    nv: int,
+    phases: List[Dict[str, Any]],
+    updated_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Wire extras for ``publish_incremental_summary`` (scan_mode=graph)."""
+    n_files = safe_code_base_file_count(analyzer)
+    extras: Dict[str, Any] = {
+        "active_phase": ProgressActivePhase.GRAPH_PIPELINE.value,
+        "scan_mode": AnalysisType.GRAPH.value,
+        "vulnerability_types_total": nv,
+        "phases": phases,
+    }
+    if updated_at is not None:
+        extras["updated_at"] = updated_at
+    return extras
+
+
+def graph_initial_phases(analyzer: Any, nv: int) -> Dict[str, Any]:
+    """Kickoff snapshot: embeddings complete, discover running."""
+    n_files = safe_code_base_file_count(analyzer)
+    phases = graph_pipeline_phases(
+        n_files,
+        nv,
+        discover_status=PhaseRowStatus.IN_PROGRESS.value,
+        discover_completed=0,
+        scan_status=PhaseRowStatus.PENDING.value,
+        scan_completed=0,
+        scan_total=1,
+        expand_status=PhaseRowStatus.PENDING.value,
+        expand_completed=0,
+        expand_total=1,
+        deep_status=PhaseRowStatus.PENDING.value,
+        deep_completed=0,
+        deep_total=1,
+        verify_status=PhaseRowStatus.PENDING.value,
+        verify_completed=0,
+        verify_total=1,
+    )
+    return graph_progress_extras(analyzer=analyzer, nv=nv, phases=phases)
+
+
+def graph_phases_discover_done_scan_pending(n_files: int, nv: int) -> List[Dict[str, Any]]:
+    """After embedding discover: scan row not started (matches LangGraph ``node_discover`` completion)."""
+    return graph_pipeline_phases(
+        n_files,
+        nv,
+        discover_status=PhaseRowStatus.COMPLETE.value,
+        discover_completed=nv,
+        scan_status=PhaseRowStatus.PENDING.value,
+        scan_completed=0,
+        scan_total=1,
+        expand_status=PhaseRowStatus.PENDING.value,
+        expand_completed=0,
+        expand_total=1,
+        deep_status=PhaseRowStatus.PENDING.value,
+        deep_completed=0,
+        deep_total=1,
+        verify_status=PhaseRowStatus.PENDING.value,
+        verify_completed=0,
+        verify_total=1,
+    )
+
+
+def graph_phases_scan_done_expand_pending(n_files: int, nv: int) -> List[Dict[str, Any]]:
+    """Scan finished; expand/deep/verify rows still pending."""
+    return graph_pipeline_phases(
+        n_files,
+        nv,
+        discover_status=PhaseRowStatus.COMPLETE.value,
+        discover_completed=nv,
+        scan_status=PhaseRowStatus.COMPLETE.value,
+        scan_completed=1,
+        scan_total=1,
+        expand_status=PhaseRowStatus.PENDING.value,
+        expand_completed=0,
+        expand_total=1,
+        deep_status=PhaseRowStatus.PENDING.value,
+        deep_completed=0,
+        deep_total=1,
+        verify_status=PhaseRowStatus.PENDING.value,
+        verify_completed=0,
+        verify_total=1,
+    )
+
+
+def graph_phases_deep_in_progress(
+    n_files: int,
+    vuln_types_total: int,
+    *,
+    deep_completed: int,
+) -> List[Dict[str, Any]]:
+    """Deep analysis row in progress (used during ``_perform_deep_analysis`` graph progress)."""
+    nv = vuln_types_total
+    deep_total = max(vuln_types_total, 1)
+    return graph_pipeline_phases(
+        n_files,
+        nv,
+        discover_status=PhaseRowStatus.COMPLETE.value,
+        discover_completed=nv,
+        scan_status=PhaseRowStatus.COMPLETE.value,
+        scan_completed=1,
+        scan_total=1,
+        expand_status=PhaseRowStatus.COMPLETE.value,
+        expand_completed=1,
+        expand_total=1,
+        deep_status=PhaseRowStatus.IN_PROGRESS.value,
+        deep_completed=deep_completed,
+        deep_total=deep_total,
+        verify_status=PhaseRowStatus.PENDING.value,
+        verify_completed=0,
+        verify_total=1,
+    )
+
+
+def graph_final_phases(analyzer: Any, nv: int, *, updated_at: str) -> Dict[str, Any]:
+    """All graph rows complete."""
+    n_files = safe_code_base_file_count(analyzer)
+    phases = graph_pipeline_phases(
+        n_files,
+        nv,
+        discover_status=PhaseRowStatus.COMPLETE.value,
+        discover_completed=nv,
+        scan_status=PhaseRowStatus.COMPLETE.value,
+        scan_completed=1,
+        scan_total=1,
+        expand_status=PhaseRowStatus.COMPLETE.value,
+        expand_completed=1,
+        expand_total=1,
+        deep_status=PhaseRowStatus.COMPLETE.value,
+        deep_completed=1,
+        deep_total=1,
+        verify_status=PhaseRowStatus.COMPLETE.value,
+        verify_completed=1,
+        verify_total=1,
+    )
+    return graph_progress_extras(analyzer=analyzer, nv=nv, phases=phases, updated_at=updated_at)

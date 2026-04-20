@@ -8,12 +8,12 @@ Developer guide — **safe to tweak together** vs **orthogonal knobs**:
 1. **Structured-output degeneracy (deep JSON quality)** — tune together when models collapse or
    spam repeated tokens in structured output. Env vars: ``OASIS_STRUCTURED_DEGENERACY_*``
    (see ``STRUCTURED_OUTPUT_DEGENERACY_*`` below). Implemented in
-   ``oasis/helpers/structured_output_degeneracy.py``. Related LLM budgets: ``OASIS_CHUNK_*``
+   ``oasis/helpers/misc.py`` (``structured_deep_raw_looks_degenerate``). Related LLM budgets: ``OASIS_CHUNK_*``
    (timeouts / ``num_predict``) in the Ollama section above.
 
 2. **PoC budgeting (prompts + logs, not SARIF/HTML report bodies)** — tune together when PoC
    assist/hints truncate or dominate context. Env vars: ``OASIS_POC_*`` / ``POC_*`` constants
-   below; helpers in ``oasis/helpers/poc_digest.py`` and ``oasis/helpers/poc_pipeline.py``.
+   below; helpers in ``oasis/helpers/poc.py``.
    Keep aligned with structured-output caps if both feed the same LLM turn.
 
 3. **Context expansion (LangGraph)** — ``OASIS_CONTEXT_EXPAND_*`` / ``CONTEXT_EXPAND_*``;
@@ -80,10 +80,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from .legacy_vulnerability_mapping import LEGACY_VULNERABILITY_MAPPING
-from .helpers.executive_summary_similarity import (
-    executive_summary_tiers_inline_text,
-    executive_summary_tiers_markdown_bullets,
-)
 
 logger = logging.getLogger("oasis")
 
@@ -306,13 +302,13 @@ OLLAMA_SLOW_CALL_WARNING_SEC = _parse_env_float(
 # =============================================================================
 # These interact through prompt size, VRAM, and latency. Prefer adjusting related constants
 # together and re-checking behavior under ``-d`` / DEBUG when tuning:
-# - STRUCTURED_OUTPUT_DEGENERACY_* — ``oasis/helpers/structured_output_degeneracy.py`` (zlib ratio +
+# - STRUCTURED_OUTPUT_DEGENERACY_* — ``oasis/helpers/misc.py`` (zlib ratio +
 #   repeated-pattern probe on raw deep JSON before schema validation).
 # - POC_DIGEST_JSON_MAX_CHARS, POC_HINTS_MAX_CHARS, POC_STAGE_LOG_MAX_CHARS —
-#   ``oasis/helpers/poc_digest.py``, ``oasis/helpers/poc_pipeline.py`` (digest into LLM prompts,
+#   ``oasis/helpers/poc.py`` (digest into LLM prompts,
 #   optional hints markdown, DEBUG truncation for stage logs).
 # Context expansion windows (CONTEXT_EXPAND_*) are separate but share the same token budget;
-# see ``oasis/helpers/context_expand.py``.
+# see ``oasis/helpers/context_expand.py`` (``expand_suspicious_chunk_records``).
 # Defaults target consumer GPUs; env var names are on each constant below.
 
 # =============================================================================
@@ -758,6 +754,8 @@ EXTRACT_FUNCTIONS = {
 # Report configuration
 # Intentionally computed at import time: executive-summary tiers are static constants for a process run.
 # If tiers become runtime-configurable later, move this interpolation to report-generation time.
+from .helpers.exec_summary_tiers import executive_summary_tiers_inline_text, executive_summary_tiers_markdown_bullets
+
 _EXEC_SUMMARY_TIERS_BULLETS_MD = executive_summary_tiers_markdown_bullets()
 _EXEC_SUMMARY_TIERS_INLINE_TEXT = executive_summary_tiers_inline_text()
 

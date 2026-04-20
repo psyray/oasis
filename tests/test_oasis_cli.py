@@ -14,7 +14,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from oasis.config import MAX_CHUNK_SIZE, REPORT
-from oasis.helpers.embed_models import normalize_embed_models, primary_embed_model, resolve_embed_models
+from oasis.helpers.embedding import (
+    EmbedModelValueError,
+    normalize_embed_models,
+    primary_embed_model,
+    resolve_embed_models,
+)
 from oasis.oasis import OasisScanner
 
 
@@ -99,7 +104,7 @@ class TestOasisCliParsing(unittest.TestCase):
         self.assertEqual(models, ["qwen3-embedding:4b", "bge-m3"])
 
     def test_parse_embed_models_csv_rejects_empty_values(self):
-        with self.assertRaises(argparse.ArgumentTypeError):
+        with self.assertRaises(EmbedModelValueError):
             OasisScanner._parse_embed_models_csv(" , , ")
 
     def test_embed_model_cli_type_accepts_csv_in_audit_mode(self):
@@ -126,11 +131,11 @@ class TestOasisCliParsing(unittest.TestCase):
         self.assertEqual(primary, "m1")
 
     def test_normalize_embed_models_rejects_non_string_iterable_items(self):
-        with self.assertRaises(argparse.ArgumentTypeError):
+        with self.assertRaises(EmbedModelValueError):
             normalize_embed_models(["m1", object()])  # type: ignore[list-item]
 
     def test_normalize_embed_models_rejects_empty_iterable_values(self):
-        with self.assertRaises(argparse.ArgumentTypeError):
+        with self.assertRaises(EmbedModelValueError):
             normalize_embed_models([])
 
 

@@ -36,7 +36,7 @@ except ModuleNotFoundError:
 @unittest.skipIf(SecurityAnalyzer is None, "oasis.analyze dependencies are unavailable")
 class TestAnalyzeOrchestration(unittest.TestCase):
     @patch("oasis.analyze.progress_timestamp_iso", return_value="2026-01-01T00:00:00+00:00")
-    @patch("oasis.helpers.graph_progress.safe_code_base_file_count", return_value=3)
+    @patch("oasis.helpers.progress.safe_code_base_file_count", return_value=3)
     @patch("oasis.agent.invoke.invoke_oasis_langgraph")
     @patch("oasis.analyze.publish_incremental_summary")
     def test_process_analysis_with_model_calls_langgraph_and_graph_final_progress(

@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
 
 from oasis.agent.graph_labels import GRAPH_PIPELINE_NODE_AND_PHASE_ID
 from oasis.enums import PhaseRowStatus, ProgressPhaseRowId
-from oasis.helpers.graph_progress import graph_pipeline_phases
+from oasis.helpers.progress import graph_pipeline_phases
 
 
 class TestLanggraphPipelineAlignment(unittest.TestCase):

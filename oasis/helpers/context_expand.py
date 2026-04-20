@@ -54,8 +54,6 @@ def expand_line_window(
     if len(text) <= max_chars:
         return text, lo, hi
 
-    # Ensure [start_line, end_line] stays inside the returned window; trim padding
-    # around it (roughly symmetric expansion under budget).
     susp_lo = max(lo, start_line)
     susp_hi = min(hi, end_line)
     susp_start_idx = susp_lo - lo

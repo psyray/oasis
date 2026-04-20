@@ -35,8 +35,7 @@ from .tools import create_cache_dir, logger, chunk_content, sanitize_name, open_
 from pydantic import ValidationError
 
 from .helpers.embedding import EMBEDDING_PROGRESS_MIN_INTERVAL_SEC, EmbeddingProgressThrottle
-from .helpers.embed_models import resolve_embed_models
-from .helpers.input_files import resolve_valid_embedding_input_files
+from .helpers.embedding import resolve_embed_models, resolve_valid_embedding_input_files
 
 
 class EmbeddingManager:

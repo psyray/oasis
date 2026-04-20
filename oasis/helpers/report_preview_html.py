@@ -1,4 +1,4 @@
-"""Normalize report preview HTML so links work when embedded on the dashboard (any base URL)."""
+"""Rewrite report preview HTML anchor hrefs for correct /reports/ paths when embedded on the dashboard."""
 
 from __future__ import annotations
 

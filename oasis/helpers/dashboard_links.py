@@ -1,4 +1,4 @@
-"""Executive Summary markdown links for dashboard-relative report paths."""
+"""Executive summary markdown links for dashboard-relative report paths."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def _model_dir_key(name: str | None) -> str:
     base_name = str(name).split("/")[-1]
     return re.sub(r"[^a-zA-Z0-9]", "_", base_name)
 
-# Align with dashboard modal preview preference (canonical JSON first).
+
 _DETAIL_FORMAT_PRIORITY: tuple[str, ...] = ("json", "html", "md", "pdf", "sarif")
 
 
@@ -46,7 +46,6 @@ def preferred_detail_relative_path_and_format(report: "Report", vuln_stem: str) 
             if candidate.is_file():
                 return rel_str(candidate), fmt
 
-        # Pipeline ordering: JSON is usually written before the summary step.
         if "json" in dirs:
             candidate = dirs["json"] / artifact_filename(vuln_stem, "json")
             return rel_str(candidate), "json"

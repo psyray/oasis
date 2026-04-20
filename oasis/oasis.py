@@ -25,11 +25,12 @@ from .tools import generate_timestamp, setup_logging, logger, display_logo, get_
 from .ollama_manager import OllamaManager
 from .embedding import EmbeddingManager
 from .analyze import SecurityAnalyzer, EmbeddingAnalyzer
-from .helpers.embed_models import (
+from .helpers.embedding import (
+    EmbedModelValueError,
     parse_embed_models_csv,
     resolve_embed_models,
 )
-from .helpers.langgraph_console import LG_PIPELINE_INFO, cli_bold, cli_emit_section_banner
+from .helpers.langgraph_cli import LG_PIPELINE_INFO, cli_bold, cli_emit_section_banner
 from .report import Report
 from .web import WebServer
 
@@ -59,7 +60,10 @@ class OasisScanner:
         """
         argparse ``type`` for ``--embed-model``.
         """
-        return OasisScanner._parse_embed_models_csv(value)
+        try:
+            return OasisScanner._parse_embed_models_csv(value)
+        except EmbedModelValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from exc
 
     @staticmethod
     def _parse_yes_no_flag(value: str) -> bool:
@@ -747,7 +751,7 @@ class OasisScanner:
             self.args.embed_model, primary_embed_model = resolve_embed_models(em_raw)
             self.embed_models = list(self.args.embed_model)
             self.primary_embed_model = primary_embed_model
-        except argparse.ArgumentTypeError as exc:
+        except EmbedModelValueError as exc:
             return self._handle_argument_errors(str(exc))
         self.chunk_size_is_manual = getattr(self.args, "chunk_size", None) is not None
         display_logo()
