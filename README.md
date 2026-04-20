@@ -54,25 +54,76 @@
 - ⚡ **Incremental Reporting**: Vulnerability reports are published as soon as each vulnerability analysis completes
 - 📈 **Live Scan Progress**: Executive summary is created early and updated progressively during long scans
 
-## 🚀 Prerequisites
+## 🚀 Getting started
 
-- Python 3.9+
-- [Ollama](https://ollama.ai) installed and running
-- pipx (for isolated installation)
-  ```bash
-  # On macOS
-  brew install pipx
-  pipx ensurepath
+### Prerequisites
 
-  # On Ubuntu/Debian
-  python3 -m pip install --user pipx
-  python3 -m pipx ensurepath
+- **Python** 3.9+
+- **[Ollama](https://ollama.ai)** installed and running; pull the models you need before scanning.
+- **[pipx](https://pypa.github.io/pipx/)** (recommended CLI install):
 
-  # On Windows (with pip)
-  pip install --user pipx
-  python -m pipx ensurepath
-  ```
+```bash
+# macOS
+brew install pipx
+pipx ensurepath
 
+# Ubuntu/Debian
+python3 -m pip install --user pipx
+python3 -m pipx ensurepath
+
+# Windows (with pip)
+pip install --user pipx
+python -m pipx ensurepath
+```
+
+### Standard run (pipx)
+
+```bash
+git clone https://github.com/psyray/oasis.git
+cd oasis
+pipx install -e .
+
+oasis --input test_files/
+```
+
+Reports are written under **`security_reports/`** beside the path you analyze (see [Output structure](#-output-structure)).
+
+### Docker (optional)
+
+From the repository root, with Ollama on the host:
+
+```sh
+docker compose build
+docker compose run --rm oasis -i /work/test_files -ol http://host.docker.internal:11434
+```
+
+Code is mounted at **`/work`**; use `-i` paths under `/work`. More options (bundled Ollama, dashboard, `docker run`) are in [Run with Docker](#-run-with-docker).
+
+### Maintenance
+
+**Update** — after `git pull`, your editable pipx install tracks the repo; bump metadata if needed:
+
+```bash
+git pull origin master
+pipx upgrade oasis
+```
+
+(`pipx upgrade` is optional for editable installs; use it when you want pipx’s recorded version to match.)
+
+**Uninstall**
+
+```bash
+pipx uninstall oasis
+```
+
+**Feature branches** (optional, may be unstable):
+
+```bash
+git fetch --all
+git checkout feat/vX.X
+```
+
+---
 
 ## 🛠️ Hardware Requirements
 
@@ -108,63 +159,6 @@
 - Consider running overnight for large codebases
 - For enterprise usage, dedicated server with 128GB+ RAM and A100/H100 GPU recommended
 
-
-## 📦 Installation
-
-1. Clone the repository:
-```bash
-git clone https://github.com/psyray/oasis.git
-cd oasis
-```
-
-2. Install with pipx:
-```bash
-# First time installation
-pipx install -e .
-```
-
-## 🔄 Update
-
-If new releases are available, you can update the installation with:
-```bash
-git pull origin master
-pipx upgrade oasis
-```
-**NOTE**: because of the editable installation, you just need to pull the latest changes from the repository to update your global **oasis** command installed with pipx.
-So the pipx upgrade is not mandatory, only if needed to bump version in pipx
-
-Or test a feature branch before official release (could be unstable)
-```
-git fetch --all
-git checkout feat/vX.X
-```
-
-## 🗑️ Uninstallation
-```bash
-pipx uninstall oasis
-```
-
-## 🔧 Usage
-
-Basic usage:
-```bash
-oasis --input [path_to_analyze]
-```
-
-## 🚀 Quick Test
-
-To quickly test OASIS with sample files:
-```bash
-# Clone and install
-git clone https://github.com/psyray/oasis.git
-cd oasis
-pipx install --editable .
-
-# Run analysis on test files
-oasis --input test_files/
-```
-
-This will analyze the provided test files and generate security reports in the parent directory of the folder to analyze, `security_reports`.
 
 ## 🔥 Advanced Usage Examples
 
@@ -386,12 +380,46 @@ security_reports/
 
 ## 🐋 Run with Docker
 
-```sh
-docker build --build-arg GIT_REPO=<repository_url> --build-arg MODEL_NB=<model_number_option> -t oasis-scanner .
-```
+The quickest Docker flow is under [Getting started](#getting-started) → **Docker (optional)**. This section is the full reference: Compose variants, plain `docker run`, and Ollama behaviour notes.
+
+The container installs OASIS with **pipx** (same isolation as local development). Reports are written under `security_reports/` next to the parent of your `--input` path—the project root is mounted at **`/work`**, so analyze paths under `/work`.
+
+### Docker Compose (recommended)
+
+From the repository root, build once:
 
 ```sh
-docker run --rm -it -v $(pwd)/reports:/app/reports oasis-scanner
+docker compose build
+```
+
+**Ollama on the host** (Linux uses `host.docker.internal` via `extra_hosts`; ensure Ollama is listening on `0.0.0.0` or reachable from Docker):
+
+```sh
+docker compose run --rm oasis -i /work/test_files -ol http://host.docker.internal:11434
+```
+
+**Bundled Ollama** (profile `ollama`; GPU setup depends on your Docker/NVIDIA stack):
+
+```sh
+docker compose --profile ollama up -d ollama
+docker compose exec ollama ollama pull mistral
+docker compose exec ollama ollama pull nomic-embed-text
+docker compose run --rm oasis -i /work/test_files -ol http://ollama:11434
+```
+
+**Web dashboard from the container** (`-we lan` listens on all interfaces inside the container; map the port on the host):
+
+```sh
+docker compose run --rm -p 5000:5000 oasis -w -we lan -wp 5000 -i /work/test_files -ol http://host.docker.internal:11434
+```
+
+### Docker only
+
+The image default command is `oasis --help`. Pass the full CLI after the image name (there is no `ENTRYPOINT`, so debugging with `docker run … bash` works). Example scan:
+
+```sh
+docker build -t oasis:local .
+docker run --rm -it -v "$(pwd):/work" -w /work --add-host=host.docker.internal:host-gateway oasis:local oasis -i /work/test_files -ol http://host.docker.internal:11434
 ```
 
 ### Ollama structured outputs
