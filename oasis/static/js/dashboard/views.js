@@ -469,6 +469,12 @@ DashboardApp.renderStats = function() {
             const label = String(p.label || p.id || 'Phase');
             const done = normalizePhaseNumber(p.completed);
             const tot = normalizePhaseNumber(p.total);
+            if (
+                typeof DashboardApp.shouldHideCompletedProgressPhaseRow === 'function' &&
+                DashboardApp.shouldHideCompletedProgressPhaseRow(p, isFinished, progress.event_version)
+            ) {
+                return '';
+            }
             const pct = tot > 0 ? Math.min(100, Math.round((done / tot) * 100)) : 0;
             const st = String(p.status || '').trim();
             const labelWithStatus =
@@ -482,7 +488,7 @@ DashboardApp.renderStats = function() {
 
     let adaptiveHtml = '';
     const asub = progress.adaptive_subphases;
-    if (asub && typeof asub === 'object') {
+    if (!isFinished && asub && typeof asub === 'object') {
         adaptiveHtml = Object.keys(asub)
             .map((key) => {
                 const sub = asub[key];
@@ -553,8 +559,8 @@ DashboardApp.renderStats = function() {
                 <div class="card-value">${Object.keys(DashboardApp.stats.vulnerabilities || {}).length}</div>
                 <div class="card-label">Vulnerabilities analyzed</div>
             </div>
-            <div class="card">
-                <div class="card-title">📈 Risk summary</div>
+            <div class="card risk-summary-card">
+                <div class="card-title">📈 Findings by severity (LLM)</div>
                 <div class="risk-indicator">
                     <div class="risk-bar">
                         <div class="risk-high" style="width: ${highPct}%"></div>
@@ -562,11 +568,12 @@ DashboardApp.renderStats = function() {
                         <div class="risk-low" style="width: ${lowPct}%"></div>
                     </div>
                 </div>
-                <div style="display: flex; justify-content: space-between; margin-top: 5px;">
-                    <span class="badge badge-high">🚨 ${DashboardApp.stats.risk_summary.high || 0} High</span>
-                    <span class="badge badge-medium">⚠️ ${DashboardApp.stats.risk_summary.medium || 0} Medium</span>
-                    <span class="badge badge-low">📌 ${DashboardApp.stats.risk_summary.low || 0} Low</span>
+                <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; margin-top: 5px;">
+                    <span class="badge badge-high">🚨 ${DashboardApp.stats.risk_summary.high || 0} High severity</span>
+                    <span class="badge badge-medium">⚠️ ${DashboardApp.stats.risk_summary.medium || 0} Medium severity</span>
+                    <span class="badge badge-low">📌 ${DashboardApp.stats.risk_summary.low || 0} Low severity</span>
                 </div>
+                <div class="card-label">From structured findings, not embedding similarity tiers</div>
             </div>
             ${progressCard}
         </div>

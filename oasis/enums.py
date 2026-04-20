@@ -48,3 +48,13 @@ class ProgressPhaseRowId(str, Enum):
     GRAPH_CONTEXT_EXPAND = "graph_context_expand"
     GRAPH_DEEP = "graph_deep"
     GRAPH_VERIFY = "graph_verify"
+
+
+class ProgressPhaseRowKind(str, Enum):
+    """Optional metadata for classifying phase row granularity in progress payloads."""
+
+    SUMMARY = "summary"
+    FILE = "file"
+    PER_FILE = "per_file"
+    DETAIL = "detail"
+    ADAPTIVE_DETAIL = "adaptive_detail"

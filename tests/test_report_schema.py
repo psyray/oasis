@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import math
 import re
 import sys
 import tempfile
@@ -17,6 +18,10 @@ if str(ROOT) not in sys.path:
 from oasis.enums import PhaseRowStatus
 from oasis.helpers import adaptive_subphases_payload, standard_scan_phases, standard_scan_phases_vuln_types
 from oasis.helpers.dashboard import parse_phase_counts_from_progress_cell
+from oasis.helpers.executive_summary_similarity import (
+    EXEC_SUMMARY_EMBEDDING_TIER_ORDER,
+    executive_summary_similarity_tier_id,
+)
 from oasis.helpers.progress import (
     EXEC_SUMMARY_PROGRESS_EVENT_VERSION,
     SCAN_PROGRESS_EXTENDED_KEYS,
@@ -219,6 +224,34 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(stats.medium_risk, 0)
         self.assertEqual(stats.files_analyzed, 1)
 
+    def test_exec_summary_similarity_tiers_use_shared_single_source(self):
+        self.assertEqual(executive_summary_similarity_tier_id(0.95), "strong")
+        self.assertEqual(executive_summary_similarity_tier_id(0.8), "strong")
+        self.assertEqual(executive_summary_similarity_tier_id(0.79), "moderate")
+        self.assertEqual(executive_summary_similarity_tier_id(0.6), "moderate")
+        self.assertEqual(executive_summary_similarity_tier_id(0.59), "weak")
+        self.assertEqual(executive_summary_similarity_tier_id(1.5), "strong")
+        self.assertEqual(executive_summary_similarity_tier_id(-0.2), "weak")
+        self.assertEqual(executive_summary_similarity_tier_id(math.nan), "weak")
+        self.assertEqual([tier_id for tier_id, _ in EXEC_SUMMARY_EMBEDDING_TIER_ORDER], ["strong", "moderate", "weak"])
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_exec_summary_similarity_groups_follow_tier_order_contract(self):
+        report = Report.__new__(Report)
+        groups = report._executive_summary_similarity_groups(
+            {
+                "SQL Injection": [
+                    {"file_path": "a.py", "similarity_score": 0.95},
+                    {"file_path": "b.py", "similarity_score": 0.75},
+                    {"file_path": "c.py", "similarity_score": 0.20},
+                ]
+            }
+        )
+        self.assertEqual(list(groups.keys()), [tier_id for tier_id, _ in EXEC_SUMMARY_EMBEDDING_TIER_ORDER])
+        self.assertEqual(len(groups["strong"]), 1)
+        self.assertEqual(len(groups["moderate"]), 1)
+        self.assertEqual(len(groups["weak"]), 1)
+
     def test_build_dashboard_stats_excludes_errored_files_from_analyzed_count(self):
         files = [
             FileReportEntry(
@@ -401,6 +434,9 @@ class TestReportSchema(unittest.TestCase):
         self.assertIn("Scan Progress", content)
         self.assertIn("1/3", content)
         self.assertIn("partial", content.lower())
+        self.assertIn("Strong embedding match", content)
+        self.assertIn("| Similarity |", content)
+        self.assertNotIn("Risk Findings", content)
 
     @unittest.skipIf(publish_incremental_summary is None, "oasis.report dependencies are unavailable")
     def test_publish_incremental_summary_strips_unknown_progress_extras(self):

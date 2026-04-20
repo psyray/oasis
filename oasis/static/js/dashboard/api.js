@@ -131,10 +131,66 @@ DashboardApp.PhaseRowStatus = Object.freeze({
     COMPLETE: 'complete',
 });
 
+/** Matches ``oasis.enums.ProgressPhaseRowKind`` wire strings (optional row metadata). */
+DashboardApp.PhaseRowKind = Object.freeze({
+    SUMMARY: 'summary',
+    FILE: 'file',
+    PER_FILE: 'per_file',
+    DETAIL: 'detail',
+    ADAPTIVE_DETAIL: 'adaptive_detail',
+});
+
+/** Stable summary phase ids from ``oasis.enums.ProgressPhaseRowId``. */
+DashboardApp.SUMMARY_PHASE_IDS = Object.freeze({
+    EMBEDDINGS: 'embeddings',
+    INITIAL_SCAN: 'initial_scan',
+    DEEP_ANALYSIS: 'deep_analysis',
+    ADAPTIVE_SCAN: 'adaptive_scan',
+    GRAPH_DISCOVER: 'graph_discover',
+    GRAPH_CHUNK_SCAN: 'graph_chunk_scan',
+    GRAPH_CONTEXT_EXPAND: 'graph_context_expand',
+    GRAPH_DEEP: 'graph_deep',
+    GRAPH_VERIFY: 'graph_verify',
+});
+
 /** Coerce progress counters to non-negative finite numbers for stable UI formatting. */
 DashboardApp.normalizeProgressNumber = function(value) {
     const raw = Number(value || 0);
     return Number.isFinite(raw) ? Math.max(0, raw) : 0;
+};
+
+/**
+ * True when a phase row should be hidden after scan completion.
+ *
+ * Prefer explicit backend metadata (`row_kind` / `kind` / `scope`) when present.
+ * Legacy fallback is enabled only for event_version >= 3 and only for unknown/non-summary ids.
+ */
+DashboardApp.shouldHideCompletedProgressPhaseRow = function(phaseRow, isFinished, progressEventVersion) {
+    if (!isFinished || !phaseRow || typeof phaseRow !== 'object') {
+        return false;
+    }
+    const getLower = (v) => String(v || '').trim().toLowerCase();
+    const rowKind = getLower(phaseRow.row_kind || phaseRow.kind || phaseRow.scope);
+    if (rowKind) {
+        return rowKind === DashboardApp.PhaseRowKind.FILE
+            || rowKind === DashboardApp.PhaseRowKind.PER_FILE
+            || rowKind === DashboardApp.PhaseRowKind.DETAIL
+            || rowKind === DashboardApp.PhaseRowKind.ADAPTIVE_DETAIL;
+    }
+    const eventVersionRaw = Number(progressEventVersion);
+    const eventVersion = Number.isFinite(eventVersionRaw) ? eventVersionRaw : 0;
+    if (eventVersion < 3) {
+        return false;
+    }
+    const phaseId = getLower(phaseRow.id);
+    const summaryIds = Object.values(DashboardApp.SUMMARY_PHASE_IDS);
+    if (phaseId && summaryIds.includes(phaseId)) {
+        return false;
+    }
+    const status = getLower(phaseRow.status);
+    const done = DashboardApp.normalizeProgressNumber(phaseRow.completed);
+    const total = DashboardApp.normalizeProgressNumber(phaseRow.total);
+    return status === DashboardApp.PhaseRowStatus.PENDING || (total > 0 && done === 0);
 };
 
 /** Escape label and optional phase status for progress rows (shared by phases / adaptive_subphases). */

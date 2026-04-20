@@ -40,7 +40,7 @@ PhaseRowsWire = List[PhaseRowPayload]
 
 
 
-from ..enums import PhaseRowStatus, ProgressPhaseRowId
+from ..enums import PhaseRowStatus, ProgressPhaseRowId, ProgressPhaseRowKind
 
 PhaseTriple = Tuple[str, int, int]
 StatusArg = Union[PhaseRowStatus, str]
@@ -76,10 +76,12 @@ def phase_progress_row(
     completed: int,
     total: int,
     current_item: Optional[str] = None,
+    row_kind: str = ProgressPhaseRowKind.SUMMARY.value,
 ) -> Dict[str, Any]:
     row: Dict[str, Any] = {
         "id": phase_id,
         "label": label,
+        "row_kind": row_kind,
         "status": status,
         "completed": max(0, completed),
         "total": max(0, total),

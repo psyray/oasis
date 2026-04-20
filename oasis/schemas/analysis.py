@@ -91,13 +91,29 @@ class FileReportEntry(BaseModel):
 
 
 class DashboardStats(BaseModel):
-    """Precomputed stats for the web dashboard (no markdown parsing)."""
+    """Precomputed stats for the web dashboard (no markdown parsing).
+
+    Fields named *_risk hold **counts of LLM-assigned finding severities** from structured output,
+    not embedding-similarity tiers (those appear only in the executive summary markdown).
+    """
 
     files_analyzed: int = 0
-    high_risk: int = 0
-    medium_risk: int = 0
-    low_risk: int = 0
-    critical_risk: int = 0
+    high_risk: int = Field(
+        default=0,
+        description="Number of findings with severity High (structured LLM output).",
+    )
+    medium_risk: int = Field(
+        default=0,
+        description="Number of findings with severity Medium (structured LLM output).",
+    )
+    low_risk: int = Field(
+        default=0,
+        description="Number of findings with severity Low (structured LLM output).",
+    )
+    critical_risk: int = Field(
+        default=0,
+        description="Number of findings with severity Critical (structured LLM output).",
+    )
     total_findings: int = 0
     potential_findings: int = 0
 

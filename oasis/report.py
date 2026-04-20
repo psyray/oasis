@@ -36,6 +36,10 @@ from .helpers.progress import (
     SCAN_PROGRESS_NON_PARTIAL_STATUSES,
     SCAN_PROGRESS_STATUS_EXPLICIT,
 )
+from .helpers.executive_summary_similarity import (
+    EXEC_SUMMARY_EMBEDDING_TIER_ORDER,
+    executive_summary_similarity_tier_id,
+)
 from .helpers.executive_summary_links import dashboard_reports_href, preferred_detail_relative_path_and_format
 from .helpers.scan_progress_md import (
     append_adaptive_subphases_markdown,
@@ -509,28 +513,26 @@ class Report:
 
         return output_files
 
-    @staticmethod
-    def _executive_summary_similarity_bucket(score: float) -> str:
-        if score >= 0.8:
-            return "High"
-        return "Medium" if score >= 0.6 else "Low"
-
-    def _executive_summary_severity_groups(
+    def _executive_summary_similarity_groups(
         self, all_results: Dict[str, List[Dict]]
     ) -> Dict[str, List[Dict[str, Any]]]:
-        severity_groups: Dict[str, List[Dict[str, Any]]] = {"High": [], "Medium": [], "Low": []}
+        groups: Dict[str, List[Dict[str, Any]]] = {
+            tier_id: [] for tier_id, _ in EXEC_SUMMARY_EMBEDDING_TIER_ORDER
+        }
         for vuln_type, results in all_results.items():
             for result in results:
                 score = result["similarity_score"]
-                severity = self._executive_summary_similarity_bucket(score)
-                severity_groups[severity].append(
+                tier = executive_summary_similarity_tier_id(score)
+                if tier not in groups:
+                    continue
+                groups[tier].append(
                     {
                         "vuln_type": vuln_type,
                         "file_path": result["file_path"],
                         "score": score,
                     }
                 )
-        return severity_groups
+        return groups
 
     @staticmethod
     def _extend_executive_summary_vulnerability_table(
@@ -546,18 +548,18 @@ class Report:
         )
         report.extend(f"| {vuln_type} | {count} |" for vuln_type, count in vulnerability_count.items())
 
-    def _extend_executive_summary_severity_sections(
-        self, report: List[str], severity_groups: Dict[str, List[Dict[str, Any]]]
+    def _extend_executive_summary_similarity_sections(
+        self, report: List[str], similarity_groups: Dict[str, List[Dict[str, Any]]]
     ) -> None:
-        for severity in ("High", "Medium", "Low"):
-            findings = severity_groups.get(severity) or []
+        for tier_id, tier_title in EXEC_SUMMARY_EMBEDDING_TIER_ORDER:
+            findings = similarity_groups.get(tier_id) or []
             if not findings:
                 continue
             report.extend(
                 [
-                    f"\n## {severity} Risk Findings ({len(findings)} issues)",
-                    "| Vulnerability Type | File | Score | Report Link |",
-                    "|-------------------|------|-------|--------------|",
+                    f"\n## {tier_title} — {len(findings)} matches",
+                    "| Vulnerability Type | File | Similarity | Report Link |",
+                    "|-------------------|------|------------|--------------|",
                 ]
             )
             for finding in sorted(findings, key=lambda x: x["score"], reverse=True):
@@ -600,8 +602,8 @@ class Report:
             self._append_scan_progress_section(progress, report)
 
         self._extend_executive_summary_vulnerability_table(report, all_results)
-        severity_groups = self._executive_summary_severity_groups(all_results)
-        self._extend_executive_summary_severity_sections(report, severity_groups)
+        similarity_groups = self._executive_summary_similarity_groups(all_results)
+        self._extend_executive_summary_similarity_sections(report, similarity_groups)
 
         report.extend([
             "\n---",

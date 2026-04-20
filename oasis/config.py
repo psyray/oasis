@@ -80,6 +80,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from .legacy_vulnerability_mapping import LEGACY_VULNERABILITY_MAPPING
+from .helpers.executive_summary_similarity import (
+    executive_summary_tiers_inline_text,
+    executive_summary_tiers_markdown_bullets,
+)
 
 logger = logging.getLogger("oasis")
 
@@ -139,7 +143,7 @@ DEFAULT_ARGS = {
     'OUTPUT_FORMAT': 'all',
     'EMBEDDING_ANALYSIS_TYPE': 'file',
     'CACHE_DAYS': 7,
-    'EMBED_MODEL': 'nomic-embed-text:latest',
+    'EMBED_MODEL': 'qwen3-embedding:4b',
     'SCAN_MODEL': None,  # If None, same as main model
 }
 
@@ -707,6 +711,11 @@ EXTRACT_FUNCTIONS = {
 }
 
 # Report configuration
+# Intentionally computed at import time: executive-summary tiers are static constants for a process run.
+# If tiers become runtime-configurable later, move this interpolation to report-generation time.
+_EXEC_SUMMARY_TIERS_BULLETS_MD = executive_summary_tiers_markdown_bullets()
+_EXEC_SUMMARY_TIERS_INLINE_TEXT = executive_summary_tiers_inline_text()
+
 REPORT = {
     'OUTPUT_FORMATS': ['json', 'sarif', 'pdf', 'html', 'md'],
     # Dashboard / API: human-readable first; any OUTPUT_FORMATS entry missing here is appended after
@@ -722,7 +731,7 @@ REPORT = {
     'DASHBOARD_PROGRESS_MONITOR_INTERVAL_SECONDS': 2.0,
     'OUTPUT_DIR': 'security_reports',
     'BACKGROUND_COLOR': '#F5F2E9',
-    'EXPLAIN_ANALYSIS': """
+    'EXPLAIN_ANALYSIS': f"""
 ## About This Report
 This security analysis report uses embedding similarity to identify potential vulnerabilities in your codebase.
 
@@ -734,9 +743,21 @@ Code embeddings are advanced representations that convert your code into numeric
 - They provide a **measure of relevance** through similarity scores (0.0-1.0)
 
 ## Working with Similarity Scores
-- **High (≥0.6)**: Strong contextual match requiring immediate attention
-- **Medium (0.4-0.6)**: Partial match worth investigating
-- **Low (<0.4)**: Minimal contextual relationship, often false positives
+Similarity scores (0.0–1.0) measure **semantic overlap** between a vulnerability description and your code via embeddings. They are **not** the same as structured finding severity labels from the deep analysis model.
+
+### Executive summary tiers (embedding relevance only)
+The executive summary groups matches by cosine similarity using fixed cutoffs — **independent** of `--threshold` and of per-finding severities in vulnerability reports:
+
+{_EXEC_SUMMARY_TIERS_BULLETS_MD}
+
+### Informal triage bands (reports and audit exploration)
+When reading distribution tables or prioritizing manual review without using the executive summary tiers above, many teams use coarse bands such as:
+
+- **Stronger contextual match (≥0.6)**: Worth reviewing early  
+- **Partial match (0.4–0.6)**: Investigate with context  
+- **Weaker match (<0.4)**: Often noise; verify against the vulnerability description  
+
+Your configured **scan threshold** (`--threshold`, default 0.5) decides which files enter the scanner at all.
 
 <div class="page-break"></div>
 
@@ -755,14 +776,16 @@ Code embeddings are advanced representations that convert your code into numeric
 - Adjust chunk size (`--chunk-size 2048`) for more contextual analysis of larger functions
 
 ## Next Steps
-- Review all high-risk findings immediately
-- Schedule code reviews for medium-risk items
+- Review the strongest embedding matches and structured findings first
+- Schedule code reviews for items with substantive LLM findings or high similarity
 - Consider incorporating these checks into your CI/CD pipeline
-- Use the executive summary to communicate risks to management
+- Use the executive summary to communicate **coverage and similarity-based prioritization** to stakeholders (pair it with detail reports for actual severity)
     """,
-    'EXPLAIN_EXECUTIVE_SUMMARY': """
-## Executive Summary
-This report provides a high-level overview of security vulnerabilities detected in the codebase.
+    'EXPLAIN_EXECUTIVE_SUMMARY': f"""
+## How to read this executive summary
+The tables below group analyzed files by **embedding similarity** between each vulnerability type and the file (cosine similarity). This ordering reflects **retrieval relevance**, not exploit severity and not the severity labels inside per-vulnerability JSON/HTML reports.
+
+**Tiers**: {_EXEC_SUMMARY_TIERS_INLINE_TEXT}. For authoritative finding counts and severities, open the linked vulnerability-type reports.
     """
 }
 
