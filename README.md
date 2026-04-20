@@ -384,6 +384,16 @@ security_reports/
             └── vulnerability_type.pdf
 ```
 
+## 🐋 Run with Docker
+
+```sh
+docker build --build-arg GIT_REPO=<repository_url> --build-arg MODEL_NB=<model_number_option> -t oasis-scanner .
+```
+
+```sh
+docker run --rm -it -v $(pwd)/reports:/app/reports oasis-scanner
+```
+
 ### Ollama structured outputs
 
 Deep and scan analysis calls use Ollama **structured outputs** (`format` with a JSON schema). Use a recent Ollama server; model quality still varies by GGUF. If structured validation fails, the analyzer falls back to safe defaults or regex (function extraction only).
