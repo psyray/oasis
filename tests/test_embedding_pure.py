@@ -3,6 +3,8 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -82,6 +84,106 @@ class TestEmbeddingAnalyzerStats(unittest.TestCase):
         stats = self.analyzer.calculate_statistics(rows)
         self.assertEqual(stats["median_score"], 0.3)
         self.assertEqual(stats["count"], 4)
+
+
+@unittest.skipIf(EmbeddingAnalyzer is None, "oasis.analyze dependencies are unavailable")
+class TestEmbeddingSilentProgress(unittest.TestCase):
+    def test_embedding_analyzer_parallel_progress_is_disabled_in_silent_mode(self):
+        analyzer = EmbeddingAnalyzer.__new__(EmbeddingAnalyzer)
+        analyzer.silent = True
+
+        class DummyTqdm:
+            def __init__(self, *args, **kwargs):
+                self.kwargs = kwargs
+                self.n = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def update(self, inc):
+                self.n += inc
+
+        class DummyPool:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def imap(self, _fn, _iterable):
+                return iter([{"item_id": "f.py", "similarity_score": 0.9}])
+
+        with patch("oasis.analyze.tqdm", side_effect=DummyTqdm) as tqdm_mock, patch(
+            "oasis.analyze.Pool", side_effect=DummyPool
+        ), patch("oasis.analyze.cpu_count", return_value=1):
+            out = analyzer._execute_parallel_analysis([object()])
+
+        self.assertEqual(len(out), 1)
+        self.assertTrue(tqdm_mock.call_args.kwargs.get("disable"))
+
+    def test_embedding_manager_progress_is_disabled_in_silent_mode(self):
+        from oasis.embedding import EmbeddingManager
+
+        manager = EmbeddingManager.__new__(EmbeddingManager)
+        manager.analyze_by_function = False
+        manager.embedding_model = "embed-model"
+        manager.chunk_size = 128
+        manager.ollama_manager = SimpleNamespace(api_url="http://localhost:11434")
+        manager.code_base = {}
+        manager.silent = True
+        manager.save_cache = MagicMock()
+
+        class DummyTqdm:
+            def __init__(self, *args, **kwargs):
+                self.kwargs = kwargs
+                self.n = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def update(self, inc):
+                self.n += inc
+
+        class DummyPool:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def imap_unordered(self, _fn, _iterable):
+                return iter(
+                    [
+                        (
+                            "f.py",
+                            "print('ok')",
+                            [0.1, 0.2],
+                            False,
+                            None,
+                        )
+                    ]
+                )
+
+        with patch("oasis.embedding.tqdm", side_effect=DummyTqdm) as tqdm_mock, patch(
+            "oasis.embedding.Pool", side_effect=DummyPool
+        ), patch("oasis.embedding.cpu_count", return_value=1):
+            manager.index_code_files([Path("f.py")])
+
+        self.assertTrue(tqdm_mock.call_args.kwargs.get("disable"))
+        self.assertIn("f.py", manager.code_base)
+        manager.save_cache.assert_called_once()
 
 
 if __name__ == "__main__":

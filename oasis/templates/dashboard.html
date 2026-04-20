@@ -15,6 +15,7 @@
     window.__OASIS_DASHBOARD__.outputFormats = {{ report_output_formats|tojson|safe }};
     window.__OASIS_DASHBOARD__.formatDisplayOrder = {{ dashboard_format_display_order|tojson|safe }};
     window.__OASIS_DASHBOARD__.languages = languageConfig;
+    window.__OASIS_DASHBOARD__.progressSummaryPhases = {{ progress_summary_phases|tojson|safe }};
     window.__OASIS_DASHBOARD__.realtimeEnabled = {{ dashboard_realtime_enabled|tojson|safe }};
     window.__OASIS_DASHBOARD__.socketioClientUrl = {{ dashboard_socketio_client_url|tojson|safe }};
 </script>

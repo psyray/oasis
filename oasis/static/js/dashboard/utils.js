@@ -231,7 +231,19 @@ if (typeof DashboardApp !== 'undefined') {
     DashboardApp.debug("Grouping reports by model and vulnerability");
     return reports.map(report => {
         // Extraction of important properties
-        const { model, vulnerability_type, path, date, format, stats, alternative_formats, language, date_visible } = report;
+        const {
+            model,
+            vulnerability_type,
+            path,
+            date,
+            format,
+            stats,
+            alternative_formats,
+            language,
+            date_visible,
+            timestamp_dir,
+            audit_metrics
+        } = report;
         
         // Construction of a simplified report
         return {
@@ -243,7 +255,9 @@ if (typeof DashboardApp !== 'undefined') {
             date_visible: date_visible !== undefined ? date_visible : true,
             stats: stats || { high_risk: 0, medium_risk: 0, low_risk: 0, total_findings: 0, files_analyzed: 0 },
             language,
-            alternative_formats: alternative_formats || {}
+            alternative_formats: alternative_formats || {},
+            timestamp_dir: timestamp_dir || "",
+            audit_metrics: audit_metrics || {}
         };
     });
     };
@@ -313,6 +327,285 @@ if (typeof DashboardApp !== 'undefined') {
         .split(' ')
         .map(word => word.charAt(0).toUpperCase() + word.slice(1))
         .join(' ');
+    };
+
+    DashboardApp.compareVulnerabilityTypeNames = function(nameA, nameB) {
+    const left = String(nameA || '');
+    const right = String(nameB || '');
+    const leftNormalized = left.trim().toLowerCase();
+    const rightNormalized = right.trim().toLowerCase();
+    const priority = {
+        'audit report': 0,
+        'executive summary': 1
+    };
+    const leftPriority = Object.prototype.hasOwnProperty.call(priority, leftNormalized) ? priority[leftNormalized] : 2;
+    const rightPriority = Object.prototype.hasOwnProperty.call(priority, rightNormalized) ? priority[rightNormalized] : 2;
+    if (leftPriority !== rightPriority) {
+        return leftPriority - rightPriority;
+    }
+    const normalizedComparison = leftNormalized.localeCompare(
+        rightNormalized,
+        undefined,
+        { sensitivity: 'base' }
+    );
+    return normalizedComparison !== 0
+        ? normalizedComparison
+        : left.localeCompare(right, undefined, { sensitivity: 'base' });
+    };
+
+    DashboardApp.sortVulnerabilityTypeNames = function(names) {
+    // Shared ordering used by tree/list views and filter widgets.
+    return (names || []).slice().sort(DashboardApp.compareVulnerabilityTypeNames);
+    };
+
+    DashboardApp.normalizeModelKey = function(modelName) {
+    // Canonical model key for matching aliases across data-model attributes and filters.
+    return String(modelName || '').trim().toLowerCase();
+    };
+
+    DashboardApp.decodeSelectedModels = function(rawValue) {
+    // Decode card dataset value (CSV) into unique, display-ready model names.
+    const out = [];
+    const seen = new Set();
+    String(rawValue || '')
+        .split(',')
+        .map(value => value.trim())
+        .filter(Boolean)
+        .forEach((item) => {
+            const key = DashboardApp.normalizeModelKey(item);
+            if (!key || seen.has(key)) {
+                return;
+            }
+            seen.add(key);
+            out.push(item);
+        });
+    return out;
+    };
+
+    DashboardApp.encodeSelectedModels = function(modelNames) {
+    // Encode selected model names into stable CSV for card.dataset.selectedModels.
+    const out = [];
+    const seen = new Set();
+    (Array.isArray(modelNames) ? modelNames : [])
+        .map(item => String(item || '').trim())
+        .filter(Boolean)
+        .forEach((item) => {
+            const key = DashboardApp.normalizeModelKey(item);
+            if (!key || seen.has(key)) {
+                return;
+            }
+            seen.add(key);
+            out.push(item);
+        });
+    return out.join(',');
+    };
+
+    DashboardApp.modelDataAttrValue = function(modelName) {
+    return DashboardApp.normalizeModelKey(modelName);
+    };
+
+    DashboardApp.isModelSelected = function(selectedModels, modelName) {
+    const targetKey = DashboardApp.normalizeModelKey(modelName);
+    return Array.from(selectedModels || []).some(
+        entry => DashboardApp.normalizeModelKey(entry) === targetKey
+    );
+    };
+
+    DashboardApp.modelSelectionBadgeHtml = function(selectedCount) {
+    const count = Number(selectedCount) || 0;
+    return count > 0 ? `${count} model${count > 1 ? 's' : ''} selected` : '';
+    };
+
+    DashboardApp.readSelectedModelsFromCard = function(card) {
+    const raw = card && card.dataset ? card.dataset.selectedModels : '';
+    return DashboardApp.decodeSelectedModels(raw);
+    };
+
+    DashboardApp.writeSelectedModelsToCard = function(card, modelNames) {
+    if (!card || !card.dataset) {
+        return '';
+    }
+    const encoded = DashboardApp.encodeSelectedModels(modelNames);
+    card.dataset.selectedModels = encoded;
+    return encoded;
+    };
+
+    DashboardApp.auditComparison = DashboardApp.auditComparison || {};
+    DashboardApp.auditComparison.MAX_AUDIT_COMPARISON_ROWS = 30;
+    // Contract expected from backend report rows used by the audit comparison table:
+    // - `audit_metrics`: object with numeric-like keys (count, avg_score, median_score, max_score, min_score, high, medium, low)
+    // - `timestamp_dir`: stable run identifier shared by reports from the same audit run
+    // - `model`: embedding model name used for row grouping/comparison
+    DashboardApp.auditComparison.buildTableHtml = function(
+        reports,
+        vulnerabilityType,
+        options
+    ) {
+        if (vulnerabilityType !== 'Audit Report') {
+            return '';
+        }
+        const h = options && options.h ? options.h : DashboardApp._escapeHtml;
+        const formatDisplayName = options && options.formatDisplayName
+            ? options.formatDisplayName
+            : DashboardApp.formatDisplayName;
+        const normalizeModelKey = options && options.normalizeModelKey
+            ? options.normalizeModelKey
+            : DashboardApp.normalizeModelKey;
+        const modelDataAttrValue = options && options.modelDataAttrValue
+            ? options.modelDataAttrValue
+            : DashboardApp.modelDataAttrValue;
+
+        const isAuditComparisonCandidate = function(report) {
+            const m = report && report.audit_metrics;
+            return Boolean(
+                report
+                && report.timestamp_dir
+                && report.model
+                && m
+                && typeof m === 'object'
+                && Object.keys(m).length > 0
+            );
+        };
+        const groupAuditRowsByTimestamp = function(rows) {
+            const groupedByTimestamp = {};
+            (rows || []).forEach(report => {
+                const key = String(report.timestamp_dir || '');
+                if (!groupedByTimestamp[key]) {
+                    groupedByTimestamp[key] = [];
+                }
+                groupedByTimestamp[key].push(report);
+            });
+            return groupedByTimestamp;
+        };
+        const pickBestAuditComparisonTimestamp = function(groupedByTimestamp) {
+            return Object.keys(groupedByTimestamp || {})
+                .sort((a, b) => b.localeCompare(a))
+                .find((key) => {
+                    const modelCount = new Set(
+                        (groupedByTimestamp[key] || []).map(r => normalizeModelKey(r.model))
+                    ).size;
+                    return modelCount >= 2;
+                }) || '';
+        };
+        const getAuditRunDateKey = function(report) {
+            const iso = String(report && report.date ? report.date : '').trim();
+            return iso ? iso.slice(0, 10) : '';
+        };
+        const getAuditRunWindowKey = function(report) {
+            const timestampKey = String(report && report.timestamp_dir ? report.timestamp_dir : '').trim();
+            const dateKey = getAuditRunDateKey(report);
+            return `${timestampKey}::${dateKey}`;
+        };
+        const pickLatestReportPerModel = function(rowsAtSameTimestamp) {
+            const byModel = {};
+            (rowsAtSameTimestamp || []).forEach(report => {
+                const modelKey = normalizeModelKey(report.model);
+                const current = byModel[modelKey];
+                if (!current || String(report.date || '') > String(current.date || '')) {
+                    byModel[modelKey] = report;
+                }
+            });
+            return byModel;
+        };
+        const toFiniteNumber = function(value) {
+            const numeric = Number(value);
+            return Number.isFinite(numeric) ? numeric : null;
+        };
+        const formatAuditNumber = function(value, digits = 0) {
+            const numeric = toFiniteNumber(value);
+            if (numeric === null) {
+                return '-';
+            }
+            return digits > 0 ? numeric.toFixed(digits) : String(Math.trunc(numeric));
+        };
+
+        const rowsWithMetrics = (reports || []).filter(isAuditComparisonCandidate);
+        if (rowsWithMetrics.length < 2) {
+            return '';
+        }
+        const byTimestamp = groupAuditRowsByTimestamp(rowsWithMetrics);
+        const bestTimestamp = pickBestAuditComparisonTimestamp(byTimestamp);
+        if (!bestTimestamp) {
+            return '';
+        }
+
+        const groupedByRunWindow = {};
+        (byTimestamp[bestTimestamp] || []).forEach((report) => {
+            const key = getAuditRunWindowKey(report);
+            if (!groupedByRunWindow[key]) {
+                groupedByRunWindow[key] = [];
+            }
+            groupedByRunWindow[key].push(report);
+        });
+        const bestRunWindow = Object.keys(groupedByRunWindow)
+            .sort((left, right) => right.localeCompare(left))[0] || '';
+        const rowsByModel = pickLatestReportPerModel(groupedByRunWindow[bestRunWindow] || []);
+        if (!rowsByModel || Object.keys(rowsByModel).length === 0) {
+            return `
+                <div class="audit-comparison-block">
+                    <div class="data-label">Embedding models comparison (latest available audit scores)</div>
+                    <div class="audit-comparison-table-wrap">
+                        <p class="text-muted">No comparable metrics available.</p>
+                    </div>
+                </div>
+            `;
+        }
+        const sortedRows = Object.values(rowsByModel)
+            .sort((left, right) => {
+                const leftName = String(left.model || '');
+                const rightName = String(right.model || '');
+                return leftName.localeCompare(rightName, undefined, { sensitivity: 'base' });
+            });
+        const maxRows = Number(DashboardApp.auditComparison.MAX_AUDIT_COMPARISON_ROWS) || 30;
+        const isTrimmed = sortedRows.length > maxRows;
+        const rowsForRender = isTrimmed ? sortedRows.slice(0, maxRows) : sortedRows;
+        const tableRows = rowsForRender
+            .map((report) => {
+                const modelName = String(report.model || '');
+                const m = report.audit_metrics || {};
+                return `
+                    <tr data-model="${h(modelDataAttrValue(modelName))}">
+                        <td>${h(formatDisplayName(modelName, 'model', false))}</td>
+                        <td>${h(formatAuditNumber(m.count))}</td>
+                        <td>${h(formatAuditNumber(m.avg_score, 3))}</td>
+                        <td>${h(formatAuditNumber(m.median_score, 3))}</td>
+                        <td>${h(formatAuditNumber(m.max_score, 3))}</td>
+                        <td>${h(formatAuditNumber(m.min_score, 3))}</td>
+                        <td>${h(formatAuditNumber(m.high))}</td>
+                        <td>${h(formatAuditNumber(m.medium))}</td>
+                        <td>${h(formatAuditNumber(m.low))}</td>
+                    </tr>
+                `;
+            })
+            .join('');
+        const trimNotice = isTrimmed
+            ? `<div class="text-muted">Showing first ${maxRows} of ${sortedRows.length} models for performance.</div>`
+            : '';
+
+        return `
+            <div class="audit-comparison-block">
+                <div class="data-label">Embedding models comparison (latest available audit scores)</div>
+                <div class="audit-comparison-table-wrap">
+                    ${trimNotice}
+                    <table class="audit-comparison-table">
+                        <thead>
+                            <tr>
+                                <th>Model</th>
+                                <th>Count</th>
+                                <th>Avg</th>
+                                <th>Median</th>
+                                <th>Max</th>
+                                <th>Min</th>
+                                <th>High</th>
+                                <th>Medium</th>
+                                <th>Low</th>
+                            </tr>
+                        </thead>
+                        <tbody>${tableRows}</tbody>
+                    </table>
+                </div>
+            </div>
+        `;
     };
 
     // Precompute once to avoid sorting on each getModelEmoji call.

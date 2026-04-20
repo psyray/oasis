@@ -51,6 +51,20 @@ from .helpers.dashboard import (
     parse_phase_counts_from_progress_cell,
     socketio_lan_http_origins,
 )
+from .helpers.audit_metrics_markdown import (
+    AUDIT_METRIC_LABELS,
+    AUDIT_METRIC_TABLE_ROW_PATTERN,
+    AUDIT_METRICS_SECTION_HEADING_PATTERN,
+    AUDIT_METRICS_TABLE_HEADER_LABELS,
+    audit_metric_key_from_label,
+    audit_metrics_from_markdown_content,
+    iter_audit_metrics_table_rows,
+    normalize_audit_metric_label,
+    parse_audit_metric_table_row,
+    parse_first_float_metric,
+    parse_first_int_metric,
+    slice_markdown_section_after_heading,
+)
 from .helpers.dashboard_report_html import rewrite_report_preview_anchor_hrefs
 from .helpers.progress import SCAN_PROGRESS_EXTENDED_KEYS, coerce_scan_progress_event_version
 from .report import Report, executive_summary_progress_sidecar_path, is_executive_summary_progress_sidecar
@@ -60,6 +74,37 @@ logger = logging.getLogger(__name__)
 
 
 class WebServer:
+    _PROGRESS_DASHBOARD_HIDDEN_KEYS = frozenset({"adaptive_subphases"})
+    _PROGRESS_SUMMARY_PHASE_IDS = frozenset(
+        {
+            "embeddings",
+            "initial_scan",
+            "deep_analysis",
+            "adaptive_scan",
+            "graph_discover",
+            "graph_chunk_scan",
+            "graph_context_expand",
+            "graph_deep",
+            "graph_verify",
+        }
+    )
+    _PROGRESS_SUMMARY_PHASE_LABELS = frozenset(
+        {
+            "embeddings",
+            "initial scan",
+            "deep analysis",
+            "adaptive scan",
+            "discover candidates",
+            "structured chunk scan",
+            "context expansion",
+            "verify structured output",
+        }
+    )
+    _AUDIT_METRICS_SECTION_HEADING_PATTERN = AUDIT_METRICS_SECTION_HEADING_PATTERN
+    _AUDIT_METRIC_LABELS: dict[str, tuple[str, str]] = AUDIT_METRIC_LABELS
+    _AUDIT_METRICS_TABLE_HEADER_LABELS = AUDIT_METRICS_TABLE_HEADER_LABELS
+    _AUDIT_METRIC_TABLE_ROW_PATTERN = AUDIT_METRIC_TABLE_ROW_PATTERN
+
     def __init__(self, report, debug=False, web_expose='local', web_password=None, web_port=5000):
         """Initialize a dashboard server bound to a single runtime session.
 
@@ -328,11 +373,42 @@ class WebServer:
                 progress.get("current_vulnerability") or ""
             ),
             "tested_vulnerabilities": tested_vulnerabilities,
+            "phases": WebServer._summary_phase_rows(progress.get("phases")),
         }
         for key in SCAN_PROGRESS_EXTENDED_KEYS:
+            if key in WebServer._PROGRESS_DASHBOARD_HIDDEN_KEYS:
+                continue
+            if key == "phases":
+                continue
             if key in progress:
                 payload[key] = progress[key]
         return payload
+
+    @staticmethod
+    def _summary_phase_rows(raw_phases: object) -> list[dict]:
+        """Keep only high-level pipeline phases for dashboard scan progress."""
+        if not isinstance(raw_phases, list):
+            return []
+        rows: list[dict] = []
+        for row in raw_phases:
+            if not isinstance(row, dict):
+                continue
+            phase_id = str(row.get("id") or "").strip().lower()
+            label = str(row.get("label") or "").strip().lower()
+            if phase_id and phase_id in WebServer._PROGRESS_SUMMARY_PHASE_IDS:
+                rows.append(row)
+                continue
+            if label in WebServer._PROGRESS_SUMMARY_PHASE_LABELS:
+                rows.append(row)
+        return rows
+
+    @staticmethod
+    def _summary_phase_catalog() -> dict[str, list[str]]:
+        """Expose canonical summary phase ids/labels for dashboard JS filtering."""
+        return {
+            "ids": sorted(WebServer._PROGRESS_SUMMARY_PHASE_IDS),
+            "labels": sorted(WebServer._PROGRESS_SUMMARY_PHASE_LABELS),
+        }
 
     def _latest_scan_progress_from_report_data(self) -> dict:
         """Resolve latest executive-summary progress from indexed report data."""
@@ -412,6 +488,7 @@ class WebServer:
                 model_emojis=MODEL_EMOJIS,
                 vuln_emojis=VULN_EMOJIS,
                 languages=LANGUAGES,
+                progress_summary_phases=WebServer._summary_phase_catalog(),
                 dashboard_realtime_enabled=bool(REPORT.get("DASHBOARD_REALTIME_ENABLED", True)),
                 dashboard_socketio_client_url=str(REPORT.get("DASHBOARD_SOCKETIO_CLIENT_URL") or "").strip(),
                 debug=self.debug,
@@ -633,8 +710,18 @@ class WebServer:
         @login_required
         def get_dates_by_model():
             """Get dates available for a specific model and vulnerability type"""
+            model_filter = [value.strip() for value in request.args.getlist('model') if value.strip()]
+            if not model_filter:
+                single_model = (request.args.get('model') or '').strip()
+                if single_model:
+                    model_filter = [single_model]
+            vulnerability_filter = (request.args.get('vulnerability') or '').strip()
             # Filter reports based on parameters
-            filtered_data = self.filter_reports(mandatory_filters=['model', 'vulnerability'])
+            filtered_data = self.filter_reports(
+                model_filter=model_filter,
+                vuln_filter=vulnerability_filter,
+                mandatory_filters=['model', 'vulnerability'],
+            )
 
             # Extract dates from filtered reports
             dates = []
@@ -833,6 +920,60 @@ class WebServer:
         return result
 
     @staticmethod
+    def _normalize_audit_metric_label(raw_label: str) -> str:
+        return normalize_audit_metric_label(raw_label)
+
+    @staticmethod
+    def _parse_first_int_metric(raw_value: str) -> int | None:
+        return parse_first_int_metric(raw_value)
+
+    @staticmethod
+    def _parse_first_float_metric(raw_value: str) -> float | None:
+        return parse_first_float_metric(raw_value)
+
+    @staticmethod
+    def _audit_metric_key_from_label(normalized_label: str) -> tuple[str, str]:
+        """
+        Return metric kind/key tuple where kind is ``int`` or ``float``.
+        """
+        return audit_metric_key_from_label(normalized_label)
+
+    @staticmethod
+    def _slice_markdown_section_after_heading(content: str, heading_match: re.Match[str]) -> str:
+        """Return markdown slice between heading and the next heading of same level."""
+        return slice_markdown_section_after_heading(content, heading_match)
+
+    @staticmethod
+    def _parse_audit_metric_table_row(line: str) -> tuple[str, str] | None:
+        """Parse a markdown ``| label | value |`` row."""
+        return parse_audit_metric_table_row(line)
+
+    @staticmethod
+    def _is_audit_metrics_table_header_row(label: str, value: str) -> bool:
+        """True when the row is the ``| Metric | Value |`` header."""
+        return (
+            label in WebServer._AUDIT_METRICS_TABLE_HEADER_LABELS
+            and normalize_audit_metric_label(value) in WebServer._AUDIT_METRICS_TABLE_HEADER_LABELS
+        )
+
+    @staticmethod
+    def _iter_audit_metrics_table_rows(metrics_section: str):
+        """Yield normalized ``(label, value)`` rows from the first audit metrics table."""
+        yield from iter_audit_metrics_table_rows(metrics_section)
+
+    @staticmethod
+    def _audit_metrics_from_markdown_report_file(report_file: Path) -> dict:
+        """
+        Parse comparable audit metrics from markdown audit report.
+        """
+        try:
+            content = report_file.read_text(encoding="utf-8")
+        except OSError:
+            return {}
+        # Return partial metrics; dashboard rendering handles missing fields with placeholders.
+        return audit_metrics_from_markdown_content(content)
+
+    @staticmethod
     def _pipeline_phases_from_executive_summary_markdown(content: str) -> list[dict]:
         """Parse optional ``### Pipeline phases`` markdown table into phase dict rows.
 
@@ -978,6 +1119,9 @@ class WebServer:
                 progress = self._summary_progress_from_json_report_file(report_file)
             elif fmt == "md":
                 progress = self._summary_progress_from_markdown_report_file(report_file)
+        audit_metrics = {}
+        if vulnerability_type == "Audit Report" and fmt == "md":
+            audit_metrics = self._audit_metrics_from_markdown_report_file(report_file)
 
         # Build relative path for web access
         relative_path = report_file.relative_to(self.security_dir)
@@ -1009,6 +1153,7 @@ class WebServer:
             "timestamp_dir": timestamp_dir,
             "language": language,
             "progress": progress,
+            "audit_metrics": audit_metrics,
         }
         
     def _calculate_global_statistics(self, reports):
@@ -1177,7 +1322,10 @@ class WebServer:
 
         # Apply model filter (common to both branches)
         if model_filter:
-            model_filters = [m.lower() for m in model_filter.split(',')]
+            if isinstance(model_filter, (list, tuple, set)):
+                model_filters = [str(m).strip().lower() for m in model_filter if str(m).strip()]
+            else:
+                model_filters = [m.strip().lower() for m in str(model_filter).split(',') if m.strip()]
             filtered = [r for r in filtered if any(m in r['model'].lower() for m in model_filters)]
 
         # Apply date filtering (common to both branches)

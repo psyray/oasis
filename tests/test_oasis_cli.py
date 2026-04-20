@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from oasis.config import REPORT
+from oasis.helpers.embed_models import normalize_embed_models, primary_embed_model, resolve_embed_models
 from oasis.oasis import OasisScanner
 
 
@@ -39,6 +40,21 @@ class TestRemovedLegacyCliFlags(unittest.TestCase):
 
 
 class TestOasisCliParsing(unittest.TestCase):
+    @staticmethod
+    def _parse_cli_args(parser: argparse.ArgumentParser, input_path: str, *extra: str):
+        return parser.parse_args(["-i", input_path, *extra])
+
+    def _assert_langgraph_flags(
+        self,
+        namespace: argparse.Namespace,
+        max_expand: int,
+        poc_hints: bool,
+        poc_assist: bool,
+    ):
+        self.assertEqual(namespace.langgraph_max_expand_iterations, max_expand)
+        self.assertEqual(namespace.poc_hints, poc_hints)
+        self.assertEqual(namespace.poc_assist, poc_assist)
+
     def test_parse_yes_no_accepts_yes_no(self):
         self.assertTrue(OasisScanner._parse_yes_no_flag("yes"))
         self.assertFalse(OasisScanner._parse_yes_no_flag("no"))
@@ -67,21 +83,71 @@ class TestOasisCliParsing(unittest.TestCase):
         parser = scanner.setup_argument_parser()
         td = tempfile.mkdtemp()
         try:
-            ns = parser.parse_args(
-                ["-i", td, "--langgraph-max-expand", "4", "--poc-hints", "--poc-assist"]
+            ns = self._parse_cli_args(
+                parser, td, "--langgraph-max-expand", "4", "--poc-hints", "--poc-assist"
             )
-            self.assertEqual(ns.langgraph_max_expand_iterations, 4)
-            self.assertTrue(ns.poc_hints)
-            self.assertTrue(ns.poc_assist)
-            ns2 = parser.parse_args(["-i", td])
-            self.assertEqual(ns2.langgraph_max_expand_iterations, 2)
-            self.assertFalse(ns2.poc_hints)
-            self.assertFalse(ns2.poc_assist)
+            self._assert_langgraph_flags(ns, max_expand=4, poc_hints=True, poc_assist=True)
+            ns2 = self._parse_cli_args(parser, td)
+            self._assert_langgraph_flags(ns2, max_expand=2, poc_hints=False, poc_assist=False)
         finally:
             shutil.rmtree(td)
 
+    def test_parse_embed_models_csv_returns_unique_trimmed_ordered_values(self):
+        models = OasisScanner._parse_embed_models_csv(
+            " qwen3-embedding:4b, bge-m3 ,qwen3-embedding:4b "
+        )
+        self.assertEqual(models, ["qwen3-embedding:4b", "bge-m3"])
+
+    def test_parse_embed_models_csv_rejects_empty_values(self):
+        with self.assertRaises(argparse.ArgumentTypeError):
+            OasisScanner._parse_embed_models_csv(" , , ")
+
+    def test_embed_model_cli_type_accepts_csv_in_audit_mode(self):
+        scanner = OasisScanner()
+        parser = scanner.setup_argument_parser()
+        td = tempfile.mkdtemp()
+        try:
+            ns = self._parse_cli_args(parser, td, "--audit", "-em", "m1,m2,m1")
+            self.assertEqual(ns.embed_model, ["m1", "m2"])
+        finally:
+            shutil.rmtree(td)
+
+    def test_normalize_embed_models_keeps_order_and_uniqueness_for_iterables(self):
+        models = normalize_embed_models([" m1,m2 ", "m2", "m3"])
+        self.assertEqual(models, ["m1", "m2", "m3"])
+
+    def test_primary_embed_model_uses_first_normalized_value(self):
+        model = primary_embed_model("  qwen3-embedding:4b , bge-m3 ")
+        self.assertEqual(model, "qwen3-embedding:4b")
+
+    def test_resolve_embed_models_returns_list_and_primary(self):
+        models, primary = resolve_embed_models([" m1,m2 ", "m2"])
+        self.assertEqual(models, ["m1", "m2"])
+        self.assertEqual(primary, "m1")
+
+    def test_normalize_embed_models_rejects_non_string_iterable_items(self):
+        with self.assertRaises(argparse.ArgumentTypeError):
+            normalize_embed_models(["m1", object()])  # type: ignore[list-item]
+
+    def test_normalize_embed_models_rejects_empty_iterable_values(self):
+        with self.assertRaises(argparse.ArgumentTypeError):
+            normalize_embed_models([])
+
 
 class TestOasisCliInitArguments(unittest.TestCase):
+    @staticmethod
+    def _build_init_namespace(input_path: str, output_format: str = "%%%invalid%%%"):
+        namespace = MagicMock()
+        namespace.version = False
+        namespace.list_models = False
+        namespace.silent = False
+        namespace.models = None
+        namespace.audit = False
+        namespace.input_path = input_path
+        namespace.output_format = output_format
+        namespace.debug = False
+        return namespace
+
     def test_init_arguments_requires_input_path(self):
         scanner = OasisScanner()
         parser = scanner.setup_argument_parser()
@@ -134,21 +200,88 @@ class TestOasisCliInitArguments(unittest.TestCase):
         scanner = OasisScanner()
         td = tempfile.mkdtemp()
         try:
-            namespace = MagicMock()
-            namespace.version = False
-            namespace.list_models = False
-            namespace.silent = False
-            namespace.models = None
-            namespace.audit = False
-            namespace.input_path = td
-            namespace.output_format = "%%%invalid%%%"
-            namespace.debug = False
+            namespace = self._build_init_namespace(td)
             with patch.object(scanner, "_handle_argument_errors", return_value=False) as err:
                 result = scanner._init_arguments(namespace)
             self.assertFalse(result)
             err.assert_called_once()
         finally:
             shutil.rmtree(td)
+
+
+class TestOasisAuditMode(unittest.TestCase):
+    @staticmethod
+    def _build_embedding_analyzer_mock():
+        analyzer = MagicMock()
+        analyzer.analyze_all_vulnerabilities.return_value = {"XSS": {"results": []}}
+        analyzer.generate_vulnerability_statistics.return_value = [{"name": "TOTAL"}]
+        return analyzer
+
+    def test_handle_audit_mode_runs_once_per_embedding_model(self):
+        scanner = OasisScanner()
+        scanner.embed_models = ["embed-a", "embed-b"]
+        scanner.args = SimpleNamespace(
+            embed_model=["embed-a", "embed-b"],
+            input_path="/tmp/project",
+        )
+        scanner.ollama_manager = MagicMock()
+        scanner.report = MagicMock()
+        vuln_mapping = {"xss": {"name": "XSS"}}
+
+        with patch(
+            "oasis.oasis.SecurityAnalyzer.get_vulnerabilities_to_check",
+            return_value=([{"name": "XSS"}], []),
+        ), patch("oasis.oasis.EmbeddingManager") as manager_cls, patch(
+            "oasis.oasis.EmbeddingAnalyzer"
+        ) as analyzer_cls:
+            base_manager = MagicMock()
+            base_manager.prepare_input_files.return_value = [Path("a.py"), Path("b.py")]
+            manager_a = MagicMock()
+            manager_b = MagicMock()
+            manager_cls.side_effect = [base_manager, manager_a, manager_b]
+            analyzer_a = self._build_embedding_analyzer_mock()
+            analyzer_b = self._build_embedding_analyzer_mock()
+            analyzer_cls.side_effect = [analyzer_a, analyzer_b]
+
+            result = scanner.handle_audit_mode(vuln_mapping)
+
+        self.assertTrue(result)
+        scanner.report.create_report_directories.assert_called_once_with(
+            "/tmp/project", models=["embed-a", "embed-b"]
+        )
+        base_manager.prepare_input_files.assert_called_once()
+        manager_a.process_input_files.assert_called_once_with(
+            unittest.mock.ANY,
+            files_to_analyze=[Path("a.py"), Path("b.py")],
+            pre_parsed=True,
+        )
+        manager_b.process_input_files.assert_called_once_with(
+            unittest.mock.ANY,
+            files_to_analyze=[Path("a.py"), Path("b.py")],
+            pre_parsed=True,
+        )
+        self.assertEqual(scanner.report.generate_audit_report.call_count, 2)
+
+    def test_handle_audit_mode_logs_and_exits_when_no_vulnerabilities(self):
+        scanner = OasisScanner()
+        scanner.embed_models = ["embed-a"]
+        scanner.args = SimpleNamespace(
+            embed_model=["embed-a"],
+            input_path="/tmp/project",
+        )
+        scanner.ollama_manager = MagicMock()
+        scanner.report = MagicMock()
+        vuln_mapping = {"xss": {"name": "XSS"}}
+
+        with patch(
+            "oasis.oasis.SecurityAnalyzer.get_vulnerabilities_to_check",
+            return_value=([], []),
+        ), patch("oasis.oasis.logger") as logger_mock:
+            result = scanner.handle_audit_mode(vuln_mapping)
+
+        self.assertTrue(result)
+        logger_mock.warning.assert_called_once()
+        scanner.report.create_report_directories.assert_not_called()
 
 
 class TestOllamaInitOrdering(unittest.TestCase):

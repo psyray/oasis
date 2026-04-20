@@ -152,6 +152,29 @@ DashboardApp.SUMMARY_PHASE_IDS = Object.freeze({
     GRAPH_DEEP: 'graph_deep',
     GRAPH_VERIFY: 'graph_verify',
 });
+DashboardApp.SUMMARY_PHASE_LABELS = Object.freeze({
+    EMBEDDINGS: 'embeddings',
+    INITIAL_SCAN: 'initial scan',
+    DEEP_ANALYSIS: 'deep analysis',
+    ADAPTIVE_SCAN: 'adaptive scan',
+    GRAPH_DISCOVER: 'discover candidates',
+    GRAPH_CHUNK_SCAN: 'structured chunk scan',
+    GRAPH_CONTEXT_EXPAND: 'context expansion',
+    GRAPH_VERIFY: 'verify structured output',
+});
+DashboardApp.SUMMARY_PHASE_ID_VALUES = Object.freeze(Object.values(DashboardApp.SUMMARY_PHASE_IDS));
+DashboardApp.SUMMARY_PHASE_LABEL_VALUES = Object.freeze(Object.values(DashboardApp.SUMMARY_PHASE_LABELS));
+
+DashboardApp.progressSummaryPhaseFilters = function() {
+    const cfg = (window.__OASIS_DASHBOARD__ || {}).progressSummaryPhases || {};
+    const idValues = Array.isArray(cfg.ids) && cfg.ids.length > 0
+        ? cfg.ids
+        : DashboardApp.SUMMARY_PHASE_ID_VALUES;
+    const labelValues = Array.isArray(cfg.labels) && cfg.labels.length > 0
+        ? cfg.labels
+        : DashboardApp.SUMMARY_PHASE_LABEL_VALUES;
+    return { idValues, labelValues };
+};
 
 /** Coerce progress counters to non-negative finite numbers for stable UI formatting. */
 DashboardApp.normalizeProgressNumber = function(value) {
@@ -226,6 +249,20 @@ DashboardApp.applyProgressPayload = function(payload) {
         return;
     }
 
+    const phaseFilters = DashboardApp.progressSummaryPhaseFilters();
+    const allowedIdSet = new Set(phaseFilters.idValues.map((v) => String(v || '').trim().toLowerCase()));
+    const allowedLabelSet = new Set(phaseFilters.labelValues.map((v) => String(v || '').trim().toLowerCase()));
+    const summaryPhaseRows = Array.isArray(payload.phases)
+        ? payload.phases.filter((row) => {
+            if (!row || typeof row !== 'object') {
+                return false;
+            }
+            const phaseId = String(row.id || '').trim().toLowerCase();
+            const label = String(row.label || '').trim().toLowerCase();
+            return (phaseId && allowedIdSet.has(phaseId)) || allowedLabelSet.has(label);
+        })
+        : [];
+
     DashboardApp.progressState = {
         has_progress: Boolean(payload.has_progress),
         completed_vulnerabilities: Number(payload.completed_vulnerabilities || 0),
@@ -241,11 +278,7 @@ DashboardApp.applyProgressPayload = function(payload) {
             : [],
         updated_at: payload.updated_at || '',
         active_phase: payload.active_phase || '',
-        phases: Array.isArray(payload.phases) ? payload.phases : [],
-        adaptive_subphases:
-            payload.adaptive_subphases && typeof payload.adaptive_subphases === 'object'
-                ? payload.adaptive_subphases
-                : null,
+        phases: summaryPhaseRows,
         overall: payload.overall && typeof payload.overall === 'object' ? payload.overall : null,
         scan_mode: payload.scan_mode || '',
         event_version: typeof payload.event_version === 'number' ? payload.event_version : Number(payload.event_version || 0) || 0,

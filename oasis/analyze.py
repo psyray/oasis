@@ -1787,6 +1787,7 @@ class EmbeddingAnalyzer:
         self.results_cache = {}  # Cache for results by vulnerability type
         self.embedding_analysis_type = embedding_manager.embedding_analysis_type
         self.analyze_by_function = embedding_manager.analyze_by_function
+        self.silent = bool(getattr(embedding_manager, "silent", False))
 
     def analyze_vulnerability(self, vuln: Dict) -> List[Dict[str, Any]]:
         """
@@ -2028,7 +2029,12 @@ class EmbeddingAnalyzer:
 
         num_processes = max(1, min(cpu_count(), len(process_args)))
         results = []
-        with tqdm(total=len(process_args), desc="Analyzing", leave=True) as pbar:
+        with tqdm(
+            total=len(process_args),
+            desc="Analyzing",
+            leave=True,
+            disable=self.silent,
+        ) as pbar:
             with Pool(processes=num_processes) as pool:
                 for result in pool.imap(analyze_item_parallel, process_args):
                     if result and 'error' not in result:

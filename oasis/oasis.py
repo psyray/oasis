@@ -5,6 +5,7 @@ from pathlib import Path
 import time
 import traceback
 from typing import List, Optional, Union
+from copy import deepcopy
 
 
 # Import from configuration
@@ -15,6 +16,10 @@ from .tools import generate_timestamp, setup_logging, logger, display_logo, get_
 from .ollama_manager import OllamaManager
 from .embedding import EmbeddingManager
 from .analyze import SecurityAnalyzer, EmbeddingAnalyzer
+from .helpers.embed_models import (
+    parse_embed_models_csv,
+    resolve_embed_models,
+)
 from .helpers.langgraph_console import LG_PIPELINE_INFO, cli_bold, cli_emit_section_banner
 from .report import Report
 from .web import WebServer
@@ -28,6 +33,23 @@ class OasisScanner:
         self.ollama_manager = None
         self.embedding_manager = None
         self.output_dir = None
+        self.valid_input_files = None
+        self.embed_models = [DEFAULT_ARGS["EMBED_MODEL"]]
+        self.primary_embed_model = DEFAULT_ARGS["EMBED_MODEL"]
+
+    @staticmethod
+    def _parse_embed_models_csv(value: str) -> list[str]:
+        """
+        Parse comma-separated embedding model values into a normalized list.
+        """
+        return parse_embed_models_csv(value)
+
+    @staticmethod
+    def _embed_model_cli_type(value: str) -> list[str]:
+        """
+        argparse ``type`` for ``--embed-model``.
+        """
+        return OasisScanner._parse_embed_models_csv(value)
 
     @staticmethod
     def _parse_yes_no_flag(value: str) -> bool:
@@ -219,8 +241,18 @@ class OasisScanner:
                                 help='Enable/disable thinking for deep analysis models [yes,no] (default: no)')
         model_group.add_argument('-smt', '--small-model-thinking', dest='small_model_thinking', type=self._parse_yes_no_flag, default=False, metavar='yes|no',
                                 help='Enable/disable thinking for the quick scan model [yes,no] (default: no)')
-        model_group.add_argument('-em', '--embed-model', type=str, default=DEFAULT_ARGS['EMBED_MODEL'],
-                                help=f'Model to use for embeddings (default: {DEFAULT_ARGS["EMBED_MODEL"]})')
+        model_group.add_argument(
+            '-em',
+            '--embed-model',
+            type=OasisScanner._embed_model_cli_type,
+            default=[DEFAULT_ARGS['EMBED_MODEL']],
+            help=(
+                'Embedding model to use. In audit mode, accepts a CSV list of models '
+                '(e.g., "modelA,modelB") which are evaluated independently; in all other '
+                'modes, only the first model in the list is used. '
+                f'Default: {DEFAULT_ARGS["EMBED_MODEL"]}'
+            ),
+        )
         model_group.add_argument('-lm', '--list-models', action='store_true',
                                 help='List available models and exit')
         
@@ -380,22 +412,40 @@ class OasisScanner:
         vulnerabilities, invalid_tags = SecurityAnalyzer.get_vulnerabilities_to_check(self.args, vuln_mapping)
         if invalid_tags:
             return False
+        if not vulnerabilities:
+            logger.warning("No vulnerabilities selected for audit mode; nothing to analyze.")
+            return True
 
-        # Create analyzer
-        embedding_manager = EmbeddingAnalyzer(self.embedding_manager, self.ollama_manager)
-
-        # Analyze all vulnerabilities
-        analyzer_results = embedding_manager.analyze_all_vulnerabilities(vulnerabilities)
-
-        # Set the current model for report generation
-        self.report.current_model = embedding_manager.embedding_model
-
-        # Generate audit report
-        self.report.create_report_directories(self.args.input_path, models=[self.report.current_model])
-        self.report.generate_audit_report(
-            analyzer_results,
-            self.embedding_manager
+        embed_models = list(self.embed_models or [DEFAULT_ARGS["EMBED_MODEL"]])
+        self.report.models = list(embed_models)
+        self.report.create_report_directories(self.args.input_path, models=embed_models)
+        base_embedding_manager = EmbeddingManager(self.args, self.ollama_manager)
+        prepared_input_files = base_embedding_manager.prepare_input_files(
+            self.args,
+            files_to_analyze=self.valid_input_files,
         )
+        if not prepared_input_files:
+            logger.error("No valid files available for audit mode")
+            return False
+
+        for embed_model in embed_models:
+            model_args = deepcopy(self.args)
+            model_args.embed_model = embed_model
+            model_embedding_manager = EmbeddingManager(model_args, self.ollama_manager)
+            model_embedding_manager.process_input_files(
+                model_args,
+                files_to_analyze=prepared_input_files,
+                pre_parsed=True,
+            )
+
+            embedding_analyzer = EmbeddingAnalyzer(model_embedding_manager, self.ollama_manager)
+            analyzer_results = embedding_analyzer.analyze_all_vulnerabilities(vulnerabilities)
+            analyzer_results["vulnerability_statistics"] = embedding_analyzer.generate_vulnerability_statistics(
+                analyzer_results
+            )
+
+            self.report.current_model = embed_model
+            self.report.generate_audit_report(analyzer_results, model_embedding_manager)
 
         # Report generation
         self.report.report_generated(report_type='Audit', report_structure=True)
@@ -512,13 +562,13 @@ class OasisScanner:
             from .__init__ import __version__
             print(f"OASIS - Ollama Automated Security Intelligence Scanner v{__version__}")
             return None
-        
+
         if self.args.list_models:
             # Setup minimal logging without file creation
             setup_logging(debug=self.args.debug, silent=False, error_log_file=None)
             display_logo()
             return self._handle_list_models_and_exit()
-        
+
         # Validate required argument combinations
         if self.args.silent and not self.args.models and not self.args.audit:
             return self._handle_argument_errors(
@@ -544,6 +594,17 @@ class OasisScanner:
         else:
             return self._handle_argument_errors("Invalid --output-format / -of value")
 
+        # Normalize embed-model input (argparse usually supplies list via type=; support injected str)
+        em_raw = getattr(self.args, "embed_model", None)
+        if not isinstance(em_raw, (list, tuple, str)) and em_raw is not None:
+            return self._handle_argument_errors("Invalid --embed-model / -em value")
+
+        try:
+            self.args.embed_model, primary_embed_model = resolve_embed_models(em_raw)
+            self.embed_models = list(self.args.embed_model)
+            self.primary_embed_model = primary_embed_model
+        except argparse.ArgumentTypeError as exc:
+            return self._handle_argument_errors(str(exc))
         display_logo()
         return True
 
@@ -577,12 +638,19 @@ class OasisScanner:
             return False
 
         # Check embedding model availability
-        if not self.ollama_manager.ensure_model_available(self.args.embed_model):
-            return False
+        embed_models = list(self.embed_models or [])
+        primary_embed_model = self.primary_embed_model
+        if not embed_models:
+            embed_models, primary_embed_model = resolve_embed_models(getattr(self.args, "embed_model", None))
+            self.embed_models = list(embed_models)
+            self.primary_embed_model = primary_embed_model
+        for embed_model in embed_models:
+            if not self.ollama_manager.ensure_model_available(embed_model):
+                return False
 
         # Auto-detect chunk size only after the embedding model exists locally.
         if self.args.chunk_size is None:
-            self.args.chunk_size = self.ollama_manager.detect_optimal_chunk_size(self.args.embed_model)
+            self.args.chunk_size = self.ollama_manager.detect_optimal_chunk_size(primary_embed_model)
         else:
             logger.info(f"Using manual chunk size: {self.args.chunk_size}")
 
@@ -601,8 +669,8 @@ class OasisScanner:
 
         # Initialize embedding manager
         self.embedding_manager = EmbeddingManager(self.args, self.ollama_manager)
-
-        return self.embedding_manager.process_input_files(self.args)
+        self.valid_input_files = self.embedding_manager.process_input_files(self.args)
+        return self.valid_input_files
 
     def _execute_requested_mode(self):
         """

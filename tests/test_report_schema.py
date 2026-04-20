@@ -22,6 +22,10 @@ from oasis.helpers.executive_summary_similarity import (
     EXEC_SUMMARY_EMBEDDING_TIER_ORDER,
     executive_summary_similarity_tier_id,
 )
+from oasis.helpers.audit_metrics_markdown import (
+    audit_metrics_from_markdown_content,
+    iter_audit_metrics_table_rows,
+)
 from oasis.helpers.progress import (
     EXEC_SUMMARY_PROGRESS_EVENT_VERSION,
     SCAN_PROGRESS_EXTENDED_KEYS,
@@ -843,6 +847,232 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(progress["tested_vulnerabilities"], ["SQL Injection", "XSS"])
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_audit_markdown_metrics_reader_extracts_summary_metrics(self):
+        markdown = """# Embeddings Distribution Analysis Report
+
+## Audit Metrics Summary
+
+| Metric | Value |
+|--------|-------|
+| Count | 10 |
+| Average similarity | 0.450 |
+| Median similarity | 0.430 |
+| Maximum similarity | 0.910 |
+| Minimum similarity | 0.120 |
+| High matches (>= 0.8) | 2 |
+| Medium matches (>= 0.6 and < 0.8) | 3 |
+| Low matches (>= 0.4 and < 0.6) | 5 |
+"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            report_file = Path(tmp_dir) / "audit_report.md"
+            report_file.write_text(markdown, encoding="utf-8")
+            metrics = WebServer._audit_metrics_from_markdown_report_file(report_file)
+        self.assertEqual(metrics["count"], 10)
+        self.assertAlmostEqual(metrics["avg_score"], 0.45)
+        self.assertAlmostEqual(metrics["median_score"], 0.43)
+        self.assertAlmostEqual(metrics["max_score"], 0.91)
+        self.assertAlmostEqual(metrics["min_score"], 0.12)
+        self.assertEqual(metrics["high"], 2)
+        self.assertEqual(metrics["medium"], 3)
+        self.assertEqual(metrics["low"], 5)
+
+    def test_report_audit_metrics_summary_tolerates_missing_score_fields(self):
+        report_lines = []
+        summary_metrics = {
+            "count": 4,
+            "total_items": 12,
+            "scored_items": 4,
+            "has_scores": True,
+            "high": 2,
+            "medium": 1,
+            "low": 1,
+        }
+
+        Report._extend_audit_metrics_summary(report_lines, summary_metrics)
+
+        rendered = "\n".join(report_lines)
+        self.assertIn("| Count | 4 |", rendered)
+        self.assertIn("| High matches (>= 0.8) | 2 |", rendered)
+        self.assertNotIn("Average similarity", rendered)
+        self.assertNotIn("Median similarity", rendered)
+        self.assertNotIn("Maximum similarity", rendered)
+        self.assertNotIn("Minimum similarity", rendered)
+
+    def test_report_audit_metrics_summary_skips_invalid_score_values(self):
+        report_lines = []
+        summary_metrics = {
+            "count": 4,
+            "total_items": 12,
+            "scored_items": 4,
+            "has_scores": True,
+            "avg_score": "N/A",
+            "median_score": "0.456",
+            "max_score": "inf",
+            "min_score": object(),
+            "high": 2,
+            "medium": 1,
+            "low": 1,
+        }
+
+        Report._extend_audit_metrics_summary(report_lines, summary_metrics)
+
+        rendered = "\n".join(report_lines)
+        self.assertNotIn("Average similarity", rendered)
+        self.assertIn("| Median similarity | 0.456 |", rendered)
+        self.assertNotIn("Maximum similarity", rendered)
+        self.assertNotIn("Minimum similarity", rendered)
+
+    def test_audit_metrics_markdown_helper_extracts_metrics(self):
+        markdown = """# Embeddings Distribution Analysis Report
+
+## Audit Metrics Summary
+
+| Metric | Value |
+|--------|-------|
+| Count | 10 |
+| Average similarity | 0.450 |
+| High matches (>= 0.8) | 2 |
+"""
+        metrics = audit_metrics_from_markdown_content(markdown)
+        self.assertEqual(metrics.get("count"), 10)
+        self.assertAlmostEqual(metrics.get("avg_score"), 0.45)
+        self.assertEqual(metrics.get("high"), 2)
+
+    def test_audit_metrics_markdown_helper_stops_after_first_non_table_line(self):
+        section = """
+| Metric | Value |
+|--------|-------|
+| Count | 10 |
+
+Not a table line anymore.
+| Average similarity | 0.450 |
+"""
+        rows = list(iter_audit_metrics_table_rows(section))
+        labels = [label for label, _ in rows]
+        self.assertIn("count", labels)
+        self.assertNotIn("average similarity", labels)
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_audit_markdown_metrics_reader_tolerates_heading_and_label_variations(self):
+        markdown = """# Embeddings Distribution Analysis Report
+
+## Similarity Metrics
+
+| METRIC | VALUE |
+|--------|-------|
+| Count | 10 rows |
+| Mean Similarity | 0.450 score |
+| Median Similarity | 0.430 |
+| Max Similarity | 0.910 |
+| Min Similarity | 0.120 |
+| High Tier Matches | 2 matches |
+| Medium Tier Matches | 3 matches |
+| Low Tier Matches | 5 matches |
+"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            report_file = Path(tmp_dir) / "audit_report.md"
+            report_file.write_text(markdown, encoding="utf-8")
+            metrics = WebServer._audit_metrics_from_markdown_report_file(report_file)
+        self.assertEqual(metrics["count"], 10)
+        self.assertAlmostEqual(metrics["avg_score"], 0.45)
+        self.assertAlmostEqual(metrics["median_score"], 0.43)
+        self.assertAlmostEqual(metrics["max_score"], 0.91)
+        self.assertAlmostEqual(metrics["min_score"], 0.12)
+        self.assertEqual(metrics["high"], 2)
+        self.assertEqual(metrics["medium"], 3)
+        self.assertEqual(metrics["low"], 5)
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_audit_markdown_metrics_reader_accepts_heading_with_inline_annotation(self):
+        markdown = """# Embeddings Distribution Analysis Report
+
+## Audit Metrics Summary (latest run)
+
+| Metric | Value |
+|--------|-------|
+| Count | 11 |
+| Average similarity | 0.510 |
+"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            report_file = Path(tmp_dir) / "audit_report.md"
+            report_file.write_text(markdown, encoding="utf-8")
+            metrics = WebServer._audit_metrics_from_markdown_report_file(report_file)
+        self.assertEqual(metrics.get("count"), 11)
+        self.assertAlmostEqual(metrics.get("avg_score"), 0.51)
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_audit_markdown_metrics_reader_keeps_partial_metrics(self):
+        markdown = """# Embeddings Distribution Analysis Report
+
+## Audit Metrics Summary
+
+| Metric | Value |
+|--------|-------|
+| Count | 10 |
+| Average similarity | 0.450 |
+| High matches (>= 0.8) | 2 |
+"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            report_file = Path(tmp_dir) / "audit_report.md"
+            report_file.write_text(markdown, encoding="utf-8")
+            metrics = WebServer._audit_metrics_from_markdown_report_file(report_file)
+        self.assertEqual(metrics.get("count"), 10)
+        self.assertAlmostEqual(metrics.get("avg_score"), 0.45)
+        self.assertEqual(metrics.get("high"), 2)
+        self.assertNotEqual(metrics, {})
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_audit_markdown_metrics_reader_ignores_tables_outside_metrics_section(self):
+        markdown = """# Embeddings Distribution Analysis Report
+
+## Audit Metrics Summary
+
+| Metric | Value |
+|--------|-------|
+| Count | 10 |
+| Average similarity | 0.450 |
+| High matches (>= 0.8) | 2 |
+
+## Vulnerability Statistics
+
+| Metric | Value |
+|--------|-------|
+| Count | 999 |
+| Average similarity | 0.999 |
+| High matches (>= 0.8) | 999 |
+"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            report_file = Path(tmp_dir) / "audit_report.md"
+            report_file.write_text(markdown, encoding="utf-8")
+            metrics = WebServer._audit_metrics_from_markdown_report_file(report_file)
+        self.assertEqual(metrics.get("count"), 10)
+        self.assertAlmostEqual(metrics.get("avg_score"), 0.45)
+        self.assertEqual(metrics.get("high"), 2)
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_audit_markdown_metrics_reader_requires_metric_value_table_header(self):
+        markdown = """# Embeddings Distribution Analysis Report
+
+## Audit Metrics Summary
+
+| Foo | Bar |
+|-----|-----|
+| Count | 999 |
+| Average similarity | 0.999 |
+
+| Metric | Value |
+|--------|-------|
+| Count | 7 |
+| Average similarity | 0.321 |
+"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            report_file = Path(tmp_dir) / "audit_report.md"
+            report_file.write_text(markdown, encoding="utf-8")
+            metrics = WebServer._audit_metrics_from_markdown_report_file(report_file)
+        self.assertEqual(metrics.get("count"), 7)
+        self.assertAlmostEqual(metrics.get("avg_score"), 0.321)
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_web_summary_markdown_progress_reader_extracts_pipeline_phases_table(self):
         markdown = """# Executive Summary
 
@@ -1071,6 +1301,9 @@ class TestReportSchema(unittest.TestCase):
                 "total_vulnerabilities": 3,
                 "is_partial": True,
                 "model": "Model A",
+                "adaptive_subphases": {
+                    "sqli_file_a": {"label": "SQL Injection · test_files/Vulnerable.java", "completed": 0, "total": 51}
+                },
             }
         )
         self.assertEqual(emitted["event"], "scan_progress")
@@ -1081,6 +1314,41 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(emitted["payload"]["status"], "in_progress")
         self.assertEqual(emitted["payload"]["current_vulnerability"], "")
         self.assertEqual(emitted["payload"]["tested_vulnerabilities"], [])
+        self.assertNotIn("adaptive_subphases", emitted["payload"])
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_emit_scan_progress_keeps_only_summary_phase_rows(self):
+        server = WebServer.__new__(WebServer)
+        emitted = {}
+        server.socketio = SimpleNamespace(emit=lambda event, payload: emitted.update({"event": event, "payload": payload}))
+        server.emit_scan_progress(
+            {
+                "completed_vulnerabilities": 1,
+                "total_vulnerabilities": 3,
+                "is_partial": True,
+                "phases": [
+                    {"id": "embeddings", "label": "Embeddings", "status": "complete", "completed": 5, "total": 5},
+                    {
+                        "id": "graph_deep",
+                        "label": "Deep analysis",
+                        "status": "in_progress",
+                        "completed": 1,
+                        "total": 3,
+                    },
+                    {
+                        "id": "detail_sql_cs",
+                        "label": "SQL Injection · test_files/Vulnerable.cs",
+                        "status": "pending",
+                        "completed": 0,
+                        "total": 65,
+                    },
+                ],
+            }
+        )
+        labels = [str(row.get("label")) for row in emitted["payload"].get("phases", [])]
+        self.assertIn("Embeddings", labels)
+        self.assertIn("Deep analysis", labels)
+        self.assertNotIn("SQL Injection · test_files/Vulnerable.cs", labels)
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_web_emit_scan_progress_coerces_event_version_to_int(self):
@@ -1136,6 +1404,20 @@ class TestReportSchema(unittest.TestCase):
         self.assertTrue(all((row.get("language") or "").lower() == "fr" for row in filtered))
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_filter_reports_supports_model_filter_as_list(self):
+        server = WebServer.__new__(WebServer)
+        server.report_data = [
+            {"vulnerability_type": "SQL Injection", "model": "Model A", "format": "json", "date": "2026-04-17 10:00:00", "language": "en"},
+            {"vulnerability_type": "Executive Summary", "model": "Model B", "format": "json", "date": "2026-04-17 10:00:00", "language": "en"},
+            {"vulnerability_type": "XSS", "model": "Model C", "format": "json", "date": "2026-04-17 10:00:00", "language": "en"},
+        ]
+        server.collect_report_data = lambda: None
+
+        filtered = server.filter_reports(model_filter=["model a", "model b"])
+        models = {row["model"] for row in filtered}
+        self.assertEqual(models, {"Model A", "Model B"})
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_web_socketio_cors_origins_match_web_port_and_config(self):
         from oasis import config
 
@@ -1177,6 +1459,195 @@ class TestReportSchema(unittest.TestCase):
             websocket_m.start(),
             "polling transport should be listed before websocket",
         )
+
+    def test_dashboard_views_include_audit_comparison_table_markup(self):
+        views_js = (
+            Path(__file__).resolve().parents[1]
+            / "oasis"
+            / "static"
+            / "js"
+            / "dashboard"
+            / "views.js"
+        )
+        content = views_js.read_text(encoding="utf-8")
+        self.assertIn("model-emoji", content)
+        self.assertIn("datesSelectionBadgeHTML", content)
+        self.assertIn("buildAuditComparisonTableHtml", content)
+        self.assertIn("DashboardApp.auditComparison.buildTableHtml", content)
+        self.assertIn("DashboardApp.modelSelectionBadgeHtml(0)", content)
+        self.assertIn("data-model", content)
+
+    def test_dashboard_utils_define_audit_comparison_builder(self):
+        utils_js = (
+            Path(__file__).resolve().parents[1]
+            / "oasis"
+            / "static"
+            / "js"
+            / "dashboard"
+            / "utils.js"
+        )
+        content = utils_js.read_text(encoding="utf-8")
+        self.assertIn("DashboardApp.auditComparison", content)
+        self.assertIn("buildTableHtml", content)
+        self.assertIn("Embedding models comparison (latest available audit scores)", content)
+        self.assertIn("audit-comparison-table", content)
+        self.assertIn("No comparable metrics available.", content)
+        self.assertIn("formatAuditNumber", content)
+        self.assertIn("getAuditRunWindowKey", content)
+        self.assertIn("Object.keys(m).length > 0", content)
+
+    def test_dashboard_card_template_supports_dynamic_card_class(self):
+        template_html = (
+            Path(__file__).resolve().parents[1]
+            / "oasis"
+            / "static"
+            / "templates"
+            / "dashboard_card.html"
+        )
+        content = template_html.read_text(encoding="utf-8")
+        self.assertIn("${cardClass}", content)
+
+    def test_dashboard_report_grouping_keeps_audit_metrics_payload_fields(self):
+        utils_js = (
+            Path(__file__).resolve().parents[1]
+            / "oasis"
+            / "static"
+            / "js"
+            / "dashboard"
+            / "utils.js"
+        )
+        content = utils_js.read_text(encoding="utf-8")
+        self.assertIn("audit_metrics", content)
+        self.assertIn("timestamp_dir", content)
+
+    def test_dashboard_model_date_filter_uses_local_report_data_before_api_fallback(self):
+        interactions_js = (
+            Path(__file__).resolve().parents[1]
+            / "oasis"
+            / "static"
+            / "js"
+            / "dashboard"
+            / "interactions.js"
+        )
+        content = interactions_js.read_text(encoding="utf-8")
+        self.assertIn("DashboardApp.reportData", content)
+        self.assertIn("report.vulnerability_type !== vulnType", content)
+        self.assertIn("selectedModelSet.has(normalizeModelKey(report.model))", content)
+        self.assertIn("DashboardApp._normalizeDateEntries", content)
+        self.assertIn("Date.parse", content)
+        self.assertIn("DashboardApp._buildDateEntriesFromApiPayload", content)
+        self.assertIn("params.append('model', modelName)", content)
+        self.assertIn("model-emoji", content)
+        self.assertIn("readSelectedModelsFromCard(card)", content)
+        self.assertIn("writeSelectedModelsToCard(card, selectedList)", content)
+        self.assertIn("isModelSelected(selectedModels, tag.dataset.model)", content)
+        self.assertIn("normalizedSelectedKeys.has(modelKey)", content)
+        self.assertIn("selectedModels.delete(entry)", content)
+        self.assertIn("DashboardApp.updateDatesForModels", content)
+        self.assertIn("DashboardApp.updateModelSelectionBadge", content)
+        self.assertIn("DashboardApp.updateAuditComparisonTableForModels", content)
+
+    def test_dashboard_model_selection_state_uses_helpers(self):
+        interactions_js = (
+            Path(__file__).resolve().parents[1]
+            / "oasis"
+            / "static"
+            / "js"
+            / "dashboard"
+            / "interactions.js"
+        )
+        content = interactions_js.read_text(encoding="utf-8")
+        self.assertIn("readSelectedModelsFromCard(card)", content)
+        self.assertIn("writeSelectedModelsToCard(card, selectedList)", content)
+        self.assertIn("isModelSelected(selectedModels, tag.dataset.model)", content)
+        self.assertIn("DashboardApp.modelSelectionBadgeHtml", content)
+        self.assertIn("const {normalizeModelKey", content)
+
+    def test_dashboard_utils_vulnerability_sort_is_case_insensitive_for_priority_labels(self):
+        utils_js = (
+            Path(__file__).resolve().parents[1]
+            / "oasis"
+            / "static"
+            / "js"
+            / "dashboard"
+            / "utils.js"
+        )
+        content = utils_js.read_text(encoding="utf-8")
+        self.assertIn("'audit report': 0", content)
+        self.assertIn("'executive summary': 1", content)
+        self.assertIn(".toLowerCase()", content)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_report_audit_metrics_summary_uses_scored_count_and_tracks_total_items(self):
+        analyzer_results = {
+            "SQL Injection": {
+                "results": [
+                    {"similarity_score": 0.9},
+                    {"similarity_score": 0.7},
+                    {"similarity_score": "n/a"},
+                ]
+            },
+            "vulnerability_statistics": [
+                {"name": "TOTAL", "total": 3, "high": 1, "medium": 1, "low": 1, "is_total": True}
+            ],
+        }
+        summary = Report._audit_metrics_summary(analyzer_results)
+        self.assertEqual(summary["count"], 2)
+        self.assertTrue(summary["has_scores"])
+        self.assertEqual(summary["scored_items"], 2)
+        self.assertEqual(summary["total_items"], 3)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_report_audit_metrics_summary_accepts_numeric_like_string_scores(self):
+        analyzer_results = {
+            "SQL Injection": {
+                "results": [
+                    {"similarity_score": "0.9"},
+                    {"similarity_score": "0.7"},
+                    {"similarity_score": "n/a"},
+                ]
+            },
+            "vulnerability_statistics": [
+                {"name": "TOTAL", "total": 3, "high": 1, "medium": 1, "low": 1, "is_total": True}
+            ],
+        }
+        summary = Report._audit_metrics_summary(analyzer_results)
+        self.assertEqual(summary["count"], 2)
+        self.assertTrue(summary["has_scores"])
+        self.assertEqual(summary["scored_items"], 2)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_report_audit_metrics_summary_marks_no_scores(self):
+        analyzer_results = {
+            "SQL Injection": {
+                "results": [
+                    {"similarity_score": "n/a"},
+                ]
+            },
+            "vulnerability_statistics": [
+                {"name": "TOTAL", "total": 1, "high": 0, "medium": 0, "low": 0, "is_total": True}
+            ],
+        }
+        summary = Report._audit_metrics_summary(analyzer_results)
+        self.assertEqual(summary["count"], 0)
+        self.assertFalse(summary["has_scores"])
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_report_audit_metrics_summary_ignores_non_dict_vulnerability_entries(self):
+        analyzer_results = {
+            "SQL Injection": {
+                "results": [
+                    {"similarity_score": 0.9},
+                ]
+            },
+            "Malformed Entry": ["unexpected", "list"],
+            "vulnerability_statistics": [
+                {"name": "TOTAL", "total": 1, "high": 1, "medium": 0, "low": 0, "is_total": True}
+            ],
+        }
+        summary = Report._audit_metrics_summary(analyzer_results)
+        self.assertEqual(summary["count"], 1)
+        self.assertTrue(summary["has_scores"])
 
     def test_graph_final_progress_extras_use_graph_scan_mode(self):
         from types import SimpleNamespace

@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -428,90 +429,236 @@ class Report:
         """
         # Set output file paths and filter by output format in one step
         output_files = self.filter_output_files("audit_report")
-
-        # Create report content
-        report = [
-            "# Embeddings Distribution Analysis Report",
-            f"\nDate: {generate_timestamp()}",
-            f"\nEmbedding Model: {embedding_manager.embedding_model}",
-            f"\nTotal Files Analyzed: {embedding_manager.get_embeddings_info()['total_files']}",
-            REPORT['EXPLAIN_ANALYSIS'],
-            '<div class="page-break"></div>'
-        ]
-
-        if vuln_stats := analyzer_results.get('vulnerability_statistics', []):
-            report.extend([
-                "\n## Vulnerability Statistics\n",
-                "| Vulnerability Type | Total | High | Medium | Low |",
-                "|-------------------|-------|------|--------|-----|"
-            ])
-
-            for stat in vuln_stats:
-                if stat.get('is_total', False):
-                    report.append(
-                        f"| **{stat['name']}** | **{stat['total']}** | **{stat['high']}** | **{stat['medium']}** | **{stat['low']}** |"
-                    )
-                else:
-                    report.append(
-                        f"| {stat['name']} | {stat['total']} | {stat['high']} | {stat['medium']} | {stat['low']} |"
-                    )
-
-        # Add detailed analysis section
-        report.append("\n## Analysis Results\n")
-
-        # Add analysis for each vulnerability type
-        for i, (vuln_name, data) in enumerate(analyzer_results.items()):
-            # Skip the vulnerability_statistics key
-            if vuln_name == 'vulnerability_statistics':
-                continue
-
-            if i > 0:
-                report.append('\n<div class="page-break"></div>\n')
-
-            report.extend([
-                f"### {vuln_name}",
-                "#### Threshold Analysis",
-                "| Threshold | Matching Items | Percentage |",
-                "|-----------|----------------|------------|"
-            ])
-
-            # Add threshold analysis
-            for analysis in data['threshold_analysis']:
-                threshold = analysis['threshold']
-                matching_items = analysis['matching_items']
-                percentage = analysis['percentage']
-                report.append(
-                    f"| {threshold:.1f} | {matching_items} | {percentage:.1f}% |"
-                )
-
-            # Add top results
-            report.extend([
-                "\n#### Top Matches",
-                "| Score | Item |",
-                "|-------|------|"
-            ])
-
-            for result in data['results'][:10]:  # Show top 10
-                score = result['similarity_score']
-                item_id = result['item_id']
-                report.append(
-                    f"| {score:.3f} | {item_id} |"
-                )
-
-            # Add statistics
-            stats = data['statistics']
-            report.extend([
-                "\n#### Statistics",
-                f"- **Average similarity**: {stats['avg_score']:.3f}",
-                f"- **Median similarity**: {stats['median_score']:.3f}",
-                f"- **Maximum similarity**: {stats['max_score']:.3f}",
-                f"- **Minimum similarity**: {stats['min_score']:.3f}",
-            ])
+        summary_metrics = self._audit_metrics_summary(analyzer_results)
+        report = self._build_audit_report_header(embedding_manager)
+        self._extend_audit_metrics_summary(report, summary_metrics)
+        self._extend_audit_vulnerability_statistics(report, analyzer_results)
+        self._extend_audit_analysis_results(report, analyzer_results)
 
         # Generate and save report
         self._generate_and_save_report(output_files, report, report_type='Audit')
 
         return output_files
+
+    @staticmethod
+    def _build_audit_report_header(embedding_manager) -> List[str]:
+        embeddings_info = embedding_manager.get_embeddings_info()
+        return [
+            "# Embeddings Distribution Analysis Report",
+            f"\nDate: {generate_timestamp()}",
+            f"\nEmbedding Model: {embedding_manager.embedding_model}",
+            f"\nTotal Files Analyzed: {embeddings_info['total_files']}",
+            REPORT["EXPLAIN_ANALYSIS"],
+            '<div class="page-break"></div>',
+        ]
+
+    @staticmethod
+    def _extend_audit_metrics_summary(report: List[str], summary_metrics: Dict[str, Any]) -> None:
+        if not summary_metrics:
+            return
+
+        def _as_int(metric_name: str, fallback: int = 0) -> int:
+            return int(summary_metrics.get(metric_name, fallback) or 0)
+
+        def _as_float(metric_name: str) -> float | None:
+            raw_value = summary_metrics.get(metric_name)
+            if raw_value is None:
+                return None
+            try:
+                numeric = float(raw_value)
+            except (TypeError, ValueError):
+                return None
+            return numeric if math.isfinite(numeric) else None
+
+        def _append_score_row(rows: List[str], label: str, metric_name: str) -> None:
+            score_value = _as_float(metric_name)
+            if score_value is None:
+                return
+            rows.append(f"| {label} | {score_value:.3f} |")
+
+        total_items = int(summary_metrics.get("total_items", summary_metrics.get("count", 0)) or 0)
+        scored_items = int(summary_metrics.get("scored_items", summary_metrics.get("count", 0)) or 0)
+        has_scores = bool(summary_metrics.get("has_scores", _as_int("count") > 0))
+        if not has_scores:
+            report.extend(
+                [
+                    "\n## Audit Metrics Summary\n",
+                    "> No audit metrics are available (no scored items).",
+                    f"> Total items: {total_items}",
+                    f"> Scored items: {scored_items}",
+                ]
+            )
+            return
+        summary_rows = [
+            "\n## Audit Metrics Summary\n",
+            "| Metric | Value |",
+            "|--------|-------|",
+            f"| Count | {_as_int('count')} |",
+            f"| Total items | {total_items} |",
+            f"| Scored items | {scored_items} |",
+        ]
+        _append_score_row(summary_rows, "Average similarity", "avg_score")
+        _append_score_row(summary_rows, "Median similarity", "median_score")
+        _append_score_row(summary_rows, "Maximum similarity", "max_score")
+        _append_score_row(summary_rows, "Minimum similarity", "min_score")
+        summary_rows.extend(
+            [
+                f"| High matches (>= 0.8) | {_as_int('high')} |",
+                f"| Medium matches (>= 0.6 and < 0.8) | {_as_int('medium')} |",
+                f"| Low matches (>= 0.4 and < 0.6) | {_as_int('low')} |",
+            ]
+        )
+        report.extend(summary_rows)
+
+    @staticmethod
+    def _extend_audit_vulnerability_statistics(
+        report: List[str], analyzer_results: Dict[str, Dict]
+    ) -> None:
+        vuln_stats = analyzer_results.get("vulnerability_statistics", [])
+        if not vuln_stats:
+            return
+        report.extend(
+            [
+                "\n## Vulnerability Statistics\n",
+                "| Vulnerability Type | Total | High | Medium | Low |",
+                "|-------------------|-------|------|--------|-----|",
+            ]
+        )
+        for stat in vuln_stats:
+            if stat.get("is_total", False):
+                report.append(
+                    f"| **{stat['name']}** | **{stat['total']}** | **{stat['high']}** | **{stat['medium']}** | **{stat['low']}** |"
+                )
+                continue
+            report.append(
+                f"| {stat['name']} | {stat['total']} | {stat['high']} | {stat['medium']} | {stat['low']} |"
+            )
+
+    def _extend_audit_analysis_results(self, report: List[str], analyzer_results: Dict[str, Dict]) -> None:
+        report.append("\n## Analysis Results\n")
+        section_index = 0
+        for vuln_name, data in analyzer_results.items():
+            if vuln_name == "vulnerability_statistics":
+                continue
+            if section_index > 0:
+                report.append("\n<div class=\"page-break\"></div>\n")
+            self._extend_audit_vulnerability_result_section(report, vuln_name, data)
+            section_index += 1
+
+    @staticmethod
+    def _extend_audit_vulnerability_result_section(
+        report: List[str], vuln_name: str, data: Dict[str, Any]
+    ) -> None:
+        report.extend(
+            [
+                f"### {vuln_name}",
+                "#### Threshold Analysis",
+                "| Threshold | Matching Items | Percentage |",
+                "|-----------|----------------|------------|",
+            ]
+        )
+        for analysis in data["threshold_analysis"]:
+            threshold = analysis["threshold"]
+            matching_items = analysis["matching_items"]
+            percentage = analysis["percentage"]
+            report.append(f"| {threshold:.1f} | {matching_items} | {percentage:.1f}% |")
+
+        report.extend(
+            [
+                "\n#### Top Matches",
+                "| Score | Item |",
+                "|-------|------|",
+            ]
+        )
+        for result in data["results"][:10]:
+            score = result["similarity_score"]
+            item_id = result["item_id"]
+            report.append(f"| {score:.3f} | {item_id} |")
+
+        stats = data["statistics"]
+        report.extend(
+            [
+                "\n#### Statistics",
+                f"- **Average similarity**: {stats['avg_score']:.3f}",
+                f"- **Median similarity**: {stats['median_score']:.3f}",
+                f"- **Maximum similarity**: {stats['max_score']:.3f}",
+                f"- **Minimum similarity**: {stats['min_score']:.3f}",
+            ]
+        )
+
+    @staticmethod
+    def _audit_metrics_summary(analyzer_results: Dict[str, Dict]) -> Dict[str, Any]:
+        """
+        Build one comparable metrics summary from audit analyzer results.
+        """
+        def _as_float_score(value: Any) -> float | None:
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                return None
+            return numeric if math.isfinite(numeric) else None
+
+        total_row = next(
+            (
+                row
+                for row in analyzer_results.get("vulnerability_statistics", [])
+                or []
+                if row.get("is_total")
+            ),
+            None,
+        )
+        if total_row is None:
+            return {}
+
+        all_scores: List[float] = []
+        for vuln_name, data in analyzer_results.items():
+            if vuln_name == "vulnerability_statistics":
+                continue
+            if not isinstance(data, dict):
+                continue
+            for result in data.get("results", []) or []:
+                score = _as_float_score(result.get("similarity_score"))
+                if score is not None:
+                    all_scores.append(score)
+
+        if not all_scores:
+            total_items = int(total_row.get("total", 0) or 0)
+            return {
+                "count": 0,
+                "has_scores": False,
+                "total_items": total_items,
+                "scored_items": 0,
+                "avg_score": 0.0,
+                "median_score": 0.0,
+                "max_score": 0.0,
+                "min_score": 0.0,
+                "high": int(total_row.get("high", 0) or 0),
+                "medium": int(total_row.get("medium", 0) or 0),
+                "low": int(total_row.get("low", 0) or 0),
+            }
+
+        scores_sorted = sorted(all_scores)
+        mid = len(scores_sorted) // 2
+        if len(scores_sorted) % 2 == 0:
+            median = (scores_sorted[mid - 1] + scores_sorted[mid]) / 2
+        else:
+            median = scores_sorted[mid]
+
+        total_items = int(total_row.get("total", len(all_scores)) or 0)
+        scored_items = len(all_scores)
+        return {
+            "count": scored_items,
+            "has_scores": True,
+            "total_items": total_items,
+            "scored_items": scored_items,
+            "avg_score": float(sum(all_scores) / len(all_scores)),
+            "median_score": float(median),
+            "max_score": float(max(all_scores)),
+            "min_score": float(min(all_scores)),
+            "high": int(total_row.get("high", 0) or 0),
+            "medium": int(total_row.get("medium", 0) or 0),
+            "low": int(total_row.get("low", 0) or 0),
+        }
 
     def _executive_summary_similarity_groups(
         self, all_results: Dict[str, List[Dict]]

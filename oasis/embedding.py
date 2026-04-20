@@ -17,10 +17,12 @@ from .config import EXTRACT_FUNCTIONS, SUPPORTED_EXTENSIONS, DEFAULT_ARGS
 # Import from other modules
 from .ollama_manager import OllamaManager
 from .schemas.function_extract import FunctionExtractResponse
-from .tools import create_cache_dir, logger, chunk_content, parse_input, sanitize_name, open_file
+from .tools import create_cache_dir, logger, chunk_content, sanitize_name, open_file
 from pydantic import ValidationError
 
 from .helpers.embedding import EMBEDDING_PROGRESS_MIN_INTERVAL_SEC, EmbeddingProgressThrottle
+from .helpers.embed_models import resolve_embed_models
+from .helpers.input_files import resolve_valid_embedding_input_files
 
 
 class EmbeddingManager:
@@ -45,10 +47,11 @@ class EmbeddingManager:
         self.input_path = args.input_path
         self.clear_cache = args.clear_cache_embeddings
         self.cache_days = args.cache_days or DEFAULT_ARGS['CACHE_DAYS']
-        self.embedding_model = args.embed_model or DEFAULT_ARGS['EMBED_MODEL']
+        self.embedding_model = self._resolve_primary_embed_model(getattr(args, "embed_model", None))
 
         self.embedding_analysis_type = args.embeddings_analyze_type or DEFAULT_ARGS['EMBEDDING_ANALYSIS_TYPE']
         self.analyze_by_function = self.embedding_analysis_type == 'function'
+        self.silent = bool(getattr(args, "silent", False))
         
         self.threshold = args.threshold or DEFAULT_ARGS['THRESHOLD']
         self.code_base: Dict = {}
@@ -58,6 +61,14 @@ class EmbeddingManager:
         self.supported_extensions = self._normalize_extensions(args.extensions)
         self.chunk_size = args.chunk_size or DEFAULT_ARGS['CHUNK_SIZE']
         self._setup_cache()
+
+    @staticmethod
+    def _resolve_primary_embed_model(raw_embed_model: Union[str, List[str], Tuple[str, ...], None]) -> str:
+        """
+        Resolve the primary embedding model from CLI values.
+        """
+        _, primary = resolve_embed_models(raw_embed_model)
+        return primary
 
     def _normalize_extensions(self, extensions_arg) -> List[str]:
         """
@@ -115,6 +126,70 @@ class EmbeddingManager:
         """
         return file_path.suffix.lower()[1:] in self.supported_extensions
 
+    def _build_index_process_args(self, files: List[Path]) -> List[argparse.Namespace]:
+        """
+        Build multiprocessing arguments for files that need embedding generation.
+        """
+        return [
+            argparse.Namespace(
+                input_path=str(file_path),
+                embed_model=self.embedding_model,
+                chunk_size=self.chunk_size,
+                analyze_by_function=self.analyze_by_function,
+                api_url=self.ollama_manager.api_url,
+            )
+            for file_path in files
+            if self.analyze_by_function or str(file_path) not in self.code_base
+        ]
+
+    def _store_file_embedding_result(
+        self,
+        file_path: str,
+        content: str,
+        embedding: List[float],
+    ) -> None:
+        """
+        Store base file embedding payload when missing from the cache.
+        """
+        if file_path in self.code_base:
+            return
+        self.code_base[file_path] = {
+            "content": content,
+            "embedding": embedding,
+            "chunks": chunk_content(content, self.chunk_size),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    def _store_function_embedding_results(
+        self,
+        file_path: str,
+        function_embeddings: Optional[Dict[str, Tuple[str, List[float]]]],
+    ) -> None:
+        """
+        Store function-level embeddings generated for a file.
+        """
+        if not function_embeddings:
+            return
+        file_entry = self.code_base.setdefault(file_path, {})
+        functions_entry = file_entry.setdefault("functions", {})
+        for func_id, (func_content, func_embedding) in function_embeddings.items():
+            functions_entry[func_id] = {
+                "content": func_content,
+                "embedding": func_embedding,
+                "timestamp": datetime.now().isoformat(),
+            }
+
+    def _store_index_result(self, result: Any) -> None:
+        """
+        Persist one worker result in the code base.
+        """
+        if not result:
+            return
+        file_path, content, embedding, is_function_analysis, function_embeddings = result
+        self._store_file_embedding_result(file_path, content, embedding)
+        if is_function_analysis:
+            self._store_function_embedding_results(file_path, function_embeddings)
+
     def index_code_files(
         self,
         files: List[Path],
@@ -133,18 +208,8 @@ class EmbeddingManager:
             # Calculate optimal number of processes
             num_processes = max(1, min(cpu_count(), len(files)))
 
-            # Prepare arguments for parallel processing and filter files, including the analyze_by_function flag
-            process_args = [
-                argparse.Namespace(
-                    input_path=str(file_path),
-                    embed_model=self.embedding_model,
-                    chunk_size=self.chunk_size,
-                    analyze_by_function=self.analyze_by_function,
-                    api_url=self.ollama_manager.api_url
-                )
-                for file_path in files 
-                if self.analyze_by_function or str(file_path) not in self.code_base
-            ]
+            # Prepare arguments for parallel processing and filter cached files.
+            process_args = self._build_index_process_args(files)
             if not process_args:
                 return
 
@@ -160,33 +225,14 @@ class EmbeddingManager:
 
             # Process files in parallel with progress bar
             with Pool(processes=num_processes) as pool:
-                with tqdm(total=len(process_args), desc="Generating embeddings", leave=True) as pbar:
+                with tqdm(
+                    total=len(process_args),
+                    desc="Generating embeddings",
+                    leave=True,
+                    disable=self.silent,
+                ) as pbar:
                     for result in pool.imap_unordered(process_file_parallel, process_args):
-                        if result:
-                            file_path, content, embedding, is_function_analysis, function_embeddings = result
-
-                            # Store file data
-                            if file_path not in self.code_base:
-                                self.code_base[file_path] = {
-                                    'content': content,
-                                    'embedding': embedding,
-                                    'chunks': chunk_content(content, self.chunk_size),
-                                    'timestamp': datetime.now().isoformat()
-                                }
-
-                            # If analyzing by function, store function data
-                            if is_function_analysis and function_embeddings:
-                                if 'functions' not in self.code_base[file_path]:
-                                    self.code_base[file_path]['functions'] = {}
-
-                                # Store function embeddings
-                                for func_id, (func_content, func_embedding) in function_embeddings.items():
-                                    self.code_base[file_path]['functions'][func_id] = {
-                                        'content': func_content,
-                                        'embedding': func_embedding,
-                                        'timestamp': datetime.now().isoformat()
-                                    }
-
+                        self._store_index_result(result)
                         pbar.update(1)
                         throttle.maybe_emit(
                             embedding_progress_hook,
@@ -214,6 +260,8 @@ class EmbeddingManager:
         self,
         args,
         *,
+        files_to_analyze: Optional[List[Path]] = None,
+        pre_parsed: bool = False,
         embedding_progress_hook: Optional[Callable[[int, int], None]] = None,
         embedding_progress_min_interval_sec: float = EMBEDDING_PROGRESS_MIN_INTERVAL_SEC,
     ):
@@ -222,28 +270,20 @@ class EmbeddingManager:
 
         Args:
             args: Arguments
+            files_to_analyze: Optional pre-resolved file list to avoid reparsing input paths.
+            pre_parsed: When ``True``, ``files_to_analyze`` is treated as already normalized
+                valid files (skip input parsing + extension filtering).
             embedding_progress_hook: Optional callback ``(completed_files, total_files)`` during embedding pass.
             embedding_progress_min_interval_sec: Throttle interval between intermediate hook calls.
         """
-        # Parse input files and generate embeddings
-        files_to_analyze = parse_input(args.input_path)
-        if not files_to_analyze:
+        valid_files = self.prepare_input_files(
+            args,
+            files_to_analyze=files_to_analyze,
+            pre_parsed=pre_parsed,
+        )
+        if not valid_files:
             logger.error("No valid files to analyze")
             return []
-
-        # Filter files by supported extensions
-        valid_files = []
-        for file_path in files_to_analyze:
-            if self.is_valid_file(file_path):
-                valid_files.append(file_path)
-            else:
-                logger.debug(f"Skipping unsupported file: {file_path}")
-
-        if not valid_files:
-            logger.error("No files with supported extensions found for analysis")
-            return []
-
-        logger.info(f"Found {len(valid_files)} files with supported extensions out of {len(files_to_analyze)} total files")
 
         # Generate embeddings only for new files or functions
         new_files = []
@@ -272,6 +312,54 @@ class EmbeddingManager:
             logger.debug("All files found in cache with valid structure")
 
         return valid_files
+
+    def prepare_input_files(
+        self,
+        args,
+        *,
+        files_to_analyze: Optional[List[Path]] = None,
+        pre_parsed: bool = False,
+    ) -> List[Path]:
+        """
+        Resolve and normalize source files used for embedding generation.
+
+        Returns:
+            List of valid files filtered by configured extensions.
+        """
+        valid_files, total_candidates = self._resolve_valid_input_files(
+            args,
+            files_to_analyze=files_to_analyze,
+            pre_parsed=pre_parsed,
+        )
+        if valid_files:
+            logger.info(
+                f"Found {len(valid_files)} files with supported extensions out of "
+                f"{total_candidates} total files"
+            )
+        return valid_files
+
+    def _resolve_valid_input_files(
+        self,
+        args,
+        *,
+        files_to_analyze: Optional[List[Path]] = None,
+        pre_parsed: bool = False,
+    ) -> tuple[List[Path], int]:
+        """
+        Pure resolver for valid input files.
+
+        Returns:
+            Tuple of (valid_files, total_candidate_count).
+        """
+        valid_files, total_candidates, unsupported_files = resolve_valid_embedding_input_files(
+            str(args.input_path),
+            self.is_valid_file,
+            files_to_analyze=files_to_analyze,
+            pre_parsed=pre_parsed,
+        )
+        for file_path in unsupported_files:
+            logger.debug(f"Skipping unsupported file: {file_path}")
+        return valid_files, total_candidates
 
     def normalize_cache_entry(self, entry: Any) -> Dict:
         """
