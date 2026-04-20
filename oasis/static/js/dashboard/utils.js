@@ -432,6 +432,21 @@ if (typeof DashboardApp !== 'undefined') {
 
     DashboardApp.auditComparison = DashboardApp.auditComparison || {};
     DashboardApp.auditComparison.MAX_AUDIT_COMPARISON_ROWS = 30;
+    // Dedicated default sort key (can be wired to UI choice later).
+    DashboardApp.auditComparison.DEFAULT_SORT_METRIC_KEY = 'avg_score';
+    // METRIC_CONFIG: frozen array of { key, label, digits, sortable } rows. Keys must match audit_metrics
+    // on report objects. At most one entry should have sortable: true (or DEFAULT_SORT_METRIC_KEY wins).
+    // Example entry: { key: 'avg_score', label: 'Avg', digits: 3, sortable: true }.
+    DashboardApp.auditComparison.METRIC_CONFIG = Object.freeze([
+        { key: 'count', label: 'Count', digits: 0, sortable: false },
+        { key: 'avg_score', label: 'Avg', digits: 3, sortable: true },
+        { key: 'median_score', label: 'Median', digits: 3, sortable: false },
+        { key: 'max_score', label: 'Max', digits: 3, sortable: false },
+        { key: 'min_score', label: 'Min', digits: 3, sortable: false },
+        { key: 'high', label: 'High', digits: 0, sortable: false },
+        { key: 'medium', label: 'Medium', digits: 0, sortable: false },
+        { key: 'low', label: 'Low', digits: 0, sortable: false }
+    ]);
     // Contract expected from backend report rows used by the audit comparison table:
     // - `audit_metrics`: object with numeric-like keys (count, avg_score, median_score, max_score, min_score, high, medium, low)
     // - `timestamp_dir`: stable run identifier shared by reports from the same audit run
@@ -518,6 +533,51 @@ if (typeof DashboardApp !== 'undefined') {
             }
             return digits > 0 ? numeric.toFixed(digits) : String(Math.trunc(numeric));
         };
+        const resolveAuditMetricRuntimeConfig = function() {
+            const configured = Array.isArray(DashboardApp.auditComparison.METRIC_CONFIG)
+                ? DashboardApp.auditComparison.METRIC_CONFIG
+                : [];
+            const metricConfig = configured.filter((cfg) => (
+                cfg
+                && typeof cfg.key === 'string'
+                && cfg.key.trim()
+                && typeof cfg.label === 'string'
+            ));
+            const uniqueKeys = new Set(metricConfig.map((cfg) => String(cfg.key)));
+            if (uniqueKeys.size !== metricConfig.length) {
+                console.warn('Invalid audit metric config: duplicate keys detected, using first occurrences.');
+            }
+            // Runtime shape: metricConfig entries match METRIC_CONFIG rows; sortMetric is one of those
+            // objects (same keys) and drives row sort via sortMetric.key into report.audit_metrics.
+            const dedupedMetricConfig = [];
+            const seenMetricKeys = new Set();
+            metricConfig.forEach((cfg) => {
+                const key = String(cfg.key);
+                if (seenMetricKeys.has(key)) {
+                    return;
+                }
+                seenMetricKeys.add(key);
+                dedupedMetricConfig.push(cfg);
+            });
+            if (dedupedMetricConfig.length === 0) {
+                return {
+                    metricConfig: [{ key: 'avg_score', label: 'Avg', digits: 3, sortable: true }],
+                    sortMetric: { key: 'avg_score', label: 'Avg', digits: 3, sortable: true }
+                };
+            }
+            const defaultKey = String(DashboardApp.auditComparison.DEFAULT_SORT_METRIC_KEY || '').trim();
+            const sortableMetrics = dedupedMetricConfig.filter((cfg) => cfg.sortable);
+            if (sortableMetrics.length > 1) {
+                console.warn('Audit metric config has multiple sortable metrics; using DEFAULT_SORT_METRIC_KEY priority.');
+            }
+            const sortMetric = dedupedMetricConfig.find((cfg) => cfg.key === defaultKey)
+                || sortableMetrics[0]
+                || dedupedMetricConfig[0];
+            if (defaultKey && !dedupedMetricConfig.some((cfg) => cfg.key === defaultKey)) {
+                console.warn(`DEFAULT_SORT_METRIC_KEY=${defaultKey} not found in METRIC_CONFIG; using fallback sort metric ${sortMetric.key}.`);
+            }
+            return { metricConfig: dedupedMetricConfig, sortMetric };
+        };
 
         const rowsWithMetrics = (reports || []).filter(isAuditComparisonCandidate);
         if (rowsWithMetrics.length < 2) {
@@ -550,8 +610,26 @@ if (typeof DashboardApp !== 'undefined') {
                 </div>
             `;
         }
+        const runtimeMetrics = resolveAuditMetricRuntimeConfig();
+        const { metricConfig, sortMetric } = runtimeMetrics;
         const sortedRows = Object.values(rowsByModel)
             .sort((left, right) => {
+                const leftSortValue = toFiniteNumber(left?.audit_metrics?.[sortMetric.key]);
+                const rightSortValue = toFiniteNumber(right?.audit_metrics?.[sortMetric.key]);
+                if (leftSortValue === null && rightSortValue === null) {
+                    const leftName = String(left.model || '');
+                    const rightName = String(right.model || '');
+                    return leftName.localeCompare(rightName, undefined, { sensitivity: 'base' });
+                }
+                if (leftSortValue === null) {
+                    return 1;
+                }
+                if (rightSortValue === null) {
+                    return -1;
+                }
+                if (rightSortValue !== leftSortValue) {
+                    return rightSortValue - leftSortValue;
+                }
                 const leftName = String(left.model || '');
                 const rightName = String(right.model || '');
                 return leftName.localeCompare(rightName, undefined, { sensitivity: 'base' });
@@ -559,21 +637,34 @@ if (typeof DashboardApp !== 'undefined') {
         const maxRows = Number(DashboardApp.auditComparison.MAX_AUDIT_COMPARISON_ROWS) || 30;
         const isTrimmed = sortedRows.length > maxRows;
         const rowsForRender = isTrimmed ? sortedRows.slice(0, maxRows) : sortedRows;
+        const maxByMetric = metricConfig.reduce((acc, cfg) => {
+            const { key } = cfg;
+            const values = rowsForRender
+                .map((report) => toFiniteNumber(report?.audit_metrics?.[key]))
+                .filter((value) => value !== null);
+            acc[key] = values.length ? Math.max(...values) : null;
+            return acc;
+        }, {});
         const tableRows = rowsForRender
             .map((report) => {
                 const modelName = String(report.model || '');
                 const m = report.audit_metrics || {};
+                const renderMetricCell = (cfg) => {
+                    const { key, digits } = cfg;
+                    const rawValue = m[key];
+                    const displayValue = h(formatAuditNumber(rawValue, digits));
+                    const numericValue = toFiniteNumber(rawValue);
+                    const maxValue = maxByMetric[key];
+                    const isMax =
+                        numericValue !== null &&
+                        maxValue !== null &&
+                        numericValue === maxValue;
+                    return isMax ? `<strong>${displayValue}</strong>` : displayValue;
+                };
                 return `
                     <tr data-model="${h(modelDataAttrValue(modelName))}">
                         <td>${h(formatDisplayName(modelName, 'model', false))}</td>
-                        <td>${h(formatAuditNumber(m.count))}</td>
-                        <td>${h(formatAuditNumber(m.avg_score, 3))}</td>
-                        <td>${h(formatAuditNumber(m.median_score, 3))}</td>
-                        <td>${h(formatAuditNumber(m.max_score, 3))}</td>
-                        <td>${h(formatAuditNumber(m.min_score, 3))}</td>
-                        <td>${h(formatAuditNumber(m.high))}</td>
-                        <td>${h(formatAuditNumber(m.medium))}</td>
-                        <td>${h(formatAuditNumber(m.low))}</td>
+                        ${metricConfig.map((cfg) => `<td>${renderMetricCell(cfg)}</td>`).join('')}
                     </tr>
                 `;
             })
@@ -591,14 +682,7 @@ if (typeof DashboardApp !== 'undefined') {
                         <thead>
                             <tr>
                                 <th>Model</th>
-                                <th>Count</th>
-                                <th>Avg</th>
-                                <th>Median</th>
-                                <th>Max</th>
-                                <th>Min</th>
-                                <th>High</th>
-                                <th>Medium</th>
-                                <th>Low</th>
+                                ${metricConfig.map((cfg) => `<th>${h(cfg.label)}</th>`).join('')}
                             </tr>
                         </thead>
                         <tbody>${tableRows}</tbody>

@@ -88,7 +88,31 @@ from .helpers.executive_summary_similarity import (
 logger = logging.getLogger("oasis")
 
 
-def _parse_env_int(name: str, default: int, *, minimum: Optional[int] = None, maximum: Optional[int] = None) -> int:
+def _log_warning_main_process(msg: str, *args: Any, **kwargs: Any) -> None:
+    """
+    Emit a warning only from the main process.
+
+    Pool workers re-import this module; repeating env clamp warnings there duplicates
+    console output and interleaves with tqdm on stderr, corrupting the progress line.
+    """
+    try:
+        from multiprocessing import current_process
+
+        if current_process().name != "MainProcess":
+            return
+    except Exception:
+        pass
+    logger.warning(msg, *args, **kwargs)
+
+
+def _parse_env_int(
+    name: str,
+    default: int,
+    *,
+    minimum: Optional[int] = None,
+    maximum: Optional[int] = None,
+    warn_clamps: bool = True,
+) -> int:
     raw = os.environ.get(name)
     if raw is None or not str(raw).strip():
         v = default
@@ -96,13 +120,15 @@ def _parse_env_int(name: str, default: int, *, minimum: Optional[int] = None, ma
         try:
             v = int(str(raw).strip(), 10)
         except ValueError:
-            logger.warning("Invalid integer for %s=%r; using default %s", name, raw, default)
+            _log_warning_main_process("Invalid integer for %s=%r; using default %s", name, raw, default)
             v = default
     if minimum is not None and v < minimum:
-        logger.warning("%s=%s below minimum %s; clamping", name, v, minimum)
+        if warn_clamps:
+            _log_warning_main_process("%s=%s below minimum %s; clamping", name, v, minimum)
         v = minimum
     if maximum is not None and v > maximum:
-        logger.warning("%s=%s above maximum %s; clamping", name, v, maximum)
+        if warn_clamps:
+            _log_warning_main_process("%s=%s above maximum %s; clamping", name, v, maximum)
         v = maximum
     return v
 
@@ -115,13 +141,13 @@ def _parse_env_float(name: str, default: float, *, minimum: Optional[float] = No
         try:
             v = float(str(raw).strip())
         except ValueError:
-            logger.warning("Invalid float for %s=%r; using default %s", name, raw, default)
+            _log_warning_main_process("Invalid float for %s=%r; using default %s", name, raw, default)
             v = default
     if minimum is not None and v < minimum:
-        logger.warning("%s=%s below minimum %s; clamping", name, v, minimum)
+        _log_warning_main_process("%s=%s below minimum %s; clamping", name, v, minimum)
         v = minimum
     if maximum is not None and v > maximum:
-        logger.warning("%s=%s above maximum %s; clamping", name, v, maximum)
+        _log_warning_main_process("%s=%s above maximum %s; clamping", name, v, maximum)
         v = maximum
     return v
 
@@ -143,7 +169,7 @@ DEFAULT_ARGS = {
     'OUTPUT_FORMAT': 'all',
     'EMBEDDING_ANALYSIS_TYPE': 'file',
     'CACHE_DAYS': 7,
-    'EMBED_MODEL': 'qwen3-embedding:4b',
+    'EMBED_MODEL': 'nomic-embed-text',
     'SCAN_MODEL': None,  # If None, same as main model
 }
 
@@ -223,6 +249,25 @@ SUPPORTED_EXTENSIONS: Set[str] = {
 
 # Chunk configuration (static)
 MAX_CHUNK_SIZE = 2048
+EMBEDDING_FALLBACK_MIN_CHUNK_SIZE = _parse_env_int(
+    "OASIS_EMBEDDING_FALLBACK_MIN_CHUNK_SIZE",
+    256,
+    minimum=64,
+)
+EMBEDDING_DETECTED_CHUNK_SIZE_MIN = _parse_env_int(
+    "OASIS_EMBEDDING_DETECTED_CHUNK_SIZE_MIN",
+    64,
+    minimum=1,
+)
+_DETECTED_CHUNK_SIZE_MAX_RECOMMENDED = MAX_CHUNK_SIZE * 4
+# Large env values are clamped silently; no CLI warning (no user action required).
+EMBEDDING_DETECTED_CHUNK_SIZE_MAX = _parse_env_int(
+    "OASIS_EMBEDDING_DETECTED_CHUNK_SIZE_MAX",
+    262144,
+    minimum=EMBEDDING_DETECTED_CHUNK_SIZE_MIN,
+    maximum=_DETECTED_CHUNK_SIZE_MAX_RECOMMENDED,
+    warn_clamps=False,
+)
 
 # =============================================================================
 # Ollama & HTTP client — chunk LLM timeouts, generation budget, transport

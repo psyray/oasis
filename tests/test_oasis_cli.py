@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from oasis.config import REPORT
+from oasis.config import MAX_CHUNK_SIZE, REPORT
 from oasis.helpers.embed_models import normalize_embed_models, primary_embed_model, resolve_embed_models
 from oasis.oasis import OasisScanner
 
@@ -262,6 +262,191 @@ class TestOasisAuditMode(unittest.TestCase):
         )
         self.assertEqual(scanner.report.generate_audit_report.call_count, 2)
 
+    def test_handle_audit_mode_reuses_single_detected_chunk_size_for_all_models(self):
+        scanner = OasisScanner()
+        scanner.embed_models = ["embed-a", "embed-b"]
+        scanner.args = SimpleNamespace(
+            embed_model=["embed-a", "embed-b"],
+            input_path="/tmp/project",
+            chunk_size=None,
+        )
+        scanner.ollama_manager = MagicMock()
+        scanner.ollama_manager.detect_optimal_chunk_size.return_value = 1024
+        scanner.report = MagicMock()
+        vuln_mapping = {"xss": {"name": "XSS"}}
+
+        with patch(
+            "oasis.oasis.SecurityAnalyzer.get_vulnerabilities_to_check",
+            return_value=([{"name": "XSS"}], []),
+        ), patch("oasis.oasis.EmbeddingManager") as manager_cls, patch(
+            "oasis.oasis.EmbeddingAnalyzer"
+        ) as analyzer_cls:
+            base_manager = MagicMock()
+            base_manager.prepare_input_files.return_value = [Path("a.py"), Path("b.py")]
+            manager_a = MagicMock()
+            manager_b = MagicMock()
+            manager_cls.side_effect = [base_manager, manager_a, manager_b]
+            analyzer_a = self._build_embedding_analyzer_mock()
+            analyzer_b = self._build_embedding_analyzer_mock()
+            analyzer_cls.side_effect = [analyzer_a, analyzer_b]
+
+            result = scanner.handle_audit_mode(vuln_mapping)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            scanner.ollama_manager.detect_optimal_chunk_size.call_args_list,
+            [unittest.mock.call("embed-a")],
+        )
+        first_model_args = manager_cls.call_args_list[1].args[0]
+        second_model_args = manager_cls.call_args_list[2].args[0]
+        self.assertEqual(first_model_args.chunk_size, 1024)
+        self.assertEqual(second_model_args.chunk_size, 1024)
+
+    def test_handle_audit_mode_reuses_single_detected_chunk_size_even_with_existing_auto_chunk_size(self):
+        scanner = OasisScanner()
+        scanner.embed_models = ["embed-a", "embed-b"]
+        scanner.chunk_size_is_manual = False
+        scanner.args = SimpleNamespace(
+            embed_model=["embed-a", "embed-b"],
+            input_path="/tmp/project",
+            chunk_size=7372,
+        )
+        scanner.ollama_manager = MagicMock()
+        scanner.ollama_manager.detect_optimal_chunk_size.return_value = 1536
+        scanner.report = MagicMock()
+        vuln_mapping = {"xss": {"name": "XSS"}}
+
+        with patch(
+            "oasis.oasis.SecurityAnalyzer.get_vulnerabilities_to_check",
+            return_value=([{"name": "XSS"}], []),
+        ), patch("oasis.oasis.EmbeddingManager") as manager_cls, patch(
+            "oasis.oasis.EmbeddingAnalyzer"
+        ) as analyzer_cls:
+            base_manager = MagicMock()
+            base_manager.prepare_input_files.return_value = [Path("a.py"), Path("b.py")]
+            manager_a = MagicMock()
+            manager_b = MagicMock()
+            manager_cls.side_effect = [base_manager, manager_a, manager_b]
+            analyzer_a = self._build_embedding_analyzer_mock()
+            analyzer_b = self._build_embedding_analyzer_mock()
+            analyzer_cls.side_effect = [analyzer_a, analyzer_b]
+
+            result = scanner.handle_audit_mode(vuln_mapping)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            scanner.ollama_manager.detect_optimal_chunk_size.call_args_list,
+            [unittest.mock.call("embed-a")],
+        )
+
+    def test_handle_audit_mode_uses_safe_fallback_when_detection_returns_invalid(self):
+        scanner = OasisScanner()
+        scanner.embed_models = ["embed-a", "embed-b"]
+        scanner.args = SimpleNamespace(
+            embed_model=["embed-a", "embed-b"],
+            input_path="/tmp/project",
+            chunk_size=None,
+        )
+        scanner.ollama_manager = MagicMock()
+        scanner.ollama_manager.detect_optimal_chunk_size.return_value = None
+        scanner.report = MagicMock()
+        vuln_mapping = {"xss": {"name": "XSS"}}
+
+        with patch(
+            "oasis.oasis.SecurityAnalyzer.get_vulnerabilities_to_check",
+            return_value=([{"name": "XSS"}], []),
+        ), patch("oasis.oasis.EmbeddingManager") as manager_cls, patch(
+            "oasis.oasis.EmbeddingAnalyzer"
+        ) as analyzer_cls:
+            base_manager = MagicMock()
+            base_manager.prepare_input_files.return_value = [Path("a.py"), Path("b.py")]
+            manager_a = MagicMock()
+            manager_b = MagicMock()
+            manager_cls.side_effect = [base_manager, manager_a, manager_b]
+            analyzer_a = self._build_embedding_analyzer_mock()
+            analyzer_b = self._build_embedding_analyzer_mock()
+            analyzer_cls.side_effect = [analyzer_a, analyzer_b]
+
+            result = scanner.handle_audit_mode(vuln_mapping)
+
+        self.assertTrue(result)
+        first_model_args = manager_cls.call_args_list[1].args[0]
+        second_model_args = manager_cls.call_args_list[2].args[0]
+        self.assertEqual(first_model_args.chunk_size, MAX_CHUNK_SIZE)
+        self.assertEqual(second_model_args.chunk_size, MAX_CHUNK_SIZE)
+
+    def test_handle_audit_mode_uses_safe_fallback_when_detection_raises(self):
+        scanner = OasisScanner()
+        scanner.embed_models = ["embed-a"]
+        scanner.args = SimpleNamespace(
+            embed_model=["embed-a"],
+            input_path="/tmp/project",
+            chunk_size=None,
+        )
+        scanner.ollama_manager = MagicMock()
+        scanner.ollama_manager.detect_optimal_chunk_size.side_effect = RuntimeError("boom")
+        scanner.report = MagicMock()
+        vuln_mapping = {"xss": {"name": "XSS"}}
+
+        with patch(
+            "oasis.oasis.SecurityAnalyzer.get_vulnerabilities_to_check",
+            return_value=([{"name": "XSS"}], []),
+        ), patch("oasis.oasis.EmbeddingManager") as manager_cls, patch(
+            "oasis.oasis.EmbeddingAnalyzer"
+        ) as analyzer_cls:
+            base_manager = MagicMock()
+            base_manager.prepare_input_files.return_value = [Path("a.py")]
+            manager_a = MagicMock()
+            manager_cls.side_effect = [base_manager, manager_a]
+            analyzer_a = self._build_embedding_analyzer_mock()
+            analyzer_cls.side_effect = [analyzer_a]
+
+            result = scanner.handle_audit_mode(vuln_mapping)
+
+        self.assertTrue(result)
+        first_model_args = manager_cls.call_args_list[1].args[0]
+        self.assertEqual(first_model_args.chunk_size, MAX_CHUNK_SIZE)
+
+    def test_handle_audit_mode_warns_when_manual_chunk_size_invalid(self):
+        """Manual --chunk-size that does not resolve to a positive int falls back to MAX_CHUNK_SIZE."""
+        scanner = OasisScanner()
+        scanner.embed_models = ["embed-a"]
+        scanner.chunk_size_is_manual = True
+        scanner.args = SimpleNamespace(
+            embed_model=["embed-a"],
+            input_path="/tmp/project",
+            chunk_size=0,
+        )
+        scanner.ollama_manager = MagicMock()
+        scanner.report = MagicMock()
+        vuln_mapping = {"xss": {"name": "XSS"}}
+
+        with patch(
+            "oasis.oasis.SecurityAnalyzer.get_vulnerabilities_to_check",
+            return_value=([{"name": "XSS"}], []),
+        ), patch("oasis.oasis.EmbeddingManager") as manager_cls, patch(
+            "oasis.oasis.EmbeddingAnalyzer"
+        ) as analyzer_cls:
+            base_manager = MagicMock()
+            base_manager.prepare_input_files.return_value = [Path("a.py")]
+            manager_a = MagicMock()
+            manager_cls.side_effect = [base_manager, manager_a]
+            analyzer_a = self._build_embedding_analyzer_mock()
+            analyzer_cls.side_effect = [analyzer_a]
+
+            with self.assertLogs("oasis", level="WARNING") as cm:
+                result = scanner.handle_audit_mode(vuln_mapping)
+
+        self.assertTrue(result)
+        messages = [rec.getMessage() for rec in cm.records]
+        self.assertTrue(
+            any("Invalid manual --chunk-size" in m for m in messages),
+            f"Expected invalid chunk-size warning in {messages!r}",
+        )
+        scanner.ollama_manager.detect_optimal_chunk_size.assert_not_called()
+        first_model_args = manager_cls.call_args_list[1].args[0]
+        self.assertEqual(first_model_args.chunk_size, MAX_CHUNK_SIZE)
+
     def test_handle_audit_mode_logs_and_exits_when_no_vulnerabilities(self):
         scanner = OasisScanner()
         scanner.embed_models = ["embed-a"]
@@ -287,6 +472,8 @@ class TestOasisAuditMode(unittest.TestCase):
 class TestOllamaInitOrdering(unittest.TestCase):
     def test_init_ollama_detects_chunk_after_model_is_available(self):
         scanner = OasisScanner()
+        scanner.embed_models = ["qwen3-embedding:4b"]
+        scanner.primary_embed_model = "qwen3-embedding:4b"
         scanner.args = SimpleNamespace(
             ollama_url="http://127.0.0.1:11434",
             chunk_size=None,
@@ -303,7 +490,7 @@ class TestOllamaInitOrdering(unittest.TestCase):
             result = scanner._init_ollama()
 
         self.assertTrue(result)
-        self.assertEqual(scanner.args.chunk_size, 36864)
+        self.assertEqual(scanner.args.chunk_size, 2048)
         check_idx = fake_manager.method_calls.index(("check_connection", (), {}))
         ensure_idx = fake_manager.method_calls.index(
             ("ensure_model_available", ("qwen3-embedding:4b",), {})
@@ -316,6 +503,8 @@ class TestOllamaInitOrdering(unittest.TestCase):
 
     def test_init_ollama_skips_chunk_detection_when_model_unavailable(self):
         scanner = OasisScanner()
+        scanner.embed_models = ["qwen3-embedding:4b"]
+        scanner.primary_embed_model = "qwen3-embedding:4b"
         scanner.args = SimpleNamespace(
             ollama_url="http://127.0.0.1:11434",
             chunk_size=None,
@@ -332,6 +521,65 @@ class TestOllamaInitOrdering(unittest.TestCase):
 
         self.assertFalse(result)
         fake_manager.detect_optimal_chunk_size.assert_not_called()
+
+
+class TestOasisInitFlow(unittest.TestCase):
+    def test_init_oasis_skips_preprocessing_for_audit_mode(self):
+        scanner = OasisScanner()
+        scanner.args = SimpleNamespace(
+            input_path="/tmp/project",
+            output_format=["json"],
+            language="en",
+            web=False,
+            debug=False,
+            web_expose="local",
+            web_password=None,
+            web_port=5000,
+            ollama_url="http://127.0.0.1:11434",
+            audit=True,
+        )
+
+        with patch.object(scanner, "_init_arguments", return_value=True), patch(
+            "oasis.oasis.Report"
+        ) as report_cls, patch.object(scanner, "_init_ollama", return_value=True), patch.object(
+            scanner, "_init_processing", return_value=True
+        ) as init_processing_mock, patch.object(
+            scanner, "_execute_requested_mode", return_value=0
+        ) as execute_mock:
+            result = scanner._init_oasis(scanner.args)
+
+        self.assertEqual(result, 0)
+        report_cls.assert_called_once()
+        init_processing_mock.assert_not_called()
+        execute_mock.assert_called_once()
+
+    def test_init_oasis_keeps_preprocessing_for_non_audit_mode(self):
+        scanner = OasisScanner()
+        scanner.args = SimpleNamespace(
+            input_path="/tmp/project",
+            output_format=["json"],
+            language="en",
+            web=False,
+            debug=False,
+            web_expose="local",
+            web_password=None,
+            web_port=5000,
+            ollama_url="http://127.0.0.1:11434",
+            audit=False,
+        )
+
+        with patch.object(scanner, "_init_arguments", return_value=True), patch(
+            "oasis.oasis.Report"
+        ), patch.object(scanner, "_init_ollama", return_value=True), patch.object(
+            scanner, "_init_processing", return_value=True
+        ) as init_processing_mock, patch.object(
+            scanner, "_execute_requested_mode", return_value=0
+        ) as execute_mock:
+            result = scanner._init_oasis(scanner.args)
+
+        self.assertEqual(result, 0)
+        init_processing_mock.assert_called_once()
+        execute_mock.assert_called_once()
 
 
 if __name__ == "__main__":

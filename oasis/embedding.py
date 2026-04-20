@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import json
+import math
 import time
 from pathlib import Path
 import pickle
@@ -12,7 +13,20 @@ import re
 import ast
 
 # Import configuration
-from .config import EXTRACT_FUNCTIONS, SUPPORTED_EXTENSIONS, DEFAULT_ARGS
+from .config import (
+    DEFAULT_ARGS,
+    EMBEDDING_FALLBACK_MIN_CHUNK_SIZE,
+    EXTRACT_FUNCTIONS,
+    SUPPORTED_EXTENSIONS,
+)
+
+# Substrings used to detect context-length / token-limit errors from provider messages.
+# Centralizing these makes it easier to update if Ollama or models change wording.
+_OLLAMA_CONTEXT_ERROR_FRAGMENTS = (
+    "context length",
+    "too many tokens",
+    "input length exceeds the context length",
+)
 
 # Import from other modules
 from .ollama_manager import OllamaManager
@@ -1069,9 +1083,140 @@ def build_vulnerability_embedding_prompt(vulnerability: Union[str, Dict]) -> str
     else:
         # Use the string directly
         return str(vulnerability)
-def generate_content_embedding(content: str, model: str, chunk_size: int = DEFAULT_ARGS['CHUNK_SIZE'], ollama_manager: OllamaManager = None) -> List[float]:
+
+
+def _is_context_length_error(error: Exception) -> bool:
     """
-    Generate embedding for content
+    Heuristic detection of context-length / token-limit errors.
+
+    Checks several broad fragments so minor upstream wording changes are less likely to
+    break detection silently than a single exact phrase.
+    """
+    message = str(error).lower()
+    return any(fragment in message for fragment in _OLLAMA_CONTEXT_ERROR_FRAGMENTS)
+
+
+def _single_embedding(ollama_client: Any, *, model: str, prompt: str) -> Optional[List[float]]:
+    response = ollama_client.embeddings(model=model, prompt=prompt)
+    return response.get("embedding") if response and "embedding" in response else None
+
+
+def _normalize_chunk_embedding(
+    embedding: Any,
+    *,
+    model: str,
+    expected_dim: Optional[int],
+) -> tuple[Optional[List[float]], Optional[int], bool]:
+    """
+    Validate and normalize one chunk embedding.
+
+    Returns:
+        (normalized_embedding, updated_expected_dim, has_dimension_mismatch)
+    """
+    if not isinstance(embedding, list) or not embedding:
+        logger.warning("Skipping malformed embedding chunk for %s: empty or non-list embedding", model)
+        return None, expected_dim, False
+    if not all(isinstance(value, (int, float)) for value in embedding):
+        logger.warning("Skipping malformed embedding chunk for %s: non-numeric embedding values", model)
+        return None, expected_dim, False
+    numeric_embedding = [float(value) for value in embedding]
+    if not all(math.isfinite(value) for value in numeric_embedding):
+        logger.warning("Skipping malformed embedding chunk for %s: non-finite embedding values", model)
+        return None, expected_dim, False
+
+    if expected_dim is None:
+        return numeric_embedding, len(numeric_embedding), False
+    if len(numeric_embedding) != expected_dim:
+        return None, expected_dim, True
+    return numeric_embedding, expected_dim, False
+
+
+def _aggregate_chunk_embeddings(
+    ollama_client: Any,
+    *,
+    model: str,
+    text: str,
+    chunk_limit: int,
+) -> Optional[List[float]]:
+    chunks = chunk_content(text, chunk_limit)
+    chunk_embeddings: List[List[float]] = []
+    expected_dim: Optional[int] = None
+    for chunk in chunks:
+        embedding = _single_embedding(ollama_client, model=model, prompt=chunk)
+        normalized_embedding, expected_dim, has_mismatch = _normalize_chunk_embedding(
+            embedding,
+            model=model,
+            expected_dim=expected_dim,
+        )
+        if has_mismatch:
+            logger.error(
+                "Inconsistent embedding dimensions for %s: expected %s, got %s. Aborting aggregation.",
+                model,
+                expected_dim,
+                len(embedding) if isinstance(embedding, list) else "unknown",
+            )
+            return None
+        if normalized_embedding is None:
+            continue
+        chunk_embeddings.append(normalized_embedding)
+    if not chunk_embeddings:
+        return None
+    # Aggregate by element-wise mean across chunks.
+    return [sum(col) / len(col) for col in zip(*chunk_embeddings)]
+
+
+def _embed_short_content_with_context_fallback(
+    ollama_client: Any,
+    *,
+    model: str,
+    content: str,
+    chunk_size: int,
+) -> Optional[List[float]]:
+    """
+    One full-text embedding call, then chunked aggregation if the provider signals
+    context length / token limits (character-based chunk_size can exceed real context).
+    """
+    try:
+        return _single_embedding(ollama_client, model=model, prompt=content)
+    except RuntimeError as single_error:
+        if not _is_context_length_error(single_error):
+            logger.exception(f"Error generating embedding: {str(single_error)}")
+            return None
+
+        fallback_chunk_size = max(EMBEDDING_FALLBACK_MIN_CHUNK_SIZE, int(chunk_size * 0.5))
+        logger.warning(
+            "Embedding prompt exceeded context for model %s; retrying with chunk size %s",
+            model,
+            fallback_chunk_size,
+        )
+        try:
+            return _aggregate_chunk_embeddings(
+                ollama_client,
+                model=model,
+                text=content,
+                chunk_limit=fallback_chunk_size,
+            )
+        except Exception as e:
+            logger.exception(f"Error generating embedding: {str(e)}")
+            return None
+    except Exception as e:
+        logger.exception(f"Error generating embedding: {str(e)}")
+        return None
+
+
+def generate_content_embedding(
+    content: str,
+    model: str,
+    chunk_size: int = DEFAULT_ARGS['CHUNK_SIZE'],
+    ollama_manager: OllamaManager = None,
+) -> Optional[List[float]]:
+    """
+    Generate embedding for content.
+
+    Flow:
+    - If ``len(content) > chunk_size``, embed only via chunked aggregation (no single-call path).
+    - Else call ``_embed_short_content_with_context_fallback``: one request, then chunked
+      retry with a reduced limit when the provider reports context / token limits.
 
     Args:
         content: Content to embed
@@ -1079,38 +1224,24 @@ def generate_content_embedding(content: str, model: str, chunk_size: int = DEFAU
         chunk_size: Maximum size of text chunks for embedding
 
     Returns:
-        Embedding vector as list of floats, aggregated if content was chunked
+        Embedding vector as list of floats, aggregated if content was chunked.
+        Returns ``None`` when no valid embedding can be produced.
     """
     if ollama_manager is None:
         raise ValueError("ollama_manager must be provided and cannot be None")
 
-    try:
-        client = ollama_manager.get_client()
+    client = ollama_manager.get_client()
 
-        # For large content, chunk and get embeddings for each chunk
-        if len(content) > chunk_size:
-            chunks = chunk_content(content, chunk_size)
-            chunk_embeddings = []
-
-            for chunk in chunks:
-                response = client.embeddings(model=model, prompt=chunk)
-                if response and 'embedding' in response:
-                    chunk_embeddings.append(response['embedding'])
-
-            # Aggregate chunk embeddings if we have any
-            if chunk_embeddings:
-                # Average all embeddings together (element-wise) using zip
-                aggregated_embedding = [sum(col) / len(col) for col in zip(*chunk_embeddings)]
-                return [val / len(chunk_embeddings) for val in aggregated_embedding]
+    if len(content) > chunk_size:
+        try:
+            return _aggregate_chunk_embeddings(client, model=model, text=content, chunk_limit=chunk_size)
+        except Exception as e:
+            logger.exception(f"Error generating embedding: {str(e)}")
             return None
-        else:
-            # For small content, get single embedding
-            response = client.embeddings(model=model, prompt=content)
-            return response.get('embedding') if response and 'embedding' in response else None
 
-    except Exception as e:
-        logger.exception(f"Error generating embedding: {str(e)}")
-        return None
+    return _embed_short_content_with_context_fallback(
+        client, model=model, content=content, chunk_size=chunk_size
+    )
 
 def extract_functions_from_file(file_path: str, content: str, extraction_model: str = EXTRACT_FUNCTIONS['MODEL'], ollama_manager: OllamaManager = None) -> Dict[str, str]:
     """

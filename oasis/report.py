@@ -141,6 +141,8 @@ class Report:
         self._last_summary_model_name: str = ""
         self._last_progress_payload: Dict[str, Any] = {}
         self._executive_summary_sidecar_write_failed = False
+        self.executive_summary_scan_model: str = ""
+        self.executive_summary_embedding_model: str = ""
 
 
         # Configure the Jinja2 environment
@@ -150,6 +152,18 @@ class Report:
     def set_progress_notifier(self, notifier) -> None:
         """Register an optional callback receiving real-time scan progress payloads."""
         self.progress_notifier = notifier
+
+    def set_executive_summary_models(
+        self,
+        *,
+        scan_model: Optional[str] = None,
+        embedding_model: Optional[str] = None,
+    ) -> None:
+        """Persist model metadata used by executive-summary rendering."""
+        if scan_model is not None:
+            self.executive_summary_scan_model = str(scan_model or "")
+        if embedding_model is not None:
+            self.executive_summary_embedding_model = str(embedding_model or "")
 
     def mark_progress_aborted(self) -> None:
         """Publish an aborted progress snapshot after a user interruption.
@@ -717,6 +731,13 @@ class Report:
                     f"| {finding['vuln_type']} | `{finding['file_path']}` | {finding['score']:.2f} | "
                     f"[Details]({href}) |"
                 )
+
+    def _get_executive_summary_model_names(self, model_name: object) -> tuple[str, str, str]:
+        """Return normalized (deep, small, embedding) model names."""
+        deep_model_name = str(model_name).strip()
+        scan_model_name = str(getattr(self, "executive_summary_scan_model", "") or "").strip()
+        embedding_model_name = str(getattr(self, "executive_summary_embedding_model", "") or "").strip()
+        return deep_model_name, scan_model_name, embedding_model_name
     
     def generate_executive_summary(
         self,
@@ -744,6 +765,17 @@ class Report:
             f"\nAnalyzed {len(all_results)} vulnerability types across the codebase.",
             REPORT['EXPLAIN_EXECUTIVE_SUMMARY'],
         ])
+        deep_model_name, scan_model_name, embedding_model_name = self._get_executive_summary_model_names(
+            model_name
+        )
+        report.extend(
+            [
+                "\n## Models Used",
+                f"- Deep model: {deep_model_name or 'N/A'}",
+                f"- Small model: {scan_model_name or 'N/A'}",
+                f"- Embedding model: {embedding_model_name or 'N/A'}",
+            ]
+        )
 
         if progress:
             self._append_scan_progress_section(progress, report)
@@ -755,7 +787,9 @@ class Report:
         report.extend([
             "\n---",
             f"Report generated on: {generate_timestamp()}",
-            f"Model: {model_name}",
+            f"Deep model: {deep_model_name}",
+            f"Small model: {scan_model_name or 'N/A'}",
+            f"Embedding model: {embedding_model_name or 'N/A'}",
         ])
 
         self._generate_and_save_report(output_files, report, report_type='Executive Summary')
@@ -764,9 +798,14 @@ class Report:
         if progress and json_path:
             try:
                 progress_path = executive_summary_progress_sidecar_path(Path(json_path))
+                # Compatibility: keep legacy `model` as primary deep-model field for existing
+                # consumers; newer readers can use explicit `deep_model`/`small_model`/`embedding_model`.
                 doc = {
                     "report_type": "executive_summary",
                     "model": model_name,
+                    "deep_model": deep_model_name,
+                    "small_model": scan_model_name,
+                    "embedding_model": embedding_model_name,
                     "progress": dict(self._last_progress_payload),
                     "generated_at": progress_timestamp_iso(),
                     "oasis_version": oasis_version,

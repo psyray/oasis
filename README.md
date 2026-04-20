@@ -221,7 +221,7 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 - `--scan-model` `-sm`: Model to use for quick scanning (default: same as main model)
 - `--model-thinking` `-mt`: Enable/disable thinking for deep analysis models [yes,no] (default: no)
 - `--small-model-thinking` `-smt`: Enable/disable thinking for the quick scan model [yes,no] (default: no)
-- `--embed-model` `-em`: Embedding model(s); in audit mode, supports a comma-separated list (example: `-em qwen3-embedding:4b,bge-m3`) (default: qwen3-embedding:4b)
+- `--embed-model` `-em`: Embedding model(s); in audit mode, supports a comma-separated list (example: `-em nomic-embed-text,bge-m3`) (default: nomic-embed-text)
 - `--list-models` `-lm`: List available models and exit
 
 ### Cache Management
@@ -426,6 +426,7 @@ oasis -i ./critical-service -sm qwen2.5-coder:7b -m bugtraceai-apex-q4 -t 0.6 -s
 - Executive summary stays visible even when vulnerability filters are active, so scan-wide context is always available.
 - Language filtering is available in the dashboard (`🌐 Filter by language`) and uses the same emoji-flag format as report language badges.
 - Scan progress can be queried via `/api/progress` to retrieve the latest executive summary progress metadata (`completed_vulnerabilities`, `total_vulnerabilities`, `is_partial`).
+- Executive summary now records all model roles used for the run: **Deep model**, **Small model** (Scan model), and **Embedding model**. These fields are rendered in markdown and therefore propagated to HTML/PDF outputs, and also included in the executive-summary progress sidecar JSON. For backward compatibility, sidecar `model` remains the legacy primary deep-model field.
 - Audit cards include an embedding-model comparison table based on parsed audit markdown metrics; selecting model tags can filter both date chips and comparison rows (multi-select supported).
 - Date-based filtering supports multiple `model` query params (`/api/dates?model=...&model=...&vulnerability=...`) and falls back to API fetch if local in-memory report data is stale.
 
@@ -476,6 +477,7 @@ oasis --input [path_to_analyze] --audit -em qwen3-embedding:4b,bge-m3
 ### What Audit Mode Does
 
 - **Embedding Analysis**: Generates embeddings for your entire codebase and all vulnerability types
+- **Chunk-size strategy (auto mode)**: When `--chunk-size` is not set, audit mode auto-detects chunk size once from the first embedding model and reuses it across all audit embedding models for consistent run semantics
 - **Similarity Distribution**: Calculates similarity scores between your code and various vulnerability patterns
 - **Threshold Analysis**: Shows the distribution of similarity scores across different thresholds
 - **Statistical Overview**: Provides mean, median, and max similarity scores for each vulnerability type

@@ -419,6 +419,8 @@ class TestReportSchema(unittest.TestCase):
         report.output_format = ["md"]
         report.output_base_dir = Path("/tmp")
         report.current_model = "test-model"
+        report.executive_summary_scan_model = "small-model"
+        report.executive_summary_embedding_model = "embed-model"
         report.report_dirs = {"test_model": {"md": Path("/tmp")}}
         report.create_header = lambda title, model_name: [f"# {title}", f"Model: {model_name}"]
         report.filter_output_files = lambda safe_name: {"md": Path("/tmp") / f"{safe_name}.md"}
@@ -440,6 +442,9 @@ class TestReportSchema(unittest.TestCase):
         self.assertIn("partial", content.lower())
         self.assertIn("Strong embedding match", content)
         self.assertIn("| Similarity |", content)
+        self.assertIn("Deep model: test-model", content)
+        self.assertIn("Small model: small-model", content)
+        self.assertIn("Embedding model: embed-model", content)
         self.assertNotIn("Risk Findings", content)
 
     @unittest.skipIf(publish_incremental_summary is None, "oasis.report dependencies are unavailable")

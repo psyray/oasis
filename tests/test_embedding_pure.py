@@ -42,6 +42,149 @@ class TestEmbeddingPure(unittest.TestCase):
         with self.assertRaises(ValueError):
             generate_content_embedding("hello", "model", ollama_manager=None)
 
+    def test_generate_content_embedding_retries_with_smaller_chunks_on_context_error(self):
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            def embeddings(self, model, prompt):
+                self.calls.append(prompt)
+                if len(prompt) > 512:
+                    raise RuntimeError("the input length exceeds the context length (status code: 500)")
+                return {"embedding": [1.0, 2.0]}
+
+        fake_client = FakeClient()
+        fake_manager = SimpleNamespace(get_client=lambda: fake_client)
+        large_content = "a" * 600
+
+        embedding = generate_content_embedding(
+            large_content,
+            "embed-model",
+            chunk_size=1024,
+            ollama_manager=fake_manager,
+        )
+
+        self.assertEqual(embedding, [1.0, 2.0])
+        self.assertGreaterEqual(len(fake_client.calls), 2)
+
+    def test_generate_content_embedding_retries_on_alternate_context_error_message(self):
+        """Alternate provider wording (e.g. 'too many tokens') still triggers chunked retry."""
+
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            def embeddings(self, model, prompt):
+                self.calls.append(prompt)
+                if len(prompt) > 512:
+                    raise RuntimeError("model runner: too many tokens in prompt")
+                return {"embedding": [1.0, 2.0]}
+
+        fake_client = FakeClient()
+        fake_manager = SimpleNamespace(get_client=lambda: fake_client)
+        large_content = "a" * 600
+
+        embedding = generate_content_embedding(
+            large_content,
+            "embed-model",
+            chunk_size=1024,
+            ollama_manager=fake_manager,
+        )
+
+        self.assertEqual(embedding, [1.0, 2.0])
+        self.assertGreaterEqual(len(fake_client.calls), 2)
+
+    def test_generate_content_embedding_chunk_aggregation_single_average(self):
+        class FakeClient:
+            def embeddings(self, model, prompt):
+                if prompt == "aaaa":
+                    return {"embedding": [2.0, 4.0]}
+                if prompt == "bbbb":
+                    return {"embedding": [6.0, 8.0]}
+                return {"embedding": [0.0, 0.0]}
+
+        fake_manager = SimpleNamespace(get_client=lambda: FakeClient())
+        content = "aaaa\nbbbb"
+
+        embedding = generate_content_embedding(
+            content,
+            "embed-model",
+            chunk_size=5,
+            ollama_manager=fake_manager,
+        )
+
+        self.assertEqual(embedding, [4.0, 6.0])
+
+    def test_generate_content_embedding_chunk_aggregation_skips_empty_embeddings(self):
+        class FakeClient:
+            def embeddings(self, model, prompt):
+                if prompt == "aaaa":
+                    return {"embedding": [2.0, 4.0]}
+                if prompt == "bbbb":
+                    return {"embedding": []}
+                return {"embedding": [0.0, 0.0]}
+
+        fake_manager = SimpleNamespace(get_client=lambda: FakeClient())
+        content = "aaaa\nbbbb"
+
+        embedding = generate_content_embedding(
+            content,
+            "embed-model",
+            chunk_size=5,
+            ollama_manager=fake_manager,
+        )
+
+        self.assertEqual(embedding, [2.0, 4.0])
+
+    def test_generate_content_embedding_chunk_aggregation_skips_mismatched_dimensions(self):
+        class FakeClient:
+            def embeddings(self, model, prompt):
+                if prompt == "aaaa":
+                    return {"embedding": [1.0, 3.0]}
+                if prompt == "bbbb":
+                    return {"embedding": [2.0, 4.0, 6.0]}
+                if prompt == "cccc":
+                    return {"embedding": [3.0, 5.0]}
+                return {"embedding": [0.0, 0.0]}
+
+        fake_manager = SimpleNamespace(get_client=lambda: FakeClient())
+        content = "aaaa\nbbbb\ncccc"
+
+        embedding = generate_content_embedding(
+            content,
+            "embed-model",
+            chunk_size=5,
+            ollama_manager=fake_manager,
+        )
+
+        self.assertIsNone(embedding)
+
+    def test_generate_content_embedding_uses_configurable_fallback_min_chunk_size(self):
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            def embeddings(self, model, prompt):
+                self.calls.append(prompt)
+                if len(prompt) > 220:
+                    raise RuntimeError("the input length exceeds the context length (status code: 500)")
+                return {"embedding": [1.0, 2.0]}
+
+        fake_client = FakeClient()
+        fake_manager = SimpleNamespace(get_client=lambda: fake_client)
+        content = "a" * 280
+
+        with patch("oasis.embedding.EMBEDDING_FALLBACK_MIN_CHUNK_SIZE", 192):
+            embedding = generate_content_embedding(
+                content,
+                "embed-model",
+                chunk_size=300,
+                ollama_manager=fake_manager,
+            )
+
+        self.assertEqual(embedding, [1.0, 2.0])
+        self.assertEqual(len(fake_client.calls[1]), 192)
+
 
 @unittest.skipIf(EmbeddingAnalyzer is None, "oasis.analyze dependencies are unavailable")
 class TestEmbeddingAnalyzerStats(unittest.TestCase):

@@ -9,7 +9,16 @@ from copy import deepcopy
 
 
 # Import from configuration
-from .config import LANGUAGES, MODEL_EMOJIS, REPORT, DEFAULT_ARGS, validate_report_dashboard_formats
+from .config import (
+    DEFAULT_ARGS,
+    EMBEDDING_DETECTED_CHUNK_SIZE_MAX,
+    EMBEDDING_DETECTED_CHUNK_SIZE_MIN,
+    LANGUAGES,
+    MAX_CHUNK_SIZE,
+    MODEL_EMOJIS,
+    REPORT,
+    validate_report_dashboard_formats,
+)
 
 # Import from other modules
 from .tools import generate_timestamp, setup_logging, logger, display_logo, get_vulnerability_mapping
@@ -36,6 +45,7 @@ class OasisScanner:
         self.valid_input_files = None
         self.embed_models = [DEFAULT_ARGS["EMBED_MODEL"]]
         self.primary_embed_model = DEFAULT_ARGS["EMBED_MODEL"]
+        self.chunk_size_is_manual = False
 
     @staticmethod
     def _parse_embed_models_csv(value: str) -> list[str]:
@@ -81,6 +91,94 @@ class OasisScanner:
         return (
             "Language for reports (default: en).\n"
             f"Supported: {supported}"
+        )
+
+    # Chunk size strategy (embedding text window):
+    # - ``chunk_size_is_manual`` is set in ``_init_arguments`` when the user passes ``--chunk-size``.
+    # - ``_resolve_effective_chunk_size_for_model`` chooses: manual path → configured positive size
+    #   (via ``_resolve_chunk_size_fallback``), else auto path → ``_detect_chunk_size_for_model``
+    #   (Ollama probe, clamped to ``EMBEDDING_DETECTED_CHUNK_SIZE_*``, with safe fallbacks).
+    # - Audit mode resolves once from the first embed model and reuses that size for every model in the run.
+
+    @staticmethod
+    def _resolve_chunk_size_fallback(configured_chunk_size: Optional[int]) -> int:
+        if isinstance(configured_chunk_size, int) and configured_chunk_size > 0:
+            return configured_chunk_size
+        return MAX_CHUNK_SIZE
+
+    @staticmethod
+    def _log_chunk_size_fallback(
+        embed_model: str,
+        configured_chunk_size: Optional[int],
+        fallback_chunk_size: int,
+        reason: str,
+        *,
+        detected_chunk_size: Optional[int] = None,
+    ) -> None:
+        logger.warning(
+            "Chunk size detection fallback for %s: configured=%r detected=%r reason=%s using=%s",
+            embed_model,
+            configured_chunk_size,
+            detected_chunk_size,
+            reason,
+            fallback_chunk_size,
+        )
+
+    def _detect_chunk_size_for_model(
+        self,
+        embed_model: str,
+        configured_chunk_size: Optional[int] = None,
+    ) -> int:
+        effective_fallback_chunk_size = self._resolve_chunk_size_fallback(configured_chunk_size)
+        try:
+            detected_chunk_size = self.ollama_manager.detect_optimal_chunk_size(embed_model)
+        except Exception as exc:
+            self._log_chunk_size_fallback(
+                embed_model,
+                configured_chunk_size,
+                effective_fallback_chunk_size,
+                f"exception: {str(exc)}",
+            )
+            return effective_fallback_chunk_size
+
+        if not isinstance(detected_chunk_size, int) or detected_chunk_size <= 0:
+            self._log_chunk_size_fallback(
+                embed_model,
+                configured_chunk_size,
+                effective_fallback_chunk_size,
+                "invalid non-positive integer",
+                detected_chunk_size=detected_chunk_size,
+            )
+            return effective_fallback_chunk_size
+
+        if not (
+            EMBEDDING_DETECTED_CHUNK_SIZE_MIN
+            <= detected_chunk_size
+            <= EMBEDDING_DETECTED_CHUNK_SIZE_MAX
+        ):
+            self._log_chunk_size_fallback(
+                embed_model,
+                configured_chunk_size,
+                effective_fallback_chunk_size,
+                f"outside range [{EMBEDDING_DETECTED_CHUNK_SIZE_MIN}, {EMBEDDING_DETECTED_CHUNK_SIZE_MAX}]",
+                detected_chunk_size=detected_chunk_size,
+            )
+            return effective_fallback_chunk_size
+
+        return detected_chunk_size
+
+    def _resolve_effective_chunk_size_for_model(
+        self,
+        embed_model: str,
+        *,
+        configured_chunk_size: Optional[int],
+        chunk_size_is_manual: bool,
+    ) -> int:
+        if chunk_size_is_manual:
+            return self._resolve_chunk_size_fallback(configured_chunk_size)
+        return self._detect_chunk_size_for_model(
+            embed_model,
+            configured_chunk_size=configured_chunk_size,
         )
 
     @staticmethod
@@ -380,6 +478,10 @@ class OasisScanner:
             
             # Set the current model for report generation
             self.report.current_model = main_model
+            self.report.set_executive_summary_models(
+                scan_model=scan_model[0] if scan_model else None,
+                embedding_model=getattr(self.embedding_manager, "embedding_model", None),
+            )
 
             # Process analysis with selected model
             try:
@@ -428,9 +530,45 @@ class OasisScanner:
             logger.error("No valid files available for audit mode")
             return False
 
-        for embed_model in embed_models:
+        configured_chunk_size = getattr(self.args, "chunk_size", None)
+        chunk_size_is_manual = bool(getattr(self, "chunk_size_is_manual", False))
+        # Manual chunk-size path shares fallback behavior with _resolve_chunk_size_fallback:
+        # non-int or non-positive values fall back to MAX_CHUNK_SIZE.
+        if chunk_size_is_manual and not (
+            isinstance(configured_chunk_size, int) and configured_chunk_size > 0
+        ):
+            logger.warning(
+                "Invalid manual --chunk-size (%r) provided in audit mode; "
+                "falling back to MAX_CHUNK_SIZE. Audit windows may be larger "
+                "than requested.",
+                configured_chunk_size,
+            )
+        use_detected_chunk_size = not chunk_size_is_manual
+        if use_detected_chunk_size and len(embed_models) > 1:
+            logger.info(
+                "Audit mode uses one detected chunk size from the first embedding model (%s) "
+                "for all audit embedding models to keep run semantics consistent.",
+                embed_models[0],
+            )
+        # Keep audit semantics aligned with non-audit mode: one resolved chunk size reused for run.
+        audit_chunk_size = (
+            self._resolve_effective_chunk_size_for_model(
+                embed_models[0],
+                configured_chunk_size=configured_chunk_size,
+                chunk_size_is_manual=chunk_size_is_manual,
+            )
+        )
+        total_embed_models = len(embed_models)
+        for index, embed_model in enumerate(embed_models):
+            cli_emit_section_banner(
+                logger,
+                "🧪",
+                "Audit embedding model",
+                f"{index + 1}/{total_embed_models} · {cli_bold(embed_model)}",
+            )
             model_args = deepcopy(self.args)
             model_args.embed_model = embed_model
+            model_args.chunk_size = audit_chunk_size
             model_embedding_manager = EmbeddingManager(model_args, self.ollama_manager)
             model_embedding_manager.process_input_files(
                 model_args,
@@ -514,6 +652,12 @@ class OasisScanner:
         # Initialize Ollama and check connection
         if not self._init_ollama(self.args.ollama_url):
             return 1
+
+        # Audit mode builds embeddings per embedding model inside handle_audit_mode.
+        # Skip the generic pre-indexing pass to avoid duplicate startup embedding.
+        if getattr(self.args, "audit", False):
+            return self._execute_requested_mode()
+
         return self._execute_requested_mode() if self._init_processing() else 1
 
     def _warn_web_mode_ignores_scan_flags(self) -> None:
@@ -605,6 +749,7 @@ class OasisScanner:
             self.primary_embed_model = primary_embed_model
         except argparse.ArgumentTypeError as exc:
             return self._handle_argument_errors(str(exc))
+        self.chunk_size_is_manual = getattr(self.args, "chunk_size", None) is not None
         display_logo()
         return True
 
@@ -648,10 +793,13 @@ class OasisScanner:
             if not self.ollama_manager.ensure_model_available(embed_model):
                 return False
 
-        # Auto-detect chunk size only after the embedding model exists locally.
-        if self.args.chunk_size is None:
-            self.args.chunk_size = self.ollama_manager.detect_optimal_chunk_size(primary_embed_model)
-        else:
+        # Apply the class chunk-size strategy (documented above ``_resolve_chunk_size_fallback``).
+        self.args.chunk_size = self._resolve_effective_chunk_size_for_model(
+            primary_embed_model,
+            configured_chunk_size=getattr(self.args, "chunk_size", None),
+            chunk_size_is_manual=bool(getattr(self, "chunk_size_is_manual", False)),
+        )
+        if self.chunk_size_is_manual:
             logger.info(f"Using manual chunk size: {self.args.chunk_size}")
 
         return True
@@ -669,6 +817,9 @@ class OasisScanner:
 
         # Initialize embedding manager
         self.embedding_manager = EmbeddingManager(self.args, self.ollama_manager)
+        self.report.set_executive_summary_models(
+            embedding_model=getattr(self.embedding_manager, "embedding_model", None)
+        )
         self.valid_input_files = self.embedding_manager.process_input_files(self.args)
         return self.valid_input_files
 
