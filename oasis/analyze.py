@@ -39,40 +39,38 @@ from .helpers import (
     safe_code_base_file_count,
     standard_deep_phase_extras,
 )
-from .helpers.langgraph_console import (
+from .helpers.langgraph_cli import (
     LG_DEBUG_SEPARATOR,
     LG_DEEP_VULN_FINISHED,
     LG_LLM_SELECTED,
     LG_SCAN_TASK_COMPLETE,
     cli_bold,
+    deep_payload_vuln_types_total,
+    embedding_tasks_vuln_types_total,
     langgraph_emit,
     langgraph_emit_post_pipeline,
-)
-from .helpers.debug_cli_separators import (
+    llm_debug_log_request,
+    llm_debug_log_response,
     separator_file_scope,
     separator_vulnerability,
 )
-from .helpers.llm_debug_log import (
-    llm_debug_log_request,
-    llm_debug_log_response,
-)
-from .helpers.langgraph_counts import deep_payload_vuln_types_total, embedding_tasks_vuln_types_total
-from .helpers.poc_digest import build_compact_findings_digest, finalize_poc_digest_json
-from .helpers.poc_pipeline import (
+from .helpers.context_expand import expand_suspicious_chunk_records
+from .helpers.poc import (
     POC_DIGEST_JSON_MAX_CHARS,
+    build_compact_findings_digest,
     build_poc_hints_markdown,
+    finalize_poc_digest_json,
     maybe_debug_log_poc_stage_output,
     poc_assist_chat_options,
 )
-from .helpers.context_expand import expand_suspicious_chunk_records
-from .helpers.graph_progress import (
+from .helpers.progress import (
+    EXEC_SUMMARY_PROGRESS_EVENT_VERSION,
     graph_final_phases,
     graph_phases_deep_in_progress,
     graph_phases_discover_done_scan_pending,
     graph_phases_scan_done_expand_pending,
     graph_progress_extras,
 )
-from .helpers.progress import EXEC_SUMMARY_PROGRESS_EVENT_VERSION
 from .embedding import EmbeddingManager, build_vulnerability_embedding_prompt
 from .cache import CacheManager
 from .enums import AnalysisMode
@@ -84,7 +82,7 @@ from .schemas.analysis import (
     VulnerabilityFinding,
     chunk_analysis_to_markdown,
 )
-from .helpers.structured_output_degeneracy import structured_deep_raw_looks_degenerate
+from .helpers.misc import structured_deep_raw_looks_degenerate
 from .structured_output.deep import (
     chunk_deep_degenerate_retry_suffix,
     chunk_deep_normalization_change_samples,
@@ -1008,7 +1006,7 @@ Code to analyze:
 
     # LangGraph stage entry points: time/LLM budgets and PoC sizes are mostly in
     # ``oasis.config`` (e.g. ``CHUNK_*``, ``CONTEXT_EXPAND_*``, ``POC_*``) and
-    # ``oasis.helpers.poc_pipeline``; keep those in sync when tuning pipeline behavior.
+    # ``oasis.helpers.poc``; keep those in sync when tuning pipeline behavior.
 
     def langgraph_discover_and_publish(
         self, vulnerabilities: List[Dict[str, Any]], args: Any, report: Optional[Report]
@@ -1787,6 +1785,7 @@ class EmbeddingAnalyzer:
         self.results_cache = {}  # Cache for results by vulnerability type
         self.embedding_analysis_type = embedding_manager.embedding_analysis_type
         self.analyze_by_function = embedding_manager.analyze_by_function
+        self.silent = bool(getattr(embedding_manager, "silent", False))
 
     def analyze_vulnerability(self, vuln: Dict) -> List[Dict[str, Any]]:
         """
@@ -2028,7 +2027,12 @@ class EmbeddingAnalyzer:
 
         num_processes = max(1, min(cpu_count(), len(process_args)))
         results = []
-        with tqdm(total=len(process_args), desc="Analyzing", leave=True) as pbar:
+        with tqdm(
+            total=len(process_args),
+            desc="Analyzing",
+            leave=True,
+            disable=self.silent,
+        ) as pbar:
             with Pool(processes=num_processes) as pool:
                 for result in pool.imap(analyze_item_parallel, process_args):
                     if result and 'error' not in result:

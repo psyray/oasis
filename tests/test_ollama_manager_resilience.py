@@ -196,6 +196,42 @@ class TestModelInfoNumCtx(unittest.TestCase):
         self.assertEqual(mgr._detect_optimal_chunk_size("embed"), int(10000 * 0.9))
 
 
+class TestModelAvailabilityNormalization(unittest.TestCase):
+    def test_is_model_present_locally_matches_latest_alias(self):
+        self.assertTrue(
+            OllamaManager._is_model_present_locally(
+                "nomic-embed-text",
+                ["nomic-embed-text:latest", "qwen3:8b"],
+            )
+        )
+
+    def test_is_model_present_locally_matches_reverse_latest_alias(self):
+        self.assertTrue(
+            OllamaManager._is_model_present_locally(
+                "nomic-embed-text:latest",
+                ["nomic-embed-text"],
+            )
+        )
+
+    def test_is_model_present_locally_keeps_non_latest_tags_distinct(self):
+        self.assertFalse(
+            OllamaManager._is_model_present_locally(
+                "qwen3-embedding:4b",
+                ["qwen3-embedding:8b", "qwen3-embedding:latest"],
+            )
+        )
+
+    def test_ensure_model_available_does_not_pull_when_alias_matches(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr.get_client = MagicMock(return_value=MagicMock())
+        mgr._get_models = MagicMock(return_value=["nomic-embed-text:latest"])
+
+        result = mgr.ensure_model_available("nomic-embed-text")
+
+        self.assertTrue(result)
+        mgr.get_client.return_value.pull.assert_not_called()
+
+
 class TestParameterCountNumeric(unittest.TestCase):
     """Pure helpers used by lightweight filtering and formatted parameter display."""
 

@@ -8,12 +8,12 @@ Developer guide — **safe to tweak together** vs **orthogonal knobs**:
 1. **Structured-output degeneracy (deep JSON quality)** — tune together when models collapse or
    spam repeated tokens in structured output. Env vars: ``OASIS_STRUCTURED_DEGENERACY_*``
    (see ``STRUCTURED_OUTPUT_DEGENERACY_*`` below). Implemented in
-   ``oasis/helpers/structured_output_degeneracy.py``. Related LLM budgets: ``OASIS_CHUNK_*``
+   ``oasis/helpers/misc.py`` (``structured_deep_raw_looks_degenerate``). Related LLM budgets: ``OASIS_CHUNK_*``
    (timeouts / ``num_predict``) in the Ollama section above.
 
 2. **PoC budgeting (prompts + logs, not SARIF/HTML report bodies)** — tune together when PoC
    assist/hints truncate or dominate context. Env vars: ``OASIS_POC_*`` / ``POC_*`` constants
-   below; helpers in ``oasis/helpers/poc_digest.py`` and ``oasis/helpers/poc_pipeline.py``.
+   below; helpers in ``oasis/helpers/poc.py``.
    Keep aligned with structured-output caps if both feed the same LLM turn.
 
 3. **Context expansion (LangGraph)** — ``OASIS_CONTEXT_EXPAND_*`` / ``CONTEXT_EXPAND_*``;
@@ -80,15 +80,35 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from .legacy_vulnerability_mapping import LEGACY_VULNERABILITY_MAPPING
-from .helpers.executive_summary_similarity import (
-    executive_summary_tiers_inline_text,
-    executive_summary_tiers_markdown_bullets,
-)
 
 logger = logging.getLogger("oasis")
 
 
-def _parse_env_int(name: str, default: int, *, minimum: Optional[int] = None, maximum: Optional[int] = None) -> int:
+def _log_warning_main_process(msg: str, *args: Any, **kwargs: Any) -> None:
+    """
+    Emit a warning only from the main process.
+
+    Pool workers re-import this module; repeating env clamp warnings there duplicates
+    console output and interleaves with tqdm on stderr, corrupting the progress line.
+    """
+    try:
+        from multiprocessing import current_process
+
+        if current_process().name != "MainProcess":
+            return
+    except Exception:
+        pass
+    logger.warning(msg, *args, **kwargs)
+
+
+def _parse_env_int(
+    name: str,
+    default: int,
+    *,
+    minimum: Optional[int] = None,
+    maximum: Optional[int] = None,
+    warn_clamps: bool = True,
+) -> int:
     raw = os.environ.get(name)
     if raw is None or not str(raw).strip():
         v = default
@@ -96,13 +116,15 @@ def _parse_env_int(name: str, default: int, *, minimum: Optional[int] = None, ma
         try:
             v = int(str(raw).strip(), 10)
         except ValueError:
-            logger.warning("Invalid integer for %s=%r; using default %s", name, raw, default)
+            _log_warning_main_process("Invalid integer for %s=%r; using default %s", name, raw, default)
             v = default
     if minimum is not None and v < minimum:
-        logger.warning("%s=%s below minimum %s; clamping", name, v, minimum)
+        if warn_clamps:
+            _log_warning_main_process("%s=%s below minimum %s; clamping", name, v, minimum)
         v = minimum
     if maximum is not None and v > maximum:
-        logger.warning("%s=%s above maximum %s; clamping", name, v, maximum)
+        if warn_clamps:
+            _log_warning_main_process("%s=%s above maximum %s; clamping", name, v, maximum)
         v = maximum
     return v
 
@@ -115,13 +137,13 @@ def _parse_env_float(name: str, default: float, *, minimum: Optional[float] = No
         try:
             v = float(str(raw).strip())
         except ValueError:
-            logger.warning("Invalid float for %s=%r; using default %s", name, raw, default)
+            _log_warning_main_process("Invalid float for %s=%r; using default %s", name, raw, default)
             v = default
     if minimum is not None and v < minimum:
-        logger.warning("%s=%s below minimum %s; clamping", name, v, minimum)
+        _log_warning_main_process("%s=%s below minimum %s; clamping", name, v, minimum)
         v = minimum
     if maximum is not None and v > maximum:
-        logger.warning("%s=%s above maximum %s; clamping", name, v, maximum)
+        _log_warning_main_process("%s=%s above maximum %s; clamping", name, v, maximum)
         v = maximum
     return v
 
@@ -143,7 +165,7 @@ DEFAULT_ARGS = {
     'OUTPUT_FORMAT': 'all',
     'EMBEDDING_ANALYSIS_TYPE': 'file',
     'CACHE_DAYS': 7,
-    'EMBED_MODEL': 'qwen3-embedding:4b',
+    'EMBED_MODEL': 'nomic-embed-text',
     'SCAN_MODEL': None,  # If None, same as main model
 }
 
@@ -223,6 +245,25 @@ SUPPORTED_EXTENSIONS: Set[str] = {
 
 # Chunk configuration (static)
 MAX_CHUNK_SIZE = 2048
+EMBEDDING_FALLBACK_MIN_CHUNK_SIZE = _parse_env_int(
+    "OASIS_EMBEDDING_FALLBACK_MIN_CHUNK_SIZE",
+    256,
+    minimum=64,
+)
+EMBEDDING_DETECTED_CHUNK_SIZE_MIN = _parse_env_int(
+    "OASIS_EMBEDDING_DETECTED_CHUNK_SIZE_MIN",
+    64,
+    minimum=1,
+)
+_DETECTED_CHUNK_SIZE_MAX_RECOMMENDED = MAX_CHUNK_SIZE * 4
+# Large env values are clamped silently; no CLI warning (no user action required).
+EMBEDDING_DETECTED_CHUNK_SIZE_MAX = _parse_env_int(
+    "OASIS_EMBEDDING_DETECTED_CHUNK_SIZE_MAX",
+    262144,
+    minimum=EMBEDDING_DETECTED_CHUNK_SIZE_MIN,
+    maximum=_DETECTED_CHUNK_SIZE_MAX_RECOMMENDED,
+    warn_clamps=False,
+)
 
 # =============================================================================
 # Ollama & HTTP client — chunk LLM timeouts, generation budget, transport
@@ -261,13 +302,13 @@ OLLAMA_SLOW_CALL_WARNING_SEC = _parse_env_float(
 # =============================================================================
 # These interact through prompt size, VRAM, and latency. Prefer adjusting related constants
 # together and re-checking behavior under ``-d`` / DEBUG when tuning:
-# - STRUCTURED_OUTPUT_DEGENERACY_* — ``oasis/helpers/structured_output_degeneracy.py`` (zlib ratio +
+# - STRUCTURED_OUTPUT_DEGENERACY_* — ``oasis/helpers/misc.py`` (zlib ratio +
 #   repeated-pattern probe on raw deep JSON before schema validation).
 # - POC_DIGEST_JSON_MAX_CHARS, POC_HINTS_MAX_CHARS, POC_STAGE_LOG_MAX_CHARS —
-#   ``oasis/helpers/poc_digest.py``, ``oasis/helpers/poc_pipeline.py`` (digest into LLM prompts,
+#   ``oasis/helpers/poc.py`` (digest into LLM prompts,
 #   optional hints markdown, DEBUG truncation for stage logs).
 # Context expansion windows (CONTEXT_EXPAND_*) are separate but share the same token budget;
-# see ``oasis/helpers/context_expand.py``.
+# see ``oasis/helpers/context_expand.py`` (``expand_suspicious_chunk_records``).
 # Defaults target consumer GPUs; env var names are on each constant below.
 
 # =============================================================================
@@ -713,6 +754,8 @@ EXTRACT_FUNCTIONS = {
 # Report configuration
 # Intentionally computed at import time: executive-summary tiers are static constants for a process run.
 # If tiers become runtime-configurable later, move this interpolation to report-generation time.
+from .helpers.exec_summary_tiers import executive_summary_tiers_inline_text, executive_summary_tiers_markdown_bullets
+
 _EXEC_SUMMARY_TIERS_BULLETS_MD = executive_summary_tiers_markdown_bullets()
 _EXEC_SUMMARY_TIERS_INLINE_TEXT = executive_summary_tiers_inline_text()
 

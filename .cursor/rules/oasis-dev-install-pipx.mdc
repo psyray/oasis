@@ -35,6 +35,12 @@ pipx uninstall oasis && pipx install -e ".[dev]"
 PYTHONPATH="$(pwd)" pipx run --spec . python -m unittest tests.<module_or_class>
 ```
 
+- For targeted regression checks touching several areas, keep a single pipx invocation:
+
+```bash
+PYTHONPATH="$(pwd)" pipx run --spec . python -m unittest tests.test_oasis_cli tests.test_embedding_pure tests.test_report_schema
+```
+
 # Coverage (requires `[dev]`)
 
 - With `.[dev]` installed, run from the repository root so imports resolve:

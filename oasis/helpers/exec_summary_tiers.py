@@ -1,10 +1,6 @@
-"""Shared executive-summary embedding similarity tier definitions.
+"""Executive-summary embedding similarity tier definitions (no config import; safe for config/bootstrap)."""
 
-Single source of truth for:
-- tier ids used by report grouping
-- section headings rendered in markdown executive summaries
-- prose snippets rendered in report explanatory text
-"""
+from __future__ import annotations
 
 import logging
 import math
@@ -20,7 +16,7 @@ class ExecSummaryTier(TypedDict):
     min_inclusive: float
     max_exclusive: Optional[float]
 
-# Ordered from strongest to weakest; order drives report section rendering.
+
 EXEC_SUMMARY_EMBEDDING_TIERS: Tuple[ExecSummaryTier, ...] = (
     {
         "id": "strong",
@@ -91,7 +87,6 @@ def executive_summary_similarity_tier_id(score: float) -> str:
             continue
         if min_inclusive <= normalized_score < max_exclusive:
             return tier["id"]
-    # Defensive fallback for NaN / out-of-range legacy values.
     return weakest_tier_id
 
 
@@ -117,4 +112,3 @@ def executive_summary_tiers_inline_text() -> str:
             f"{tier['id'].lower()} ({_tier_range_text(min_inclusive, max_exclusive)})"
         )
     return ", ".join(parts)
-

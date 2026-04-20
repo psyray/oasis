@@ -8,9 +8,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from oasis.helpers.dashboard import dashboard_format_display_order, expand_socketio_cors_config_entries
-from oasis.helpers.dashboard_report_html import rewrite_report_preview_anchor_hrefs
-from oasis.helpers.executive_summary_links import dashboard_reports_href, preferred_detail_relative_path_and_format
+from oasis.helpers.dashboard import (
+    dashboard_format_display_order,
+    dashboard_reports_href,
+    expand_socketio_cors_config_entries,
+    preferred_detail_relative_path_and_format,
+    rewrite_report_preview_anchor_hrefs,
+)
 
 
 class TestHelpersDashboard(unittest.TestCase):

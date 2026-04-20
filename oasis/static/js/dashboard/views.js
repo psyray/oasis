@@ -54,24 +54,10 @@ DashboardApp.renderTreeView = function(groupBy) {
     });
     
     // Sort keys
-    const sortedKeys = Object.keys(grouped).sort((a, b) => {
-        // Put Executive Summary and Audit Report first for vulnerabilities
-        if (groupBy === 'vulnerability_type') {
-            if (a === 'Executive Summary') {
-              return -1;
-            }
-            if (b === 'Executive Summary') {
-              return 1;
-            }
-            if (a === 'Audit Report') {
-              return -1;
-            }
-            if (b === 'Audit Report') {
-              return 1;
-            }
-        }
-        return a.localeCompare(b);
-    });
+    const sortVulnNames = DashboardApp.sortVulnerabilityTypeNames;
+    const sortedKeys = groupBy === 'vulnerability_type'
+        ? sortVulnNames(Object.keys(grouped))
+        : Object.keys(grouped).sort((a, b) => a.localeCompare(b));
     
     let html = '<div class="tree-view">';
     
@@ -156,22 +142,8 @@ DashboardApp.renderTreeView = function(groupBy) {
                 vulnGroups[report.vulnerability_type].push(report);
             });
             
-            // Sort vulnerabilities - put Executive Summary and Audit Report first
-            const sortedVulns = Object.keys(vulnGroups).sort((a, b) => {
-                if (a === 'Executive Summary') {
-                  return -1;
-                }
-                if (b === 'Executive Summary') {
-                  return 1;
-                }
-                if (a === 'Audit Report') {
-                  return -1;
-                }
-                if (b === 'Audit Report') {
-                  return 1;
-                }
-                return a.localeCompare(b);
-            });
+            // Sort vulnerabilities - put Audit Report first, then Executive Summary
+            const sortedVulns = sortVulnNames(Object.keys(vulnGroups));
             
             sortedVulns.forEach(vuln => {
                 const reportsForVuln = vulnGroups[vuln];
@@ -249,6 +221,16 @@ DashboardApp.renderListViewWithTemplate = function() {
     const h = DashboardApp._escapeHtml;
     const jsq = DashboardApp._escapeJsSingleQuote;
     const openReportOnclick = DashboardApp._buildOpenReportOnclick;
+    const sortVulnNames = DashboardApp.sortVulnerabilityTypeNames;
+    const {modelDataAttrValue} = DashboardApp;
+    const buildAuditComparisonTableHtml = function(reports, vulnerabilityType) {
+        return DashboardApp.auditComparison.buildTableHtml(reports, vulnerabilityType, {
+            h: h,
+            formatDisplayName: DashboardApp.formatDisplayName,
+            normalizeModelKey: DashboardApp.normalizeModelKey,
+            modelDataAttrValue: modelDataAttrValue,
+        });
+    };
     const container = document.getElementById('reports-container');
     
     // Group by vulnerability type
@@ -260,22 +242,8 @@ DashboardApp.renderListViewWithTemplate = function() {
         vulnGroups[report.vulnerability_type].push(report);
     });
     
-    // Sort vulnerability types - Ensure Executive Summary and Audit Report come first
-    const sortedVulns = Object.keys(vulnGroups).sort((a, b) => {
-        if (a === 'Executive Summary') {
-            return -1;
-        }
-        if (b === 'Executive Summary') {
-            return 1;
-        }
-        if (a === 'Audit Report') {
-            return -1;
-        }
-        if (b === 'Audit Report') {
-            return 1;
-        }
-        return a.localeCompare(b);
-    });
+    // Sort vulnerability types - Audit Report first, then Executive Summary, then vulnerabilities
+    const sortedVulns = sortVulnNames(Object.keys(vulnGroups));
     
     let html = '<div class="report-grid">';
     
@@ -330,8 +298,9 @@ DashboardApp.renderListViewWithTemplate = function() {
                 datesHTML += `
                     <span class="date-tag clickable" 
                         onclick="${openReportOnclick(report.path, report.format)}" 
-                        data-model="${h(report.model)}">
+                        data-model="${h(modelDataAttrValue(report.model))}">
                         <span class="language-flag" title="${h(languageMeta.name)}">${h(languageMeta.emoji)}</span>
+                        <span class="model-emoji" title="${h(report.model)}">${h((DashboardApp.getModelEmoji(report.model) || '🤖').trim())}</span>
                         <div class="date-main">${formattedDate}</div>
                         <div class="date-time">${formattedTime}</div>
                     </span>
@@ -357,8 +326,17 @@ DashboardApp.renderListViewWithTemplate = function() {
             formatButtons += `<button class="btn btn-format"${titleUnknown} onclick="downloadReportFile('${jsq(p)}', '${jsq(fmt)}')">${btnLabel}</button>`;
         });
             
+        const auditComparisonTableHTML = vuln === 'Audit Report'
+            ? buildAuditComparisonTableHtml(reportsForVuln, vuln)
+            : '';
+        const datesSelectionBadgeHTML = DashboardApp.modelSelectionBadgeHtml(0);
+        const cardClass = vuln === 'Audit Report'
+            ? 'report-card report-card--full-row'
+            : 'report-card';
+
         // Use the template and replace placeholders
         let cardHTML = DashboardApp.templates.dashboardCard
+            .replace('${cardClass}', cardClass)
             .replace('${formattedVulnTypeEmoji}', formattedVulnEmoji)
             .replace('${formattedVulnType}', formattedVuln)
             .replace('${modelsHTML}', modelsHTML)
@@ -367,6 +345,8 @@ DashboardApp.renderListViewWithTemplate = function() {
             .replace('${highRisk}', highRisk)
             .replace('${mediumRisk}', mediumRisk)
             .replace('${lowRisk}', lowRisk)
+            .replace('${datesSelectionBadgeHTML}', datesSelectionBadgeHTML)
+            .replace('${auditComparisonTableHTML}', auditComparisonTableHTML)
             .replace('${formatButtons}', formatButtons);
         
         html += cardHTML;
@@ -452,13 +432,7 @@ DashboardApp.renderStats = function() {
     const currentVulnerabilityText = currentVulnerabilityRaw
         || (isAborted ? 'Scan aborted by user' : isFailed ? 'Scan failed' : (hasRun ? 'Waiting for first vulnerability' : 'No active scan'));
 
-    const normalizePhaseNumber =
-        typeof DashboardApp.normalizeProgressNumber === 'function'
-            ? DashboardApp.normalizeProgressNumber
-            : (value) => {
-                  const raw = Number(value || 0);
-                  return Number.isFinite(raw) ? Math.max(0, raw) : 0;
-              };
+    const normalizePhaseNumber = DashboardApp.normalizeProgressNumber;
 
     const phases = Array.isArray(progress.phases) ? progress.phases : [];
     const phaseRowsHtml = phases
@@ -486,29 +460,8 @@ DashboardApp.renderStats = function() {
         .filter(Boolean)
         .join('');
 
-    let adaptiveHtml = '';
-    const asub = progress.adaptive_subphases;
-    if (!isFinished && asub && typeof asub === 'object') {
-        adaptiveHtml = Object.keys(asub)
-            .map((key) => {
-                const sub = asub[key];
-                if (!sub || typeof sub !== 'object') {
-                    return '';
-                }
-                const labelText = String(sub.label || key);
-                const done = normalizePhaseNumber(sub.completed);
-                const tot = normalizePhaseNumber(sub.total);
-                const pct = tot > 0 ? Math.min(100, Math.round((done / tot) * 100)) : 0;
-                const st = String(sub.status || '').trim();
-                const labelWithStatus =
-                    typeof DashboardApp.htmlProgressPhaseLabelWithStatus === 'function'
-                        ? DashboardApp.htmlProgressPhaseLabelWithStatus(h, labelText, st)
-                        : h(labelText) + (st ? (' · ' + h(st)) : '');
-                return `<div class="progress-phase-sub">${labelWithStatus} — ${done}/${tot} (${pct}%)</div>`;
-            })
-            .filter(Boolean)
-            .join('');
-    }
+    // Keep scan progress high-level only: detailed vuln/file sub-phases are intentionally hidden.
+    const adaptiveHtml = '';
 
     const activePhaseRaw = String(progress.active_phase || '').trim();
     const activePhaseHtml = activePhaseRaw

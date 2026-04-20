@@ -1,7 +1,7 @@
 """Scan helpers: phase rows, wire typing, and executive-summary phase structures.
 
 Includes TypedDict shapes for dashboard/JSON and builders for phased progress rows used in tests
-and markdown fixtures; the orchestrated product pipeline is LangGraph (``graph_progress.py``).
+and markdown fixtures; the orchestrated product pipeline is LangGraph (``oasis.helpers.progress`` graph builders).
 """
 
 from __future__ import annotations

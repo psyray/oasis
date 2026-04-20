@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from oasis.helpers.poc_digest import (
+from oasis.helpers.poc import (
     build_compact_findings_digest,
     finalize_poc_digest_json,
     pop_last_findings_digest_leaf,
