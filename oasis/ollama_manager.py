@@ -1,4 +1,5 @@
 import contextlib
+import re
 import threading
 import time
 import ollama
@@ -413,6 +414,24 @@ class OllamaManager:
             logger.debug("Using default chunk size", exc_info=True)
             return MAX_CHUNK_SIZE
 
+    _NUM_CTX_IN_PARAMETERS = re.compile(r"num_ctx\s+(\d+)", re.IGNORECASE)
+
+    @staticmethod
+    def _num_ctx_from_parameters_value(params: Any) -> Optional[int]:
+        """Resolve num_ctx from Ollama ``parameters`` (dict or Modelfile-style string)."""
+        if params is None:
+            return None
+        try:
+            if isinstance(params, dict) and "num_ctx" in params:
+                return int(params["num_ctx"])
+            if isinstance(params, str):
+                match = OllamaManager._NUM_CTX_IN_PARAMETERS.search(params)
+                if match:
+                    return int(match.group(1))
+        except (TypeError, ValueError):
+            pass
+        return None
+
     @staticmethod
     def _model_info_num_ctx(model_info: Any) -> Optional[int]:
         """Parse num_ctx from Ollama client.show() payload (dict or SDK object)."""
@@ -423,21 +442,76 @@ class OllamaManager:
                 params = getattr(model_info, "parameters", None)
             else:
                 params = None
-            if isinstance(params, dict) and "num_ctx" in params:
-                return int(params["num_ctx"])
+            return OllamaManager._num_ctx_from_parameters_value(params)
         except (TypeError, ValueError):
             pass
         return None
+
+    @staticmethod
+    def _raw_modelinfo_kv(model_info: Any) -> Any:
+        """GGUF KV map from ``client.show()`` (``modelinfo`` / ``model_info``)."""
+        if isinstance(model_info, dict):
+            return model_info.get("modelinfo") or model_info.get("model_info")
+        if getattr(model_info, "modelinfo", None) is not None:
+            return getattr(model_info, "modelinfo")
+        if getattr(model_info, "model_info", None) is not None:
+            return getattr(model_info, "model_info")
+        return None
+
+    @staticmethod
+    def _modelinfo_context_length_tokens(modelinfo: Any) -> Optional[int]:
+        """
+        Largest ``*.context_length`` value from GGUF metadata (Model card context length).
+
+        Used when Modelfile ``parameters`` omit ``num_ctx`` (e.g. some embedding builds).
+        """
+        if not isinstance(modelinfo, dict):
+            return None
+        best: Optional[int] = None
+        for key, raw in modelinfo.items():
+            if not isinstance(key, str) or not key.endswith(".context_length"):
+                continue
+            try:
+                n = int(float(raw))
+            except (TypeError, ValueError):
+                continue
+            if n > 0:
+                best = n if best is None else max(best, n)
+        return best
+
+    @staticmethod
+    def _model_info_effective_context_tokens(model_info: Any) -> tuple[Optional[int], str]:
+        """
+        Effective context size in tokens for chunk sizing.
+
+        Prefer Modelfile ``num_ctx`` (runtime allocation); else GGUF ``*.context_length``.
+
+        Returns:
+            (token_count or None, source: "parameters" | "modelinfo" | "")
+        """
+        from_params = OllamaManager._model_info_num_ctx(model_info)
+        if from_params is not None and from_params > 0:
+            return from_params, "parameters"
+        mi = OllamaManager._raw_modelinfo_kv(model_info)
+        from_gguf = OllamaManager._modelinfo_context_length_tokens(mi)
+        if from_gguf is not None and from_gguf > 0:
+            return from_gguf, "modelinfo"
+        return None, ""
 
     def _detect_optimal_chunk_size(self, model):
         model_info = self._get_model_info(model)
         logger.debug(f"Raw model info type: {type(model_info)}")
 
-        num_ctx = self._model_info_num_ctx(model_info)
-        logger.debug(f"Resolved num_ctx: {num_ctx}")
-        if num_ctx is not None and num_ctx > 0:
-            chunk_size = int(num_ctx * 0.9)
-            logger.info(f"Model {model} context length: {num_ctx}")
+        tokens, source = self._model_info_effective_context_tokens(model_info)
+        logger.debug(f"Resolved effective context tokens: {tokens} (source={source or 'none'})")
+        if tokens is not None and tokens > 0:
+            chunk_size = int(tokens * 0.9)
+            label = (
+                "Modelfile num_ctx"
+                if source == "parameters"
+                else "GGUF context_length"
+            )
+            logger.info(f"Model {model} context ({label}, tokens): {tokens}")
             logger.info(f"🔄 Using chunk size: {chunk_size}")
             return chunk_size
 
@@ -802,7 +876,7 @@ class OllamaManager:
             Formatted token context window size
         """
         try:
-            ctx_size = self._model_info_num_ctx(model_info)
+            ctx_size, _src = self._model_info_effective_context_tokens(model_info)
             if ctx_size is not None and ctx_size > 0:
                 if ctx_size >= 1000:
                     return f"{ctx_size // 1000}k context"

@@ -122,19 +122,64 @@ class TestNormalizeClientResponse(unittest.TestCase):
 
 
 class TestModelInfoNumCtx(unittest.TestCase):
-    """num_ctx extraction for chunk sizing and UI (embedding models may omit parameters)."""
+    """Chunk sizing: Modelfile ``num_ctx`` first, else GGUF ``*.context_length``."""
 
-    def test_none_parameters_returns_none(self):
+    def test_num_ctx_from_dict_parameters(self):
+        self.assertEqual(
+            OllamaManager._model_info_num_ctx({"parameters": {"num_ctx": 8192}}),
+            8192,
+        )
+
+    def test_num_ctx_from_string_parameters_modelfile(self):
+        self.assertEqual(
+            OllamaManager._model_info_num_ctx(
+                {"parameters": "num_ctx 8192\nstop [INST]"}
+            ),
+            8192,
+        )
+
+    def test_num_ctx_from_string_with_extra_whitespace(self):
+        self.assertEqual(
+            OllamaManager._model_info_num_ctx(
+                {"parameters": "  num_ctx    4096  "}
+            ),
+            4096,
+        )
+
+    def test_num_ctx_returns_none_when_missing(self):
+        self.assertIsNone(OllamaManager._model_info_num_ctx({"parameters": {}}))
+        self.assertIsNone(OllamaManager._model_info_num_ctx({}))
+
+    def test_none_parameters_returns_none_for_num_ctx_only(self):
         class MI:
             parameters = None
 
         self.assertIsNone(OllamaManager._model_info_num_ctx(MI()))
 
-    def test_dict_with_num_ctx(self):
-        self.assertEqual(
-            OllamaManager._model_info_num_ctx({"parameters": {"num_ctx": 8192}}),
-            8192,
-        )
+    def test_modelinfo_context_length_reads_gguf_keys(self):
+        mi = {"nomic-bert.context_length": 2048, "other.context_length": 4096}
+        self.assertEqual(OllamaManager._modelinfo_context_length_tokens(mi), 4096)
+
+    def test_effective_prefers_parameters_over_modelinfo(self):
+        info = {
+            "parameters": {"num_ctx": 8192},
+            "modelinfo": {"x.context_length": 2048},
+        }
+        n, src = OllamaManager._model_info_effective_context_tokens(info)
+        self.assertEqual(n, 8192)
+        self.assertEqual(src, "parameters")
+
+    def test_effective_falls_back_to_modelinfo(self):
+        info = {"modelinfo": {"qwen3.context_length": 40960}}
+        n, src = OllamaManager._model_info_effective_context_tokens(info)
+        self.assertEqual(n, 40960)
+        self.assertEqual(src, "modelinfo")
+
+    def test_effective_accepts_model_info_alias_key(self):
+        info = {"model_info": {"foo.context_length": 8000}}
+        n, src = OllamaManager._model_info_effective_context_tokens(info)
+        self.assertEqual(n, 8000)
+        self.assertEqual(src, "modelinfo")
 
     def test_detect_optimal_chunk_size_uses_num_ctx(self):
         mgr = OllamaManager(api_url="http://127.0.0.1:11434")
@@ -142,6 +187,13 @@ class TestModelInfoNumCtx(unittest.TestCase):
             return_value={"parameters": {"num_ctx": 1000}}
         )
         self.assertEqual(mgr._detect_optimal_chunk_size("embed"), int(1000 * 0.9))
+
+    def test_detect_optimal_chunk_size_uses_modelinfo_without_parameters(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr._get_model_info = MagicMock(
+            return_value={"modelinfo": {"embed.context_length": 10000}}
+        )
+        self.assertEqual(mgr._detect_optimal_chunk_size("embed"), int(10000 * 0.9))
 
 
 class TestParameterCountNumeric(unittest.TestCase):

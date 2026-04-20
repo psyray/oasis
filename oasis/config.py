@@ -139,7 +139,7 @@ DEFAULT_ARGS = {
     'OUTPUT_FORMAT': 'all',
     'EMBEDDING_ANALYSIS_TYPE': 'file',
     'CACHE_DAYS': 7,
-    'EMBED_MODEL': 'nomic-embed-text-v2-moe:latest',
+    'EMBED_MODEL': 'nomic-embed-text:latest',
     'SCAN_MODEL': None,  # If None, same as main model
 }
 
