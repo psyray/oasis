@@ -39,7 +39,7 @@
 
 - 🔍 **Multi-Model Analysis**: Leverage multiple Ollama models for comprehensive security scanning
 - 🔄 **Two-Phase Scanning**: Use lightweight models for initial scanning and powerful models for deep analysis
-- 🧠 **Adaptive Analysis**: Smart multi-level scanning that adjusts depth based on risk assessment
+- 🧠 **LangGraph Orchestration**: Single pipeline (discover → scan → expand → deep → verify → report, optional PoC assist) with bounded context-expand retries
 - 🔄 **Interactive Model Selection**: Guided selection of scan and analysis models with parameter-based filtering
 - 💾 **Dual-Layer Caching**: Efficient caching for both embeddings and analysis results to dramatically speed up repeated scans
 - 🔧 **Scan Result Caching**: Store and reuse vulnerability analysis results with model-specific caching
@@ -174,10 +174,10 @@ Standard two-phase analysis with separate models:
 oasis -i [path_to_analyze] -sm gemma3:4b -m gemma3:27b
 ```
 
-Adaptive multi-level analysis:
+LangGraph pipeline (default) with optional PoC hints and expand budget:
 ```bash
-# Use adaptive analysis mode with custom threshold
-oasis -i [path_to_analyze] --adaptive -t 0.6 -m llama3
+# Same two-model setup; optional: cap context-expand retries, PoC hint bullets, and/or LLM PoC text
+oasis -i [path_to_analyze] -t 0.6 -m llama3 --langgraph-max-expand 2 --poc-hints
 ```
 
 Targeted vulnerability scan with caching control:
@@ -202,12 +202,16 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
   Supported: 🇬🇧 English (en), 🇫🇷 Français (fr), 🇪🇸 Español (es), 🇩🇪 Deutsch (de), 🇮🇹 Italiano (it), 🇵🇹 Português (pt), 🇷🇺 Русский (ru), 🇨🇳 中文 (zh), 🇯🇵 日本語 (ja)
 
 ### Analysis Configuration
-- `--analyze-type` `-at`: Analyze type [standard, deep] (default: standard)
+
+- **Removed flags:** `--adaptive`/`-ad` and `--analyze-type`/`-at` were dropped in favor of LangGraph-only orchestration; the CLI exits with guidance if they appear—use the options below and `-eat` for embedding segmentation instead.
+
 - `--embeddings-analyze-type` `-eat`: Analyze code by entire file or by individual functions [file, function] (default: file)
     - file: Performs the embedding on the entire file as a single unit, preserving overall context but potentially diluting details.  
     - function (**EXPERIMENTAL**): Splits the file into individual functions for analysis, allowing for more precise detection of issues within specific code blocks but with less contextual linkage across functions.  
 
-- `--adaptive` `-ad`: Use adaptive multi-level analysis that adjusts depth based on risk assessment
+- **`--langgraph-max-expand`** `N`: Maximum **context-expand** retries after verify detects structured-output problems (default: **2**).
+- **`--poc-hints`**: Log optional high-level PoC hint bullets from structured findings only (**no** extra LLM call; **does not** run code).
+- **`--poc-assist`**: Ask the deep model for a standalone executable PoC (script or commands) from findings; **logged only** — OASIS does not run generated code.
 - `--threshold` `-t`: Similarity threshold (default: 0.5)
 - `--vulns` `-v`: Vulnerability types to check (comma-separated or 'all')
 - `--chunk-size` `-ch`: Maximum size of text chunks for embedding (default: auto-detected)
@@ -217,7 +221,7 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 - `--scan-model` `-sm`: Model to use for quick scanning (default: same as main model)
 - `--model-thinking` `-mt`: Enable/disable thinking for deep analysis models [yes,no] (default: no)
 - `--small-model-thinking` `-smt`: Enable/disable thinking for the quick scan model [yes,no] (default: no)
-- `--embed-model` `-em`: Model to use for embeddings (default: nomic-embed-text:latest)
+- `--embed-model` `-em`: Model to use for embeddings (default: qwen3-embedding:4b)
 - `--list-models` `-lm`: List available models and exit
 
 ### Cache Management
@@ -239,6 +243,18 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 - `--audit` `-a`: Run embedding distribution analysis
 - `--ollama-url` `-ol`: Ollama URL (default: http://localhost:11434)
 - `--version` `-V`: Show OASIS version and exit
+
+### Environment overrides (advanced)
+
+Optional **`OASIS_*`** variables tune timeouts and heuristic budgets without editing code (see `oasis/config.py` for the full list). Examples:
+
+- **`OASIS_CHUNK_ANALYZE_TIMEOUT_SEC`** — server-side deadline for one Ollama generate call (seconds).
+- **`OASIS_CHUNK_DEEP_NUM_PREDICT`** — cap on structured deep output tokens (`num_predict`).
+- **`OASIS_OLLAMA_HTTP_CLIENT_TIMEOUT_SEC`** — HTTP client timeout (must cover one full generate round-trip).
+- **`OASIS_POC_DIGEST_JSON_MAX_CHARS`** / **`OASIS_POC_STAGE_LOG_MAX_CHARS`** — PoC JSON prompt size and INFO log cap for PoC-stage output.
+- **`OASIS_STRUCTURED_DEGENERACY_*`** — thresholds for repetitive structured-output detection.
+
+Higher limits increase worst-case latency and memory use on the Ollama host.
 
 ## 💡 Getting the Most out of OASIS
 
@@ -275,50 +291,22 @@ oasis -i ./webapp -sm gemma3:4b -m codellama:34b -v xss,sqli,csrf
 oasis -i ./backend -sm phi3:mini -m deepseek-r1:32b,qwen2.5-coder:32b -v rce,input,data
 
 # For critical infrastructure security analysis (most thorough)
-oasis -i ./critical-service -sm gemma3:7b -m mixtral:instruct -v all --adaptive -t 0.6
+oasis -i ./critical-service -sm gemma3:7b -m mixtral:instruct -v all -t 0.6 --langgraph-max-expand 3
 ```
 
-### Scanning Workflows: Standard vs Adaptive
+### Scanning workflow (LangGraph)
 
-OASIS offers two different analysis approaches, each with distinct advantages:
+Analysis is orchestrated by a single **LangGraph** pipeline:
 
-#### Standard Two-Phase Workflow
+1. **Discover** — embedding-based candidate files per vulnerability type  
+2. **Scan** — structured chunk verdicts (`ScanVerdict`)  
+3. **Expand** — widen suspicious chunk context within budget (retries capped by **`--langgraph-max-expand`**)  
+4. **Deep** — `ChunkDeepAnalysis` for flagged chunks  
+5. **Verify** — schema consistency; may loop back to **Expand** when retries remain  
+6. **Report** — vulnerability reports + executive summary  
+7. **PoC stage (optional)** — **`--poc-hints`** (hint bullets from findings) and/or **`--poc-assist`** (LLM-produced executable PoC text, not run by OASIS)
 
-This workflow uses a sequential approach with two distinct phases:
-
-1. **Initial Scanning Phase**:
-   - Uses a lightweight model specified by `-sm`
-   - Scans entire codebase to identify potentially suspicious chunks
-   - Creates a map of suspicious sections for deep analysis
-
-2. **Deep Analysis Phase**:
-   - Uses more powerful model(s) specified by `-m`
-   - Analyzes only chunks flagged as suspicious in phase 1
-   - Generates comprehensive analysis reports
-
-**Best for**: Large codebases with uniform risk profiles, predictable resource planning
-
-#### Adaptive Multi-Level Workflow
-
-The adaptive workflow employs a dynamic approach that adjusts analysis depth based on risk assessment:
-
-1. **Level 1**: Static pattern-based analysis (fastest)
-2. **Level 2**: Lightweight model scan for initial screening
-3. **Level 3**: Medium-depth context analysis with risk scoring
-4. **Level 4**: Deep analysis only for high-risk chunks
-
-**Best for**: Critical systems with varied risk profiles, complex codebases requiring nuanced analysis
-
-#### Comparison Table
-
-| Aspect | Standard Two-Phase | Adaptive Multi-Level |
-|--------|-------------------|----------------------|
-| **Speed** | Faster for average cases | Faster for low-risk code, slower overall |
-| **Resource Usage** | Predictable, efficient | Variable, optimized for risk |
-| **Detection Accuracy** | Good for obvious vulnerabilities | Better for subtle, context-dependent issues |
-| **False Positives** | More common | Reduced through context analysis |
-| **Resource Allocation** | Fixed per phase | Dynamically adjusted by risk |
-| **Command Flag** | Default | Use `--adaptive` `-ad` |
+Within each run you still choose a **scan model** (`-sm`) and **deep model(s)** (`-m`) as before.
 
 ### Optimization Tips
 
@@ -426,7 +414,7 @@ Retry-aware logs also include `retry_attempt` and `retry_max` so you can disting
 Example hardened command:
 
 ```bash
-oasis -i ./critical-service -sm qwen2.5-coder:7b -m bugtraceai-apex-q4 --adaptive -t 0.6 -smt no -mt no
+oasis -i ./critical-service -sm qwen2.5-coder:7b -m bugtraceai-apex-q4 -t 0.6 -smt no -mt no --langgraph-max-expand 3
 ```
 
 ### Web dashboard and Reload
@@ -453,7 +441,7 @@ OASIS implements a sophisticated dual-layer caching system to optimize performan
 - Stores the results of LLM-based vulnerability scanning for each model and analysis mode
 - Separate caches for scan (lightweight) and deep analysis results
 - Model-specific caching ensures results are tied to the specific model used
-- Analysis type-aware (standard vs. adaptive)
+- Analysis mode-aware (scan vs deep artifacts; LangGraph orchestration uses graph-aligned cache layout where applicable)
 - Use `--clear-cache-scan` (`-ccs`) to force fresh vulnerability scanning
 
 This dual-layer approach dramatically improves performance:

@@ -1,5 +1,6 @@
 """Tests for tools.parse_input and related path helpers."""
 
+import logging
 import shutil
 import sys
 import tempfile
@@ -10,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from oasis.tools import calculate_similarity, extract_clean_path, parse_input
+from oasis.tools import EmojiFormatter, calculate_similarity, extract_clean_path, parse_input
 
 
 class TestCalculateSimilarity(unittest.TestCase):
@@ -59,6 +60,27 @@ class TestExtractCleanPath(unittest.TestCase):
         raw = "/tmp/project/app.py extra-args"
         clean = extract_clean_path(raw)
         self.assertEqual(Path(clean), Path("/tmp/project/app.py"))
+
+
+class TestEmojiFormatter(unittest.TestCase):
+    def test_includes_exception_text_from_parent_formatter(self):
+        formatter = EmojiFormatter()
+        try:
+            raise RuntimeError("boom")
+        except RuntimeError:
+            record = logging.LogRecord(
+                name="test",
+                level=logging.ERROR,
+                pathname=__file__,
+                lineno=1,
+                msg="handler failed",
+                args=(),
+                exc_info=sys.exc_info(),
+            )
+        out = formatter.format(record)
+        self.assertIn("handler failed", out)
+        self.assertIn("RuntimeError", out)
+        self.assertIn("boom", out)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import math
 import re
 import sys
 import tempfile
@@ -17,6 +18,10 @@ if str(ROOT) not in sys.path:
 from oasis.enums import PhaseRowStatus
 from oasis.helpers import adaptive_subphases_payload, standard_scan_phases, standard_scan_phases_vuln_types
 from oasis.helpers.dashboard import parse_phase_counts_from_progress_cell
+from oasis.helpers.executive_summary_similarity import (
+    EXEC_SUMMARY_EMBEDDING_TIER_ORDER,
+    executive_summary_similarity_tier_id,
+)
 from oasis.helpers.progress import (
     EXEC_SUMMARY_PROGRESS_EVENT_VERSION,
     SCAN_PROGRESS_EXTENDED_KEYS,
@@ -55,9 +60,8 @@ except ModuleNotFoundError:
     chunk_analysis_to_markdown = _analysis.chunk_analysis_to_markdown
 
 try:
-    from oasis.analyze import AdaptiveAnalysisPipeline, SecurityAnalyzer
+    from oasis.analyze import SecurityAnalyzer
 except ModuleNotFoundError:
-    AdaptiveAnalysisPipeline = None
     SecurityAnalyzer = None
 
 try:
@@ -220,6 +224,34 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(stats.medium_risk, 0)
         self.assertEqual(stats.files_analyzed, 1)
 
+    def test_exec_summary_similarity_tiers_use_shared_single_source(self):
+        self.assertEqual(executive_summary_similarity_tier_id(0.95), "strong")
+        self.assertEqual(executive_summary_similarity_tier_id(0.8), "strong")
+        self.assertEqual(executive_summary_similarity_tier_id(0.79), "moderate")
+        self.assertEqual(executive_summary_similarity_tier_id(0.6), "moderate")
+        self.assertEqual(executive_summary_similarity_tier_id(0.59), "weak")
+        self.assertEqual(executive_summary_similarity_tier_id(1.5), "strong")
+        self.assertEqual(executive_summary_similarity_tier_id(-0.2), "weak")
+        self.assertEqual(executive_summary_similarity_tier_id(math.nan), "weak")
+        self.assertEqual([tier_id for tier_id, _ in EXEC_SUMMARY_EMBEDDING_TIER_ORDER], ["strong", "moderate", "weak"])
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_exec_summary_similarity_groups_follow_tier_order_contract(self):
+        report = Report.__new__(Report)
+        groups = report._executive_summary_similarity_groups(
+            {
+                "SQL Injection": [
+                    {"file_path": "a.py", "similarity_score": 0.95},
+                    {"file_path": "b.py", "similarity_score": 0.75},
+                    {"file_path": "c.py", "similarity_score": 0.20},
+                ]
+            }
+        )
+        self.assertEqual(list(groups.keys()), [tier_id for tier_id, _ in EXEC_SUMMARY_EMBEDDING_TIER_ORDER])
+        self.assertEqual(len(groups["strong"]), 1)
+        self.assertEqual(len(groups["moderate"]), 1)
+        self.assertEqual(len(groups["weak"]), 1)
+
     def test_build_dashboard_stats_excludes_errored_files_from_analyzed_count(self):
         files = [
             FileReportEntry(
@@ -377,108 +409,11 @@ class TestReportSchema(unittest.TestCase):
         self.assertTrue(medium.validation_error)
         self.assertTrue(deep.validation_error)
 
-    @unittest.skipIf(AdaptiveAnalysisPipeline is None, "oasis.analyze dependencies are unavailable")
-    def test_identify_high_risk_chunks_skips_validation_errors(self):
-        pipeline = AdaptiveAnalysisPipeline.__new__(AdaptiveAnalysisPipeline)
-        suspicious_chunks = [(0, "chunk-a"), (1, "chunk-b"), (2, "chunk-c")]
-        medium_results = [
-            {"chunk_idx": 0, "risk_score": 90, "validation_error": False},
-            {"chunk_idx": 1, "risk_score": 99, "validation_error": True},
-            {"chunk_idx": 2, "risk_score": 40, "validation_error": False},
-        ]
-        selected = pipeline._identify_high_risk_chunks(
-            suspicious_chunks=suspicious_chunks,
-            medium_results=medium_results,
-            risk_threshold=70,
-        )
-        self.assertEqual(selected, [(0, "chunk-a")])
-
-    @unittest.skipIf(AdaptiveAnalysisPipeline is None, "oasis.analyze dependencies are unavailable")
-    def test_adaptive_analysis_generates_incremental_summary_for_each_completed_vulnerability(self):
-        pipeline = AdaptiveAnalysisPipeline.__new__(AdaptiveAnalysisPipeline)
-        pipeline.llm_model = "test-model"
-        pipeline.ollama_manager = SimpleNamespace(get_model_display_name=lambda _model: "test-model")
-        pipeline.analyzer = SimpleNamespace(
-            search_vulnerabilities=lambda vuln, threshold: [("app.py", 0.9)],
-        )
-        pipeline._batch_processor = SimpleNamespace(
-            process_all_tasks_in_batches=lambda tasks: None,
-        )
-        pipeline._collect_vulnerability_results = lambda filtered_results, vuln: [{"file_path": "app.py", "similarity_score": 0.9}]
-
-        vulnerabilities = [{"name": "SQL Injection"}, {"name": "XSS"}]
-        args = SimpleNamespace(silent=True, threshold=0.5)
-        summary_calls = []
-        report = SimpleNamespace(
-            generate_vulnerability_report=lambda **kwargs: None,
-            generate_executive_summary=lambda all_results, model_name, progress=None: summary_calls.append(progress),
-        )
-
-        pipeline.perform_adaptive_analysis(vulnerabilities, args, report)
-
-        nv = len(vulnerabilities)
-        self.assertTrue(
-            all(
-                p.get("event_version") == EXEC_SUMMARY_PROGRESS_EVENT_VERSION
-                for p in summary_calls
-            )
-        )
-
-        identifying = [
-            p
-            for p in summary_calls
-            if p.get("total_vulnerabilities") == nv
-            and (p.get("adaptive_subphases") or {}).get("identify_files", {}).get("total") == nv
-        ]
-        self.assertTrue(identifying, "expected identification payloads with denominator nv")
-
-        progress_total_while_collecting = 2
-        collecting = [
-            p
-            for p in summary_calls
-            if p.get("total_vulnerabilities") == progress_total_while_collecting
-            and (p.get("adaptive_subphases") or {}).get("collect_results", {}).get("total")
-            == progress_total_while_collecting
-            and (p.get("adaptive_subphases") or {}).get("collect_results", {}).get("status")
-            == PhaseRowStatus.IN_PROGRESS.value
-        ]
-        self.assertTrue(collecting, "expected collection payloads with collection denominator")
-
-        batch_in_progress = [
-            p
-            for p in summary_calls
-            if (p.get("adaptive_subphases") or {}).get("batch_process", {}).get("status")
-            == PhaseRowStatus.IN_PROGRESS.value
-        ]
-        self.assertTrue(batch_in_progress)
-
-        self.assertGreaterEqual(len(summary_calls), 2)
-        collect_before_sql = [
-            p
-            for p in summary_calls
-            if p.get("current_vulnerability") == "SQL Injection"
-            and p.get("completed_vulnerabilities") == 0
-            and (p.get("adaptive_subphases") or {}).get("batch_process", {}).get("status")
-            == PhaseRowStatus.COMPLETE.value
-            and (p.get("adaptive_subphases") or {}).get("collect_results", {}).get("status")
-            == PhaseRowStatus.IN_PROGRESS.value
-        ]
-        self.assertTrue(collect_before_sql)
-
-        final_updates = [
-            p
-            for p in summary_calls
-            if p.get("completed_vulnerabilities") == 2
-            and not p.get("current_vulnerability")
-            and p.get("tested_vulnerabilities") == ["SQL Injection", "XSS"]
-        ]
-        self.assertTrue(final_updates)
-        self.assertFalse(final_updates[-1].get("is_partial"))
-
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_executive_summary_includes_partial_progress_block(self):
         report = Report.__new__(Report)
         report.output_format = ["md"]
+        report.output_base_dir = Path("/tmp")
         report.current_model = "test-model"
         report.report_dirs = {"test_model": {"md": Path("/tmp")}}
         report.create_header = lambda title, model_name: [f"# {title}", f"Model: {model_name}"]
@@ -499,6 +434,9 @@ class TestReportSchema(unittest.TestCase):
         self.assertIn("Scan Progress", content)
         self.assertIn("1/3", content)
         self.assertIn("partial", content.lower())
+        self.assertIn("Strong embedding match", content)
+        self.assertIn("| Similarity |", content)
+        self.assertNotIn("Risk Findings", content)
 
     @unittest.skipIf(publish_incremental_summary is None, "oasis.report dependencies are unavailable")
     def test_publish_incremental_summary_strips_unknown_progress_extras(self):
@@ -624,6 +562,7 @@ class TestReportSchema(unittest.TestCase):
     def test_executive_summary_notifier_receives_progress_payload(self):
         report = Report.__new__(Report)
         report.output_format = ["md"]
+        report.output_base_dir = Path("/tmp")
         report.current_model = "test-model"
         report.report_dirs = {"test_model": {"md": Path("/tmp")}}
         report.create_header = lambda title, model_name: [f"# {title}", f"Model: {model_name}"]
@@ -991,7 +930,7 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(SCAN_PROGRESS_EXTENDED_KEYS, expected)
 
     def test_exec_summary_progress_event_version_contract(self):
-        self.assertEqual(EXEC_SUMMARY_PROGRESS_EVENT_VERSION, 2)
+        self.assertEqual(EXEC_SUMMARY_PROGRESS_EVENT_VERSION, 3)
 
     def test_progress_timestamp_iso_utc_z_with_millisecond_precision(self):
         from oasis.report import progress_timestamp_iso
@@ -1239,26 +1178,22 @@ class TestReportSchema(unittest.TestCase):
             "polling transport should be listed before websocket",
         )
 
-    @unittest.skipIf(AdaptiveAnalysisPipeline is None, "oasis.analyze dependencies are unavailable")
-    def test_combine_adaptive_results_escapes_backticks_and_truncates_unparseable_notes(self):
-        pipeline = AdaptiveAnalysisPipeline.__new__(AdaptiveAnalysisPipeline)
-        pipeline.analyzer = SimpleNamespace(
-            _log_structured_output_error=lambda **kwargs: None,
-            ollama_manager=SimpleNamespace(get_model_display_name=lambda _model: "test-model"),
-            llm_model="test-model",
-        )
-        raw = "```" + ("A" * 450)
-        combined = pipeline._combine_adaptive_results(
-            file_path="demo.py",
-            code_chunks=["chunk"],
-            suspicious_chunks=[],
-            medium_results=[],
-            deep_results=[{"chunk_idx": 0, "analysis": raw, "content": "x"}],
-        )
-        markdown = combined["markdown"]
-        self.assertIn("Unparseable deep analyses", markdown)
-        self.assertIn("``\\`", markdown)
-        self.assertIn("[truncated]", markdown)
+    def test_graph_final_progress_extras_use_graph_scan_mode(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from oasis.enums import AnalysisType
+        from oasis.helpers.graph_progress import graph_final_phases
+
+        with patch("oasis.helpers.graph_progress.safe_code_base_file_count", return_value=2):
+            out = graph_final_phases(
+                SimpleNamespace(), 1, updated_at="2026-01-01T00:00:00+00:00"
+            )
+        self.assertEqual(out.get("scan_mode"), AnalysisType.GRAPH.value)
+        phases = out.get("phases") or []
+        ids = [r.get("id") for r in phases]
+        self.assertIn("graph_discover", ids)
+        self.assertIn("graph_verify", ids)
 
 
 if __name__ == "__main__":

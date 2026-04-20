@@ -1,12 +1,26 @@
 import contextlib
+import re
 import threading
+import time
 import ollama
 from typing import List, Optional, Any, Dict
 from tqdm import tqdm
 import logging
 
 # Import from configuration
-from .config import MODEL_EMOJIS,OLLAMA_URL, EXCLUDED_MODELS, DEFAULT_MODELS, MAX_CHUNK_SIZE
+from .config import (
+    MODEL_EMOJIS,
+    OLLAMA_URL,
+    EXCLUDED_MODELS,
+    DEFAULT_MODELS,
+    MAX_CHUNK_SIZE,
+    OLLAMA_HTTP_CLIENT_TIMEOUT_SEC,
+    OLLAMA_SLOW_CALL_WARNING_SEC,
+)
+from .helpers.ollama_timing import (
+    estimate_ollama_payload_chars,
+    options_timeout_ms,
+)
 
 # Import from other modules
 from .tools import logger
@@ -31,7 +45,7 @@ class OllamaManager:
         self.excluded_models = EXCLUDED_MODELS
         self.default_models = DEFAULT_MODELS
         self._client_lock = threading.Lock()
-        self._cache_lock = threading.Lock() 
+        self._cache_lock = threading.Lock()
         self.formatted_models = []
         # Cache for storing model information to avoid repeated API calls
         self._model_info_cache = {}
@@ -50,7 +64,10 @@ class OllamaManager:
         with self._client_lock:
             if not self.client:
                 try:
-                    self.client = ollama.Client(self.api_url)
+                    self.client = ollama.Client(
+                        self.api_url,
+                        timeout=float(OLLAMA_HTTP_CLIENT_TIMEOUT_SEC),
+                    )
                     # Try to list models to verify connection
                     self.client.list()
                 except Exception as e:
@@ -114,6 +131,74 @@ class OllamaManager:
         """
         return self._model_thinking_overrides.get(model)
 
+    @staticmethod
+    def _normalize_client_response(result: Any) -> Any:
+        """
+        Convert ollama-python SDK response objects (e.g. ChatResponse, GenerateResponse)
+        into plain dicts expected by callers. Older SDK versions returned dicts directly.
+        """
+        if result is None or isinstance(result, dict):
+            return result
+        model_dump = getattr(result, "model_dump", None)
+        if callable(model_dump):
+            with contextlib.suppress(Exception):
+                return model_dump()
+        legacy_dict = getattr(result, "dict", None)
+        if callable(legacy_dict):
+            with contextlib.suppress(Exception):
+                return legacy_dict()
+        return result
+
+    @staticmethod
+    def _parse_parameter_size_value(param_size: Any) -> float:
+        """Approximate parameter count from Ollama ``parameter_size`` (e.g. ``8.0B``, ``7M``)."""
+        if param_size is None:
+            return 0.0
+        with contextlib.suppress(ValueError, TypeError):
+            if isinstance(param_size, str):
+                if "B" in param_size:
+                    return float(param_size.replace("B", "")) * 1_000_000_000
+                if "M" in param_size:
+                    return float(param_size.replace("M", "")) * 1_000_000
+            return float(param_size)
+        return 0.0
+
+    @staticmethod
+    def _parameter_count_from_modelinfo_dict(modelinfo: Any) -> float:
+        if not isinstance(modelinfo, dict):
+            return 0.0
+        raw = modelinfo.get("general.parameter_count")
+        if raw is None:
+            return 0.0
+        with contextlib.suppress(ValueError, TypeError):
+            return float(raw)
+        return 0.0
+
+    @staticmethod
+    def _parameter_count_numeric(model_info: Any) -> float:
+        """Raw parameter count for display and lightweight filtering (0 if unknown)."""
+        if model_info is None:
+            return 0.0
+        parameters = 0.0
+        try:
+            if isinstance(model_info, dict):
+                details = model_info.get("details")
+                if isinstance(details, dict) and "parameter_size" in details:
+                    parameters = OllamaManager._parse_parameter_size_value(details["parameter_size"])
+                if parameters == 0.0 and (mi := model_info.get("modelinfo")):
+                    parameters = OllamaManager._parameter_count_from_modelinfo_dict(mi)
+            elif hasattr(model_info, "details") and model_info.details:
+                details = model_info.details
+                if hasattr(details, "parameter_size") and details.parameter_size:
+                    parameters = OllamaManager._parse_parameter_size_value(details.parameter_size)
+            if parameters == 0.0 and hasattr(model_info, "modelinfo") and (
+                mi_attr := model_info.modelinfo
+            ):
+                parameters = OllamaManager._parameter_count_from_modelinfo_dict(mi_attr)
+        except Exception:
+            return 0.0
+        return parameters
+
     def _call_with_thinking(
         self,
         method_name: str,
@@ -133,25 +218,48 @@ class OllamaManager:
         }
         if options is not None:
             request_kwargs["options"] = options
-        request_kwargs.update(kwargs)
+        request_kwargs |= kwargs
 
         thinking = self._resolve_model_thinking(model)
         if thinking is not None:
             request_kwargs["think"] = thinking
 
         method = getattr(client, method_name)
+        payload_chars = estimate_ollama_payload_chars(payload_key, payload_value)
+        timeout_ms_opt = options_timeout_ms(options)
+        has_structured_format = bool(kwargs.get("format"))
+        t_round = time.monotonic()
+        err_type: Optional[str] = None
         try:
-            return method(**request_kwargs)
-        except TypeError as error:
-            # Backward compatibility with ollama clients not supporting think=
-            error_message = error.args[0] if error.args else ""
-            if (
-                "think" in request_kwargs
-                and "unexpected keyword argument 'think'" in str(error_message)
-            ):
+            try:
+                result = method(**request_kwargs)
+            except TypeError as error:
+                # Backward compatibility with ollama clients not supporting think=
+                error_message = error.args[0] if error.args else ""
+                if (
+                    "think" not in request_kwargs
+                    or "unexpected keyword argument 'think'"
+                    not in str(error_message)
+                ):
+                    raise
                 request_kwargs.pop("think", None)
-                return method(**request_kwargs)
+                result = method(**request_kwargs)
+            return self._normalize_client_response(result)
+        except Exception as exc:
+            err_type = type(exc).__name__
             raise
+        finally:
+            elapsed = time.monotonic() - t_round
+            if err_type is None and elapsed >= OLLAMA_SLOW_CALL_WARNING_SEC:
+                logger.warning(
+                    "Slow Ollama call %s model=%s elapsed=%.1fs payload_chars=%s timeout_ms=%s structured=%s",
+                    method_name,
+                    model,
+                    elapsed,
+                    payload_chars,
+                    timeout_ms_opt,
+                    has_structured_format,
+                )
 
     def chat(self, model: str, messages: List[dict], options: Optional[dict] = None, **kwargs):
         """
@@ -306,18 +414,104 @@ class OllamaManager:
             logger.debug("Using default chunk size", exc_info=True)
             return MAX_CHUNK_SIZE
 
+    _NUM_CTX_IN_PARAMETERS = re.compile(r"num_ctx\s+(\d+)", re.IGNORECASE)
+
+    @staticmethod
+    def _num_ctx_from_parameters_value(params: Any) -> Optional[int]:
+        """Resolve num_ctx from Ollama ``parameters`` (dict or Modelfile-style string)."""
+        if params is None:
+            return None
+        try:
+            if isinstance(params, dict) and "num_ctx" in params:
+                return int(params["num_ctx"])
+            if isinstance(params, str):
+                match = OllamaManager._NUM_CTX_IN_PARAMETERS.search(params)
+                if match:
+                    return int(match.group(1))
+        except (TypeError, ValueError):
+            pass
+        return None
+
+    @staticmethod
+    def _model_info_num_ctx(model_info: Any) -> Optional[int]:
+        """Parse num_ctx from Ollama client.show() payload (dict or SDK object)."""
+        try:
+            if isinstance(model_info, dict):
+                params = model_info.get("parameters")
+            elif hasattr(model_info, "parameters"):
+                params = getattr(model_info, "parameters", None)
+            else:
+                params = None
+            return OllamaManager._num_ctx_from_parameters_value(params)
+        except (TypeError, ValueError):
+            pass
+        return None
+
+    @staticmethod
+    def _raw_modelinfo_kv(model_info: Any) -> Any:
+        """GGUF KV map from ``client.show()`` (``modelinfo`` / ``model_info``)."""
+        if isinstance(model_info, dict):
+            return model_info.get("modelinfo") or model_info.get("model_info")
+        if getattr(model_info, "modelinfo", None) is not None:
+            return getattr(model_info, "modelinfo")
+        if getattr(model_info, "model_info", None) is not None:
+            return getattr(model_info, "model_info")
+        return None
+
+    @staticmethod
+    def _modelinfo_context_length_tokens(modelinfo: Any) -> Optional[int]:
+        """
+        Largest ``*.context_length`` value from GGUF metadata (Model card context length).
+
+        Used when Modelfile ``parameters`` omit ``num_ctx`` (e.g. some embedding builds).
+        """
+        if not isinstance(modelinfo, dict):
+            return None
+        best: Optional[int] = None
+        for key, raw in modelinfo.items():
+            if not isinstance(key, str) or not key.endswith(".context_length"):
+                continue
+            try:
+                n = int(float(raw))
+            except (TypeError, ValueError):
+                continue
+            if n > 0:
+                best = n if best is None else max(best, n)
+        return best
+
+    @staticmethod
+    def _model_info_effective_context_tokens(model_info: Any) -> tuple[Optional[int], str]:
+        """
+        Effective context size in tokens for chunk sizing.
+
+        Prefer Modelfile ``num_ctx`` (runtime allocation); else GGUF ``*.context_length``.
+
+        Returns:
+            (token_count or None, source: "parameters" | "modelinfo" | "")
+        """
+        from_params = OllamaManager._model_info_num_ctx(model_info)
+        if from_params is not None and from_params > 0:
+            return from_params, "parameters"
+        mi = OllamaManager._raw_modelinfo_kv(model_info)
+        from_gguf = OllamaManager._modelinfo_context_length_tokens(mi)
+        if from_gguf is not None and from_gguf > 0:
+            return from_gguf, "modelinfo"
+        return None, ""
+
     def _detect_optimal_chunk_size(self, model):
         model_info = self._get_model_info(model)
         logger.debug(f"Raw model info type: {type(model_info)}")
 
-        if hasattr(model_info, 'parameters'):
-            params = model_info.parameters
-            logger.debug(f"Parameters: {params}")
-
-        if 'num_ctx' in params:
-            context_length = int(params.split()[1])
-            chunk_size = int(context_length * 0.9)
-            logger.info(f"Model {model} context length: {context_length}")
+        tokens, source = self._model_info_effective_context_tokens(model_info)
+        logger.debug(f"Resolved effective context tokens: {tokens} (source={source or 'none'})")
+        if tokens is not None and tokens > 0:
+            chunk_size = int(tokens * 0.9)
+            label = (
+                "Modelfile num_ctx"
+                if source == "parameters"
+                else "GGUF context_length"
+            )
+            logger.info(f"Model {model} context ({label}, tokens): {tokens}")
             logger.info(f"🔄 Using chunk size: {chunk_size}")
             return chunk_size
 
@@ -498,103 +692,21 @@ class OllamaManager:
         if not models:
             return []
 
-        # Preload model information to reduce API calls
         self._preload_model_info(models)
 
-        lightweight_models = []
+        lightweight_models: List[str] = []
+        max_lightweight = 10_000_000_000
 
         for model in models:
             try:
-                # Get model information from cache
-                model_info = self._get_model_info(model)
-                parameters = 0
-
-                # Extract parameter count using the same robust handling as in _extract_model_parameters
-                try:
-                    # Check if model_info is a dictionary (newer Ollama API format)
-                    if isinstance(model_info, dict):
-                        # First check if 'details' contains parameter info
-                        if 'details' in model_info and model_info['details']:
-                            details = model_info['details']
-                            if isinstance(details, dict) and 'parameter_size' in details:
-                                param_size = details['parameter_size']
-                                if isinstance(param_size, str) and 'B' in param_size:
-                                    parameters = float(param_size.replace('B', '')) * 1_000_000_000
-                                elif isinstance(param_size, str) and 'M' in param_size:
-                                    parameters = float(param_size.replace('M', '')) * 1_000_000
-                                else:
-                                    parameters = float(param_size)
-
-                        # Then check if 'modelinfo' contains parameter count
-                        if parameters == 0 and 'modelinfo' in model_info and model_info['modelinfo']:
-                            modelinfo = model_info['modelinfo']
-                            if isinstance(modelinfo, dict) and 'general.parameter_count' in modelinfo:
-                                parameters = int(modelinfo['general.parameter_count'])
-
-                    elif hasattr(model_info, 'details') and model_info.details:
-                        details = model_info.details
-                        if hasattr(details, 'parameter_size') and details.parameter_size:
-                            with contextlib.suppress(ValueError, TypeError):
-                                # Handle strings like "8.0B"
-                                param_size = details.parameter_size
-                                if isinstance(param_size, str) and 'B' in param_size:
-                                    parameters = float(param_size.replace('B', '')) * 1_000_000_000
-                                elif isinstance(param_size, str) and 'M' in param_size:
-                                    parameters = float(param_size.replace('M', '')) * 1_000_000
-                                else:
-                                    parameters = float(param_size)
-                    # Also check in modelinfo attribute
-                    if parameters == 0 and hasattr(model_info, 'modelinfo') and model_info.modelinfo:
-                        modelinfo = model_info.modelinfo
-                        if isinstance(modelinfo, dict) and 'general.parameter_count' in modelinfo:
-                            with contextlib.suppress(ValueError, TypeError):
-                                parameters = int(modelinfo['general.parameter_count'])
-                except Exception as inner_e:
-                    logger.debug(f"Error parsing parameter information for {model}: {str(inner_e)}")
-                    # If we can't parse, assume it's a lightweight model
-                    parameters = 0
-
-                # Add to lightweight models if less than 10B parameters or unknown size
-                if parameters == 0 or parameters <= 10_000_000_000:
+                parameters = self._parameter_count_numeric(self._get_model_info(model))
+                if parameters == 0 or parameters <= max_lightweight:
                     lightweight_models.append(model)
-
             except Exception as e:
-                # If we can't get model info, include it by default
                 logger.debug(f"Could not get parameter info for {model}: {str(e)}")
                 lightweight_models.append(model)
 
         return lightweight_models
-    
-    def select_analysis_type(self, args) -> str:
-        """
-        Let user select analysis type interactively
-        
-        Returns:
-            Selected analysis type ('standard' or 'adaptive')
-        """
-        if hasattr(args, 'analyze_type') and args.analyze_type:
-            return args.analyze_type
-
-        logger.info("\n==== ANALYSIS TYPE SELECTION ====")
-        logger.info("\nSelect the type of vulnerability analysis to perform:")
-        logger.info("1. Standard - Two-phase analysis (quick scan, then deep analysis)")
-        logger.info("2. Adaptive - Multi-level analysis that adjusts depth based on risk assessment")
-        
-        while True:
-            try:
-                selection = input("\nEnter your choice (1 or 2): ")
-                
-                if selection.strip() == "1":
-                    logger.info("Selected standard analysis")
-                    return "standard"
-                elif selection.strip() == "2":
-                    logger.info("Selected adaptive analysis")
-                    return "adaptive"
-                else:
-                    logger.error("Invalid selection. Please enter 1 or 2.")
-            except KeyboardInterrupt:
-                logger.info("\nAnalysis type selection interrupted")
-                return "standard"  # Default to standard if interrupted
     
     def select_analysis_models(self, args, available_models):
         """
@@ -735,51 +847,8 @@ class OllamaManager:
         Returns:
             Formatted parameter information
         """
-        parameters = 0
-
-        # Handle different types of responses from Ollama API
-        try:
-            # 1. Check if model_info is a dictionary (newer Ollama API format)
-            if isinstance(model_info, dict):
-                # First check if 'details' contains parameter info
-                if 'details' in model_info and model_info['details']:
-                    details = model_info['details']
-                    if isinstance(details, dict) and 'parameter_size' in details:
-                        param_size = details['parameter_size']
-                        if isinstance(param_size, str) and 'B' in param_size:
-                            parameters = float(param_size.replace('B', '')) * 1_000_000_000
-                        elif isinstance(param_size, str) and 'M' in param_size:
-                            parameters = float(param_size.replace('M', '')) * 1_000_000
-                        else:
-                            parameters = float(param_size)
-
-                # Then check if 'modelinfo' contains parameter count
-                if parameters == 0 and 'modelinfo' in model_info and model_info['modelinfo']:
-                    modelinfo = model_info['modelinfo']
-                    if isinstance(modelinfo, dict) and 'general.parameter_count' in modelinfo:
-                        parameters = int(modelinfo['general.parameter_count'])
-                        
-            # 2. Check if model_info is an object with attributes (older format)
-            elif hasattr(model_info, 'details') and model_info.details:
-                details = model_info.details
-                if hasattr(details, 'parameter_size') and details.parameter_size:
-                    with contextlib.suppress(ValueError, TypeError):
-                        # Handle strings like "8.0B"
-                        param_size = details.parameter_size
-                        if isinstance(param_size, str) and 'B' in param_size:
-                            parameters = float(param_size.replace('B', '')) * 1_000_000_000
-                        elif isinstance(param_size, str) and 'M' in param_size:
-                            parameters = float(param_size.replace('M', '')) * 1_000_000
-                        else:
-                            parameters = float(param_size)
-            # Also check in modelinfo attribute
-            if parameters == 0 and hasattr(model_info, 'modelinfo') and model_info.modelinfo:
-                modelinfo = model_info.modelinfo
-                if isinstance(modelinfo, dict) and 'general.parameter_count' in modelinfo:
-                    with contextlib.suppress(ValueError, TypeError):
-                        parameters = int(modelinfo['general.parameter_count'])
-        except Exception as e:
-            logger.debug(f"Error extracting parameters: {str(e)}")
+        parameters = self._parameter_count_numeric(model_info)
+        if parameters <= 0:
             return ""
 
         # Format parameter count in billions or millions
@@ -807,29 +876,14 @@ class OllamaManager:
             Formatted token context window size
         """
         try:
-            # Check for dictionary format (newer API)
-            if isinstance(model_info, dict):
-                if 'parameters' in model_info and model_info['parameters']:
-                    parameters = model_info['parameters']
-                    if isinstance(parameters, dict) and 'num_ctx' in parameters:
-                        ctx_size = int(parameters['num_ctx'])
-                        if ctx_size >= 1000:
-                            return f"{ctx_size // 1000}k context"
-                        else:
-                            return f"{ctx_size} context"
-                    
-                # Check for object format (older API)
-                elif hasattr(model_info, 'parameters'):
-                    parameters = model_info.parameters
-                    if parameters and isinstance(parameters, dict) and 'num_ctx' in parameters:
-                        ctx_size = int(parameters['num_ctx'])
-                        if ctx_size >= 1000:
-                            return f"{ctx_size // 1000}k context"
-                        else:
-                            return f"{ctx_size} context"
+            ctx_size, _src = self._model_info_effective_context_tokens(model_info)
+            if ctx_size is not None and ctx_size > 0:
+                if ctx_size >= 1000:
+                    return f"{ctx_size // 1000}k context"
+                return f"{ctx_size} context"
         except Exception as e:
             logger.debug(f"Error extracting context window: {str(e)}")
-        
+
         return None
     
     def _extract_parent_model_info(self, model_info: Any, default_emoji: str = "🤖 ") -> str:
@@ -849,50 +903,40 @@ class OllamaManager:
                     model_info['details']['parent_model']):
                     
                     parent_model = model_info['details']['parent_model']
-                    parent_lower = parent_model.lower()
-                    # Extract base name without version
-                    parent_basename = parent_lower.split('/')[-1].split(':')[0]
-
-                    # Get emoji for parent model
-                    parent_emoji = next(
-                        (
-                            emoji
-                            for model_id, emoji in MODEL_EMOJIS.items()
-                            if model_id in parent_basename or model_id in parent_lower
-                        ),
-                        default_emoji,
+                    return self._format_parent_model_display(
+                        parent_model, default_emoji
                     )
-                    
-                    # Return formatted parent model info
-                    return f"{parent_emoji}{parent_model.split(':')[0]}"
-            
-            # Check for object format (older API)
             elif (hasattr(model_info, 'details') and model_info.details and 
                   hasattr(model_info.details, 'parent_model') and 
                   model_info.details.parent_model):
                 
-                    parent_model = model_info.details.parent_model
-                    parent_lower = parent_model.lower()
-                    # Extract base name without version
-                    parent_basename = parent_lower.split('/')[-1].split(':')[0]
-
-                    # Get emoji for parent model
-                    parent_emoji = next(
-                        (
-                            emoji
-                            for model_id, emoji in MODEL_EMOJIS.items()
-                            if model_id in parent_basename or model_id in parent_lower
-                        ),
-                        default_emoji,
-                    )
-                    
-                    # Return formatted parent model info
-                    return f"{parent_emoji}{parent_model.split(':')[0]}"
-        
+                parent_model = model_info.details.parent_model
+                return self._format_parent_model_display(
+                    parent_model, default_emoji
+                )
         except Exception as e:
             logger.debug(f"Error extracting parent model info: {str(e)}")
-        
+
         return ""
+
+    def _format_parent_model_display(self, parent_model, default_emoji):
+        parent_lower = parent_model.lower()
+   
+        # Extract base name without version
+        parent_basename = parent_lower.split('/')[-1].split(':')[0]
+
+        # Get emoji for parent model
+        parent_emoji = next(
+            (
+                emoji
+                for model_id, emoji in MODEL_EMOJIS.items()
+                if model_id in parent_basename or model_id in parent_lower
+            ),
+            default_emoji,
+        )
+
+        # Return formatted parent model info
+        return f"{parent_emoji}{parent_model.split(':')[0]}"
     
     def _build_formatted_string(self, model_name: str, model_emoji: str, param_str: str, ctx_str: str, parent_info: str = "") -> str:
         """

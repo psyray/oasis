@@ -161,6 +161,7 @@ def validation_detail_is_exploitation_conditions_retryable(detail: dict) -> bool
 # Compact rules shared in meaning with ``chunk_deep_prompt_output_constraint_block`` (keep both aligned).
 CHUNK_DEEP_SCHEMA_TYPE_RULES_COMPACT = (
     "Respect schema types (string fields as JSON strings, never arrays/objects); "
+    "no repetitive filler or stutter inside strings; keep narrative fields short (~400 chars); "
     "exploitation_conditions must be one string sentence, not a list; "
     "use \\n and \\\" inside strings as needed; "
     "if uncertain return "
@@ -197,6 +198,23 @@ def chunk_deep_structured_retry_suffix() -> str:
     )
 
 
+def chunk_deep_degenerate_retry_suffix() -> str:
+    """
+    Appended when the previous completion looked like repetition / malformed long strings.
+
+    Keeps retries cheap and avoids burning timeouts on repair of unusable output.
+    """
+    return (
+        "\n\nCRITICAL RETRY — the previous reply looked like repetitive filler inside a JSON "
+        "string or otherwise invalid JSON. Do not repeat any phrase more than twice in any field. "
+        "Cap each narrative string field (explanation, impact, diagram text, steps, notes) at "
+        "about 400 characters. Prefer 0–2 findings with short strings over long prose. "
+        "If you cannot produce fully valid compact JSON, return exactly:\n"
+        '{"findings":[],"notes":"Unable to produce valid concise JSON","validation_error":true,'
+        '"potential_vulnerabilities":true,"truncated":false}\n'
+    )
+
+
 def chunk_deep_prompt_output_constraint_block() -> str:
     """
     Bullet block for the \"Output constraints\" section of deep structured instructions.
@@ -208,6 +226,8 @@ def chunk_deep_prompt_output_constraint_block() -> str:
 - Return JSON ONLY, exactly one object, no prose before or after.
 - Keep values concise to avoid truncation; prioritize complete valid JSON over verbosity.
 - Never repeat filler tokens (e.g. "the the the"), and never emit partial or unfinished strings.
+- If you notice yourself repeating the same words or phrases in a field, STOP and return the minimal fallback object from the schema instructions instead of continuing.
+- Keep each narrative string under ~400 characters unless it is a short code snippet in vulnerable_code or secure_code_example.
 - Ensure the response ends with a fully closed JSON object (`}` as appropriate).
 - Follow field types exactly as defined in the schema.
 - If a schema field is type string, output a single string value, never an array or object.

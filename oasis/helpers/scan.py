@@ -1,7 +1,7 @@
 """Scan helpers: phase rows, wire typing, and executive-summary phase structures.
 
-Includes lightweight TypedDict shapes for dashboard/JSON and phase row builders
-for standard and adaptive flows.
+Includes TypedDict shapes for dashboard/JSON and builders for phased progress rows used in tests
+and markdown fixtures; the orchestrated product pipeline is LangGraph (``graph_progress.py``).
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ PhaseRowsWire = List[PhaseRowPayload]
 
 
 
-from ..enums import PhaseRowStatus, ProgressPhaseRowId
+from ..enums import PhaseRowStatus, ProgressPhaseRowId, ProgressPhaseRowKind
 
 PhaseTriple = Tuple[str, int, int]
 StatusArg = Union[PhaseRowStatus, str]
@@ -76,10 +76,12 @@ def phase_progress_row(
     completed: int,
     total: int,
     current_item: Optional[str] = None,
+    row_kind: str = ProgressPhaseRowKind.SUMMARY.value,
 ) -> Dict[str, Any]:
     row: Dict[str, Any] = {
         "id": phase_id,
         "label": label,
+        "row_kind": row_kind,
         "status": status,
         "completed": max(0, completed),
         "total": max(0, total),
@@ -108,7 +110,7 @@ def standard_scan_phases(
     initial_current_item: Optional[str] = None,
     deep_current_item: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Three rows: embeddings, initial scan, deep analysis (standard scan mode)."""
+    """Three rows: embeddings, initial scan, deep analysis (fixture / non-graph layouts)."""
     return [
         embedding_phase_row(n_files),
         phase_progress_row(
@@ -196,7 +198,7 @@ def adaptive_scan_phases(
     adaptive: PhaseTriple,
     current_item: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Two rows: embeddings, adaptive analysis."""
+    """Two rows: embeddings, adaptive-style row (wire compatibility in tests / old payloads)."""
     return [
         embedding_phase_row(n_files),
         phase_progress_row(
@@ -216,7 +218,7 @@ def adaptive_subphases_payload(
     batch_process: PhaseTriple,
     collect_results: PhaseTriple,
 ) -> Dict[str, Dict[str, Any]]:
-    """Nested sub-phase dict for adaptive mode; each triple is ``(status, completed, total)``."""
+    """Nested sub-phase dict for legacy adaptive-shaped progress; triple is ``(status, completed, total)``."""
     return {
         "identify_files": {
             "label": "Identify vulnerable files",

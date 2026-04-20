@@ -2,6 +2,8 @@ import argparse
 import json
 import logging
 import re
+import sys
+import time as time_module
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
@@ -11,7 +13,17 @@ from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 
 # Import from configuration
-from .config import CHUNK_ANALYZE_TIMEOUT, LANGUAGES, MODEL_EMOJIS, VULNERABILITY_PROMPT_EXTENSION, EMBEDDING_THRESHOLDS, MAX_CHUNK_SIZE, DEFAULT_ARGS
+from .config import (
+    CHUNK_ANALYZE_TIMEOUT,
+    CHUNK_DEEP_NUM_PREDICT,
+    CONTEXT_EXPAND_MAX_CHARS,
+    LANGUAGES,
+    MODEL_EMOJIS,
+    VULNERABILITY_PROMPT_EXTENSION,
+    EMBEDDING_THRESHOLDS,
+    MAX_CHUNK_SIZE,
+    DEFAULT_ARGS,
+)
 
 # Import from other modules
 from .ollama_manager import OllamaManager
@@ -19,28 +31,51 @@ from .helpers.misc import absolute_snippet_lines_in_file
 from .tools import chunk_content_with_spans, logger, calculate_similarity, sanitize_name
 from .report import (
     Report,
-    build_adaptive_deep_phase_markdown,
     progress_timestamp_iso,
     publish_incremental_summary,
 )
 from .helpers import (
-    adaptive_after_batch_extras,
-    adaptive_after_identification_extras,
-    adaptive_collect_step_extras,
-    adaptive_final_summary_extras,
-    adaptive_identification_start_extras,
-    adaptive_identifying_loop_extras,
     reset_tqdm_phase_bar,
     safe_code_base_file_count,
     standard_deep_phase_extras,
-    standard_final_complete_extras,
-    standard_initial_iteration_extras,
-    standard_initial_sweep_extras,
+)
+from .helpers.langgraph_console import (
+    LG_DEBUG_SEPARATOR,
+    LG_DEEP_VULN_FINISHED,
+    LG_LLM_SELECTED,
+    LG_SCAN_TASK_COMPLETE,
+    cli_bold,
+    langgraph_emit,
+    langgraph_emit_post_pipeline,
+)
+from .helpers.debug_cli_separators import (
+    separator_file_scope,
+    separator_vulnerability,
+)
+from .helpers.llm_debug_log import (
+    llm_debug_log_request,
+    llm_debug_log_response,
+)
+from .helpers.langgraph_counts import deep_payload_vuln_types_total, embedding_tasks_vuln_types_total
+from .helpers.poc_digest import build_compact_findings_digest, finalize_poc_digest_json
+from .helpers.poc_pipeline import (
+    POC_DIGEST_JSON_MAX_CHARS,
+    build_poc_hints_markdown,
+    maybe_debug_log_poc_stage_output,
+    poc_assist_chat_options,
+)
+from .helpers.context_expand import expand_suspicious_chunk_records
+from .helpers.graph_progress import (
+    graph_final_phases,
+    graph_phases_deep_in_progress,
+    graph_phases_discover_done_scan_pending,
+    graph_phases_scan_done_expand_pending,
+    graph_progress_extras,
 )
 from .helpers.progress import EXEC_SUMMARY_PROGRESS_EVENT_VERSION
 from .embedding import EmbeddingManager, build_vulnerability_embedding_prompt
 from .cache import CacheManager
-from .enums import AnalysisMode, AnalysisType
+from .enums import AnalysisMode
 from .schemas.analysis import (
     ANALYSIS_SCHEMA_VERSION,
     ChunkDeepAnalysis,
@@ -49,7 +84,9 @@ from .schemas.analysis import (
     VulnerabilityFinding,
     chunk_analysis_to_markdown,
 )
+from .helpers.structured_output_degeneracy import structured_deep_raw_looks_degenerate
 from .structured_output.deep import (
+    chunk_deep_degenerate_retry_suffix,
     chunk_deep_normalization_change_samples,
     chunk_deep_prompt_output_constraint_block,
     chunk_deep_structured_retry_suffix,
@@ -90,6 +127,28 @@ def _publish_exec_summary_progress(
     )
 
 
+def _langgraph_publish_mid_pipeline(
+    analyzer: Any,
+    report: Optional[Report],
+    *,
+    nv: int,
+    phases: List[Dict[str, Any]],
+) -> None:
+    """Shared LangGraph snapshot: zero completed vulns, pipeline phase rows only."""
+    if report is None:
+        return
+    _publish_exec_summary_progress(
+        analyzer,
+        report,
+        {},
+        completed_vulnerabilities=0,
+        total_vulnerabilities=nv,
+        current_vulnerability=None,
+        tested_vulnerabilities=[],
+        **graph_progress_extras(analyzer=analyzer, nv=nv, phases=phases),
+    )
+
+
 def _enrich_findings_with_snippet_file_lines(
     chunk_model: ChunkDeepAnalysis,
     chunk_text: str,
@@ -125,11 +184,26 @@ StructuredOutputFailureHandler = Callable[
 
 
 class SecurityAnalyzer:
+    """Embeddings, caching, prompts, structured outputs, and vulnerability analysis.
+
+    **LangGraph (canonical product pipeline):** orchestration lives in ``oasis/agent/``
+    (``graph.py``, ``invoke.invoke_oasis_langgraph``, ``tools.py`` / ``nodes.py``). Nodes call
+    only the ``langgraph_*`` methods below—do not reimplement Discover→Scan→… sequencing in
+    ``oasis.py`` or helpers.
+
+    LangGraph hooks (invoked by the agent layer):
+        ``langgraph_discover_and_publish``, ``langgraph_scan_and_publish``,
+        ``langgraph_expand_and_publish``, ``langgraph_deep_and_publish``,
+        ``langgraph_verify``, ``langgraph_finalize_reports``, ``langgraph_poc_assist``.
+
+    Entry: ``process_analysis_with_model`` → ``invoke_oasis_langgraph``.
+    """
+
     def __init__(self, args, llm_model: str, embedding_manager: EmbeddingManager, ollama_manager: OllamaManager,
                  scan_model: str = None,
                  structured_output_failure_handler: Optional[StructuredOutputFailureHandler] = None):
         """
-        Initialize the security analyzer with support for tiered model analysis
+        Initialize the security analyzer with support for tiered model analysis.
 
         Args:
             args: Command line arguments
@@ -155,13 +229,14 @@ class SecurityAnalyzer:
         # Set up scanning model (lighter model for initial passes)
         self.scan_model = scan_model or llm_model
         self.ollama_manager.ensure_model_available(self.scan_model)
-        logger.info("\n")
-        logger.info(f"{MODEL_EMOJIS['default']} Using {self.ollama_manager.get_model_display_name(self.scan_model)} for initial scanning and {self.ollama_manager.get_model_display_name(self.llm_model)} for deep analysis")
+        logger.info(
+            f"{MODEL_EMOJIS['default']} Using {cli_bold(self.ollama_manager.get_model_display_name(self.scan_model))} "
+            f"for initial scanning and {cli_bold(self.ollama_manager.get_model_display_name(self.llm_model))} for deep analysis"
+        )
         
         self.embedding_manager = embedding_manager
         self.embedding_model = embedding_manager.embedding_model
         self.code_base = embedding_manager.code_base
-        self.analyze_type = embedding_manager.analyze_type
         self.analyze_by_function = embedding_manager.analyze_by_function
         self.threshold = embedding_manager.threshold
         
@@ -172,7 +247,7 @@ class SecurityAnalyzer:
         # Cache for suspicious sections (to avoid re-scanning)
         self.suspicious_sections = {}
         
-        # Initialize the cache manager and adaptive analysis pipeline
+        # Initialize the cache manager for scan/deep/graph analysis artifacts
         self.cache_manager = CacheManager(
             input_path=embedding_manager.input_path,
             llm_model=self.llm_model,
@@ -180,16 +255,13 @@ class SecurityAnalyzer:
             cache_days=self.cache_days
         )
         
-        self.analysis_pipeline = AdaptiveAnalysisPipeline(self)
         self.structured_output_failure_handler = structured_output_failure_handler
         self.run_id = getattr(args, "run_id", None)
         self.language_code = getattr(args, "language", "en")
         self.language = LANGUAGES.get(self.language_code, LANGUAGES["en"])
 
-        # Clear scan cache if requested
         if hasattr(self, 'clear_cache_scan') and self.clear_cache_scan:
-            analysis_type = AnalysisType.ADAPTIVE if self.analyze_by_function else AnalysisType.STANDARD
-            self.cache_manager.clear_scan_cache(analysis_type)
+            self.cache_manager.clear_scan_cache()
 
     def _default_structured_output_failure(
         self,
@@ -617,37 +689,75 @@ Analyze this code segment ({i + 1}/{total_chunks}) for {vuln_name} vulnerabiliti
         chunk_text: str = None,
         vuln_name: str = None,
         mode: AnalysisMode = AnalysisMode.DEEP,
-        analysis_type: AnalysisType = AnalysisType.STANDARD,
         ollama_json_format: Optional[dict] = None,
         response_model: Optional[Type[BaseModel]] = None,
+        ollama_options: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Analyze a single code chunk with the appropriate LLM based on mode.
 
         When ollama_json_format and response_model are set, uses Ollama structured outputs
         and returns: scan verdict as plain string, or model_dump_json() for structured models.
+
+        ``ollama_options``, if provided, is merged into per-call defaults (timeout, structured
+        deep ``num_predict``): keys from ``ollama_options`` override defaults; other default keys
+        remain unless explicitly overridden.
         """
         model = self.scan_model if mode == AnalysisMode.SCAN else self.llm_model
         model_display = self.ollama_manager.get_model_display_name(model)
 
-        if self.cache_manager.has_caching_info(file_path, chunk_text, vuln_name, analysis_type):
+        if self.cache_manager.has_caching_info(file_path, chunk_text, vuln_name):
             if cached_result := self.cache_manager.get_cached_analysis(
-                file_path, chunk_text, vuln_name, prompt, mode, analysis_type
+                file_path, chunk_text, vuln_name, prompt, mode
             ):
                 logger.debug(
-                    f"Using cached {mode.value} {analysis_type.value} analysis for chunk in {file_path} with {model_display}"
+                    f"Using cached {mode.value} analysis for chunk in {file_path} with {model_display}"
                 )
+                if getattr(self.args, "debug", False):
+                    logger.debug(
+                        "[LLM cache hit] mode=%s file=%s vuln=%s — skip network; cached result chars=%s",
+                        mode.value,
+                        file_path,
+                        vuln_name,
+                        len(cached_result) if isinstance(cached_result, str) else "?",
+                    )
                 return cached_result
 
         try:
+            # Per-call Ollama defaults (timeout ms, structured deep num_predict); merge with
+            # caller-supplied options so shared keys from the caller win and extras are kept.
             timeout = CHUNK_ANALYZE_TIMEOUT
-            opts: dict = {"timeout": timeout * 1000}
+            default_opts: Dict[str, Any] = {"timeout": timeout * 1000}
+            if mode == AnalysisMode.DEEP and ollama_json_format is not None:
+                default_opts["num_predict"] = CHUNK_DEEP_NUM_PREDICT
+            opts: Dict[str, Any] = {**default_opts, **(ollama_options or {})}
             retry_limit = self._get_structured_retry_limit(response_model) if response_model is not None else 0
             effective_prompt = prompt
 
             logger.debug(f"Analyzing chunk with {model_display}")
 
+            def persist_chunk_analysis_cache(payload: str) -> None:
+                if self.cache_manager.has_caching_info(file_path, chunk_text, vuln_name):
+                    self.cache_manager.store_analysis(
+                        file_path, chunk_text, vuln_name, prompt, payload, mode
+                    )
+
+            result: Optional[str] = None
+            chunk_cache_written = False
+
             for attempt in range(retry_limit + 1):
+                if getattr(self.args, "debug", False):
+                    llm_debug_log_request(
+                        logger,
+                        mode=mode.value,
+                        model=model,
+                        file_path=file_path,
+                        vuln_name=vuln_name,
+                        structured=ollama_json_format is not None,
+                        attempt=attempt + 1,
+                        prompt=effective_prompt,
+                        full_content=True,
+                    )
                 chat_kwargs: dict = {
                     "model": model,
                     "messages": [{"role": "user", "content": effective_prompt}],
@@ -657,7 +767,82 @@ Analyze this code segment ({i + 1}/{total_chunks}) for {vuln_name} vulnerabiliti
                     chat_kwargs["format"] = ollama_json_format
 
                 response = self.ollama_manager.chat(**chat_kwargs)
-                raw = response["message"]["content"]
+                if not isinstance(response, dict):
+                    logger.error(
+                        "Ollama chat returned non-dict response type=%s repr=%r",
+                        type(response).__name__,
+                        response,
+                    )
+                    raise RuntimeError(f"Unexpected Ollama chat response type: {type(response).__name__}")
+                if "message" not in response:
+                    logger.error(
+                        "Ollama chat response missing 'message' key; keys=%s preview=%s",
+                        list(response.keys()),
+                        str(response)[:800],
+                    )
+                    raise RuntimeError("Ollama chat response missing 'message'")
+                msg = response["message"]
+                if msg is None:
+                    logger.error("Ollama chat response has null 'message'")
+                    raise RuntimeError("Ollama chat response has null message")
+                if not isinstance(msg, dict):
+                    logger.error("Ollama 'message' is not a dict: type=%s", type(msg).__name__)
+                    raise RuntimeError("Ollama chat message has invalid shape")
+                if "content" not in msg:
+                    logger.error("Ollama message missing 'content'; keys=%s", list(msg.keys()))
+                    raise RuntimeError("Ollama message missing content field")
+                raw = msg["content"]
+                if raw is None:
+                    logger.error("Ollama message content is null (file=%s vuln=%s)", file_path, vuln_name)
+                    raise RuntimeError("Ollama message content is null")
+                if not isinstance(raw, str):
+                    raw = str(raw)
+                if raw == "":
+                    logger.warning(
+                        "Ollama returned empty message.content (file=%s vuln=%s model=%s)",
+                        file_path,
+                        vuln_name,
+                        model,
+                    )
+                    raise RuntimeError("Empty Ollama message content")
+                if getattr(self.args, "debug", False):
+                    llm_debug_log_response(
+                        logger,
+                        model=model,
+                        file_path=file_path,
+                        vuln_name=vuln_name,
+                        raw_content=raw,
+                        message=msg if isinstance(msg, dict) else None,
+                        full_content=True,
+                    )
+
+                if (
+                    response_model is not None
+                    and issubclass(response_model, ChunkDeepAnalysis)
+                    and structured_deep_raw_looks_degenerate(
+                        raw, debug_log=getattr(self.args, "debug", False)
+                    )
+                ):
+                    logger.warning(
+                        "Degenerate structured deep output (repetitive or low-entropy JSON text), "
+                        "file=%s vuln=%s attempt=%s/%s",
+                        file_path,
+                        vuln_name,
+                        attempt + 1,
+                        retry_limit + 1,
+                    )
+                    if attempt < retry_limit:
+                        effective_prompt = effective_prompt + chunk_deep_degenerate_retry_suffix()
+                        continue
+                    result = self._resolve_structured_output_failure(
+                        response_model=response_model,
+                        raw=raw,
+                        error=RuntimeError("degenerate structured output"),
+                        model_display=model_display,
+                    )
+                    persist_chunk_analysis_cache(result)
+                    chunk_cache_written = True
+                    break
 
                 if response_model is None:
                     result = raw
@@ -687,8 +872,10 @@ Analyze this code segment ({i + 1}/{total_chunks}) for {vuln_name} vulnerabiliti
                     )
                     break
 
-            if self.cache_manager.has_caching_info(file_path, chunk_text, vuln_name, analysis_type):
-                self.cache_manager.store_analysis(file_path, chunk_text, vuln_name, prompt, result, mode, analysis_type)
+            if result is None:
+                raise RuntimeError("Chunk analysis loop exited without a result (internal error).")
+            if not chunk_cache_written:
+                persist_chunk_analysis_cache(result)
 
             return result
         except Exception as e:
@@ -786,259 +973,304 @@ Code to analyze:
             logger.exception(f"Error during vulnerability search: {str(e)}")
             return []
 
-    def analyze_vulnerability_adaptive(self, file_path: str, vulnerability: Union[str, Dict], threshold: float = 0.7) -> str:
-        """
-        Analyze a file for a specific vulnerability using an adaptive multi-level approach.
-        
-        Args:
-            file_path: Path to the file to analyze
-            vulnerability: Vulnerability to analyze
-            threshold: Similarity threshold for filtering
-            
-        Returns:
-            Analysis results as string
-        """
-        # Delegate to the analysis pipeline
-        return self.analysis_pipeline.run(file_path, vulnerability, threshold)
-
     def process_analysis_with_model(self, vulnerabilities, args, report: Report):
         """
-        Process vulnerability analysis with current model using either:
-        - Standard two-phase approach (scan + deep analysis)
-        - Adaptive multi-level analysis
-        
+        Process vulnerability analysis via the LangGraph orchestrator (canonical pipeline).
+
+        Older adaptive / standard-vs-deep orchestration paths were removed; this entry point must
+        stay LangGraph-only—do not add alternate pipelines here (avoids drift and double maintenance).
+
         Args:
             vulnerabilities: List of vulnerability types to analyze
             args: Command line arguments
             report: Report object
-            
+
         Returns:
             Dictionary with analysis results
         """
-        # Determine analysis type
-        adaptive = hasattr(args, 'adaptive') and args.adaptive
-        
-        # Select appropriate workflow based on analysis type
-        if adaptive:
-            all_results = self.analysis_pipeline.perform_adaptive_analysis(vulnerabilities, args, report)
-        else:
-            all_results = self._perform_standard_analysis(vulnerabilities, args, report)
-        
-        # Generate final executive summary
+        from .agent.invoke import invoke_oasis_langgraph
+
+        all_results = invoke_oasis_langgraph(self, vulnerabilities, args, report)
+        langgraph_emit_post_pipeline(logger)
         logger.info("GENERATING FINAL REPORT")
-        n_files = safe_code_base_file_count(self)
         nv_final = len(vulnerabilities)
-        if adaptive:
-            _publish_exec_summary_progress(
-                self,
-                report,
-                all_results,
-                completed_vulnerabilities=nv_final,
-                total_vulnerabilities=nv_final,
-                current_vulnerability=None,
-                tested_vulnerabilities=list(all_results.keys()),
-                **adaptive_final_summary_extras(
-                    n_files=n_files,
-                    nv_final=nv_final,
-                    n_collect_completed=len(all_results),
-                    updated_at=progress_timestamp_iso(),
-                ),
-            )
-        else:
-            _publish_exec_summary_progress(
-                self,
-                report,
-                all_results,
-                completed_vulnerabilities=nv_final,
-                total_vulnerabilities=nv_final,
-                current_vulnerability=None,
-                tested_vulnerabilities=list(all_results.keys()),
-                **standard_final_complete_extras(
-                    n_files,
-                    nv_final,
-                    updated_at=progress_timestamp_iso(),
-                ),
-            )
-        
-        return all_results
-
-    def _perform_standard_analysis(self, vulnerabilities, args, report):
-        """
-        Perform standard two-phase analysis:
-        1. Scan all files to identify suspicious chunks
-        2. Perform deep analysis on suspicious chunks only
-        
-        Args:
-            vulnerabilities: List of vulnerability types to analyze
-            args: Command line arguments
-            report: Report object
-        
-        Returns:
-            Dictionary with analysis results
-        """
-        all_results = {}
-        n_vuln_types = len(vulnerabilities)
-
-        # Initial sweep progress is emitted once inside _perform_initial_scanning when report is set.
-
-        # Main progress bar for vulnerabilities (per-phase totals applied via reset)
-        with tqdm(
-            total=n_vuln_types,
-            desc="Overall vulnerability progress",
-            position=0,
-            leave=True,
-            disable=args.silent,
-        ) as vuln_pbar:
-
-            # Phase 1: Initial scanning of all suspicious files with lightweight model
-            suspicious_data = self._perform_initial_scanning(
-                vulnerabilities, args, vuln_pbar, report, n_vuln_types=n_vuln_types
-            )
-
-            # Phase 2: Deep analysis of suspicious chunks with the powerful model
-            all_results = self._perform_deep_analysis(
-                suspicious_data, args, report, vuln_pbar, n_vuln_types=n_vuln_types
-            )
-        
-        return all_results
-
-    def _perform_initial_scanning(
-        self,
-        vulnerabilities,
-        args,
-        main_pbar=None,
-        report: Optional[Report] = None,
-        *,
-        n_vuln_types: int,
-    ):
-        """
-        Perform initial scanning on all files for all vulnerabilities using lightweight model
-        
-        Args:
-            vulnerabilities: List of vulnerability types to analyze
-            args: Command-line arguments
-            main_pbar: Optional main progress bar to update
-            report: Report for incremental executive-summary progress
-            n_vuln_types: Configured vulnerability-type count (used for executive-summary totals)
-            
-        Returns:
-            Dictionary with suspicious data for later deep analysis
-        """
-        logger.info("\n")
-        logger.info("===== PHASE 1: INITIAL SCANNING =====")
-        logger.info(f"Using {self.ollama_manager.get_model_display_name(self.scan_model)} for initial scanning")
-        logger.info(f"Analyzing by {self.analyze_type}")
-
-        # Dictionary to store suspicious chunks and related data
-        all_suspicious_data = {}
-
-        # First, find potentially vulnerable files for each vulnerability type
-        suspicious_files_by_vuln = self._identify_suspicious_files(vulnerabilities, args.threshold)
-
-        n_files = safe_code_base_file_count(self)
-        phase1_items = list(suspicious_files_by_vuln.items())
-        phase1_total = len(phase1_items)
-        reset_tqdm_phase_bar(
-            main_pbar,
-            total=phase1_total,
-            description="Overall vulnerability progress",
+        _publish_exec_summary_progress(
+            self,
+            report,
+            all_results,
+            completed_vulnerabilities=nv_final,
+            total_vulnerabilities=nv_final,
+            current_vulnerability=None,
+            tested_vulnerabilities=list(all_results.keys()),
+            **graph_final_phases(self, nv_final, updated_at=progress_timestamp_iso()),
         )
+        return all_results
+
+    # LangGraph stage entry points: time/LLM budgets and PoC sizes are mostly in
+    # ``oasis.config`` (e.g. ``CHUNK_*``, ``CONTEXT_EXPAND_*``, ``POC_*``) and
+    # ``oasis.helpers.poc_pipeline``; keep those in sync when tuning pipeline behavior.
+
+    def langgraph_discover_and_publish(
+        self, vulnerabilities: List[Dict[str, Any]], args: Any, report: Optional[Report]
+    ) -> Dict[str, Any]:
+        nv = len(vulnerabilities)
+        tasks: List[Dict[str, Any]] = []
+        for vuln in vulnerabilities:
+            tasks.extend(
+                {
+                    "file_path": path,
+                    "vuln": vuln,
+                    "similarity_score": score,
+                }
+                for path, score in self.search_vulnerabilities(
+                    vuln, threshold=args.threshold
+                )
+                if score >= args.threshold and path in self.code_base
+            )
+        if report is not None:
+            n_files = safe_code_base_file_count(self)
+            phases = graph_phases_discover_done_scan_pending(n_files, nv)
+            _langgraph_publish_mid_pipeline(self, report, nv=nv, phases=phases)
+        return {"embedding_tasks": tasks}
+
+    def langgraph_scan_and_publish(
+        self, embedding_tasks: List[Dict[str, Any]], args: Any, report: Optional[Report]
+    ) -> Dict[str, Any]:
+        task_list = list(embedding_tasks or [])
+        all_suspicious_data: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        suspicious_files_by_vuln: Dict[str, Any] = {}
+        nv = embedding_tasks_vuln_types_total(task_list)
+        n_files = safe_code_base_file_count(self)
+
+        def _run_one_task(t: Dict[str, Any]) -> None:
+            file_path = t["file_path"]
+            vuln = t["vuln"]
+            similarity_score = t["similarity_score"]
+            vuln_details = self._get_vulnerability_details(vuln)
+            vuln_name = vuln_details[0]
+            suspicious_chunks = self._scan_file_for_vulnerability(
+                file_path, vuln, vuln_details, similarity_score, args.silent
+            )
+            if not suspicious_chunks:
+                return
+            key = (file_path, vuln_name)
+            all_suspicious_data[key] = {
+                "chunks": suspicious_chunks,
+                "vuln_data": vuln,
+                "similarity_score": similarity_score,
+            }
+
+        if task_list:
+            with tqdm(
+                                total=len(task_list),
+                                desc="LangGraph scan tasks (file×vuln)",
+                                position=1,
+                                leave=True,
+                                disable=getattr(args, "silent", False),
+                            ) as scan_tasks_pbar:
+                for t in task_list:
+                    short = Path(t["file_path"]).name
+                    if len(short) > 30:
+                        short = f"{short[:27]}..."
+                    v_obj = t.get("vuln") or {}
+                    vn = v_obj.get("name") or v_obj.get("tag") or "?"
+                    vn_display = vn if len(vn) <= 48 else f"{vn[:45]}..."
+                    scan_tasks_pbar.set_postfix_str(vn_display)
+                    t_scan = time_module.monotonic()
+                    if getattr(args, "debug", False):
+                        langgraph_emit(
+                            logger,
+                            logging.DEBUG,
+                            LG_DEBUG_SEPARATOR,
+                            separator_file_scope(short, f"vuln={vn}"),
+                            pbar=scan_tasks_pbar,
+                        )
+                    _run_one_task(t)
+                    dt = time_module.monotonic() - t_scan
+                    langgraph_emit(
+                        logger,
+                        logging.INFO,
+                        LG_SCAN_TASK_COMPLETE,
+                        cli_bold(short),
+                        cli_bold(vn),
+                        dt,
+                        pbar=scan_tasks_pbar,
+                    )
+                    scan_tasks_pbar.update(1)
+                # Blank line between last Task done text and tqdm bar redraw (still inside tqdm context).
+                if not getattr(scan_tasks_pbar, "disable", True):
+                    tqdm.write("", file=sys.stderr)
+            if not getattr(args, "silent", False):
+                sys.stderr.write("\n")
+        for key, data in all_suspicious_data.items():
+            fp, vn = key
+            if vn not in suspicious_files_by_vuln:
+                suspicious_files_by_vuln[vn] = {"files": [], "vuln_data": data["vuln_data"]}
+            suspicious_files_by_vuln[vn]["files"].append((fp, data["similarity_score"]))
 
         if report is not None:
-            _publish_exec_summary_progress(
-                self,
-                report,
-                {},
-                completed_vulnerabilities=0,
-                total_vulnerabilities=len(vulnerabilities),
-                current_vulnerability=None,
-                tested_vulnerabilities=[],
-                **standard_initial_sweep_extras(n_files, phase1_total),
+            phases = graph_phases_scan_done_expand_pending(n_files, nv)
+            _langgraph_publish_mid_pipeline(self, report, nv=nv, phases=phases)
+        payload = {"suspicious_data": all_suspicious_data, "files_by_vuln": suspicious_files_by_vuln}
+        return {"suspicious_payload": payload}
+
+    def langgraph_expand_and_publish(
+        self,
+        suspicious_payload: Dict[str, Any],
+        args: Any,
+        current_iteration: int,
+        verify_retry_pending: bool,
+    ) -> Dict[str, Any]:
+        it = current_iteration + (1 if verify_retry_pending else 0)
+        # Padding grows with expand iteration; baseline matches ``OASIS_CONTEXT_EXPAND_PADDING_*`` defaults (40).
+        padding = 40 + 20 * max(0, it)
+        suspicious_data = suspicious_payload.get("suspicious_data") or {}
+        new_data: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for key, data in suspicious_data.items():
+            file_path, _vn = key
+            if file_path not in self.code_base:
+                new_data[key] = data
+                continue
+            content = self.code_base[file_path]["content"]
+            expanded = expand_suspicious_chunk_records(
+                content,
+                data["chunks"],
+                padding_before=padding,
+                padding_after=padding,
+                max_chars=CONTEXT_EXPAND_MAX_CHARS,
+            )
+            new_data[key] = {**data, "chunks": expanded}
+        out = {**suspicious_payload, "suspicious_data": new_data}
+        return {"suspicious_payload": out, "expand_iterations": it, "verify_retry_pending": False}
+
+    def langgraph_deep_and_publish(
+        self,
+        suspicious_payload: Dict[str, Any],
+        args: Any,
+        report: Report,
+        *,
+        graph_deep_pass: int = 0,
+    ) -> Dict[str, Any]:
+        nv = deep_payload_vuln_types_total(suspicious_payload.get("files_by_vuln"))
+        all_results = self._perform_deep_analysis(
+            suspicious_payload,
+            args,
+            report,
+            None,
+            n_vuln_types=nv,
+            graph_progress=True,
+            graph_deep_pass=graph_deep_pass,
+        )
+        return {"all_results": all_results}
+
+    def langgraph_verify(
+        self, all_results: Dict[str, Any], args: Any, expand_it: int, max_it: int
+    ) -> Dict[str, Any]:
+        errors = 0
+        for _vn, rows in (all_results or {}).items():
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                for ch in row.get("structured_chunks") or []:
+                    if isinstance(ch, dict) and ch.get("validation_error"):
+                        errors += 1
+        retry = errors > 0 and expand_it < max_it
+        return {"verify_retry_pending": retry, "validation_error_count": errors}
+
+    def langgraph_finalize_reports(
+        self,
+        vulnerabilities: List[Dict[str, Any]],
+        args: Any,
+        report: Report,
+        all_results: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        _ = (vulnerabilities, args, report)
+        return {"all_results": all_results}
+
+    def _build_poc_assist_llm_section(self, args: Any, all_results: Dict[str, Any]) -> str:
+        compact = build_compact_findings_digest(all_results)
+        if not compact:
+            return (
+                "## LLM-assisted executable PoC\n\n"
+                "_No structured findings available to derive a PoC._"
+            )
+        digest = finalize_poc_digest_json(compact, POC_DIGEST_JSON_MAX_CHARS)
+        prompt = f"""You are assisting a defensive security review.
+
+Based ONLY on the JSON summary below (from a prior static scan), produce:
+1) A minimal standalone proof-of-concept: a short script OR shell/Python/etc. commands that could demonstrate the issue in an isolated lab or VM.
+2) Prefer the language implied by file paths and code snippets when obvious.
+3) Start with one short safety paragraph: local sandbox only, authorized testing, no third-party targets.
+
+OASIS will LOG your answer only; it will NOT execute your output. The human must review and run any code manually.
+
+FINDINGS SUMMARY (valid JSON envelope; ``truncated_for_llm_prompt_budget`` may be true):
+{digest}
+"""
+        try:
+            opts: dict = poc_assist_chat_options()
+            if getattr(args, "debug", False):
+                llm_debug_log_request(
+                    logger,
+                    mode="poc_assist",
+                    model=self.llm_model,
+                    file_path=None,
+                    vuln_name=None,
+                    structured=False,
+                    attempt=1,
+                    prompt=prompt,
+                    full_content=False,
+                )
+            response = self.ollama_manager.chat(
+                model=self.llm_model,
+                messages=[{"role": "user", "content": prompt}],
+                options=opts,
+            )
+            msg = response.get("message") or {}
+            raw = msg.get("content") or ""
+            if getattr(args, "debug", False):
+                llm_debug_log_response(
+                    logger,
+                    model=self.llm_model,
+                    file_path=None,
+                    vuln_name=None,
+                    raw_content=raw,
+                    message=msg if isinstance(msg, dict) else None,
+                    full_content=False,
+                )
+        except Exception:
+            logger.exception("Executable PoC generation failed")
+            return (
+                "## LLM-assisted executable PoC\n\n"
+                "_PoC generation failed. Run with **`--debug`** (`-d`) for diagnostic logs "
+                "(details are not shown in reports to avoid leaking internal errors)._"
             )
 
-        # Scan all suspicious files with lightweight model
-        logger.debug("\nPerforming initial scan on all suspicious files...")
+        model_display = self.ollama_manager.get_model_display_name(self.llm_model)
+        body = raw.strip() or "_Empty model response._"
+        return (
+            "## LLM-assisted executable PoC\n\n"
+            f"_Generated by **{model_display}** for manual review in a sandbox; "
+            f"OASIS does not execute this output._\n\n"
+            f"{body}"
+        )
 
-        # Progress bar for vulnerabilities in initial scan phase (denominator = types with work)
-        with tqdm(total=phase1_total, desc="Vulnerabilities analyzed (initial scan)",
-                     position=1, leave=False, disable=args.silent) as vuln_scan_pbar:
-            for vuln_name, data in phase1_items:
-                vuln = data['vuln_data']
-                vuln_details = self._get_vulnerability_details(vuln)
-                vuln_name = vuln_details[0]  # Extract name from details tuple
-                suspicious_files = data['files']
+    def langgraph_poc_assist(self, args: Any, all_results: Dict[str, Any]) -> Dict[str, Any]:
+        poc_hints = bool(getattr(args, "poc_hints", False))
+        poc_assist = bool(getattr(args, "poc_assist", False))
+        if not poc_hints and not poc_assist:
+            return {"poc_hints_markdown": ""}
 
-                # Update main progress bar to show current vulnerability
-                if main_pbar:
-                    main_pbar.set_postfix_str(f"Scanning: {vuln_name}")
+        parts: List[str] = []
+        if poc_hints:
+            parts.append(build_poc_hints_markdown(all_results))
+        if poc_assist:
+            parts.append(self._build_poc_assist_llm_section(args, all_results))
 
-                if report is not None:
-                    _publish_exec_summary_progress(
-                        self,
-                        report,
-                        {},
-                        completed_vulnerabilities=0,
-                        total_vulnerabilities=len(vulnerabilities),
-                        current_vulnerability=vuln_name,
-                        tested_vulnerabilities=[],
-                        **standard_initial_iteration_extras(
-                            n_files,
-                            phase1_total,
-                            vuln_scan_pbar.n,
-                            scanning_item=vuln_name,
-                        ),
-                    )
+        text = "\n\n".join(p for p in parts if p)
+        maybe_debug_log_poc_stage_output(logger, args, text)
+        return {"poc_hints_markdown": text}
 
-                # Progress bar for files for this vulnerability
-                with tqdm(total=len(suspicious_files), desc=f"Scanning files for {vuln_name}", 
-                         position=2, leave=False, disable=args.silent) as file_pbar:
-                    for file_path, similarity_score in suspicious_files:
-                        # Skip files not in code base
-                        if file_path not in self.code_base:
-                            file_pbar.update(1)
-                            continue
-
-                        if suspicious_chunks := self._scan_file_for_vulnerability(
-                            file_path, 
-                            vuln, 
-                            vuln_details,
-                            similarity_score,
-                            args.silent,
-                        ):
-                            key = (file_path, vuln_name)
-                            all_suspicious_data[key] = {
-                                'chunks': suspicious_chunks,
-                                'vuln_data': vuln,
-                                'similarity_score': similarity_score
-                            }
-
-                        file_pbar.update(1)
-
-                vuln_scan_pbar.update(1)
-                if main_pbar:
-                    main_pbar.update(1)
-
-                if report is not None:
-                    _publish_exec_summary_progress(
-                        self,
-                        report,
-                        {},
-                        completed_vulnerabilities=0,
-                        total_vulnerabilities=len(vulnerabilities),
-                        current_vulnerability=None,
-                        tested_vulnerabilities=[],
-                        **standard_initial_iteration_extras(
-                            n_files,
-                            phase1_total,
-                            vuln_scan_pbar.n,
-                        ),
-                    )
-
-        return {
-            'suspicious_data': all_suspicious_data,
-            'files_by_vuln': suspicious_files_by_vuln
-        }
-    
     def _scan_file_for_vulnerability(self, file_path, vuln, vuln_details, similarity_score, silent=False):
         """
         Scan a file for a specific vulnerability using lightweight model
@@ -1082,7 +1314,6 @@ Code to analyze:
                     chunk,
                     vuln_name,
                     mode=AnalysisMode.SCAN,
-                    analysis_type=AnalysisType.STANDARD,
                     ollama_json_format=ScanVerdict.model_json_schema(),
                     response_model=ScanVerdict,
                 )
@@ -1114,6 +1345,29 @@ Code to analyze:
         self.suspicious_sections[(file_path, vuln_name)] = [idx for idx, *_ in suspicious_chunks]
         
         return suspicious_chunks
+
+    def _deep_phase_progress_payload(
+        self,
+        *,
+        n_files: int,
+        vuln_types_total: int,
+        deep_completed: int,
+        graph_progress: bool,
+    ) -> Dict[str, Any]:
+        """Executive-summary extras during deep analysis (graph pipeline vs legacy standard layout)."""
+        if graph_progress:
+            nv = vuln_types_total
+            phases = graph_phases_deep_in_progress(
+                n_files,
+                vuln_types_total,
+                deep_completed=deep_completed,
+            )
+            return graph_progress_extras(analyzer=self, nv=nv, phases=phases)
+        return standard_deep_phase_extras(
+            n_files,
+            vuln_types_total,
+            deep_completed=deep_completed,
+        )
     
     def _perform_deep_analysis(
         self,
@@ -1123,6 +1377,8 @@ Code to analyze:
         main_pbar=None,
         *,
         n_vuln_types: Optional[int] = None,
+        graph_progress: bool = False,
+        graph_deep_pass: int = 0,
     ):
         """
         Perform deep analysis on all suspicious chunks using powerful model
@@ -1133,14 +1389,21 @@ Code to analyze:
             report: Report object
             main_pbar: Optional main progress bar to update
             n_vuln_types: Vulnerability-type denominator for progress (defaults to files_by_vuln size)
+            graph_progress: Use LangGraph phase rows for incremental summary progress
+            graph_deep_pass: LangGraph ``expand_iterations`` when entering deep (0 = first pass)
             
         Returns:
             Dictionary with analysis results for all vulnerabilities
         """
-        logger.info("\n")
-        logger.info("===== PHASE 2: DEEP ANALYSIS =====")
-        logger.info(f"Using {self.ollama_manager.get_model_display_name(self.llm_model)} for deep analysis")
-        
+        langgraph_emit(
+            logger,
+            logging.INFO,
+            LG_LLM_SELECTED,
+            cli_bold(self.ollama_manager.get_model_display_name(self.llm_model)),
+        )
+        if not getattr(args, "silent", False):
+            tqdm.write("", file=sys.stderr)
+
         all_suspicious_chunks = suspicious_data['suspicious_data']
         suspicious_files_by_vuln = suspicious_data['files_by_vuln']
         vuln_types_total = (
@@ -1162,10 +1425,11 @@ Code to analyze:
             total_vulnerabilities=vuln_types_total,
             current_vulnerability=None,
             tested_vulnerabilities=[],
-            **standard_deep_phase_extras(
-                n_files,
-                vuln_types_total,
+            **self._deep_phase_progress_payload(
+                n_files=n_files,
+                vuln_types_total=vuln_types_total,
                 deep_completed=0,
+                graph_progress=graph_progress,
             ),
         )
 
@@ -1182,6 +1446,16 @@ Code to analyze:
                 if main_pbar:
                     main_pbar.set_postfix_str(f"Analyzing: {vuln_name}")
 
+                if getattr(args, "debug", False):
+                    langgraph_emit(
+                        logger,
+                        logging.DEBUG,
+                        LG_DEBUG_SEPARATOR,
+                        separator_vulnerability(vuln_name),
+                        pbar=deep_vuln_pbar,
+                    )
+                t_deep_vuln = time_module.monotonic()
+
                 _publish_exec_summary_progress(
                     self,
                     report,
@@ -1190,15 +1464,25 @@ Code to analyze:
                     total_vulnerabilities=vuln_types_total,
                     current_vulnerability=vuln_name,
                     tested_vulnerabilities=list(all_results.keys()),
-                    **standard_deep_phase_extras(
-                        n_files,
-                        vuln_types_total,
+                    **self._deep_phase_progress_payload(
+                        n_files=n_files,
+                        vuln_types_total=vuln_types_total,
                         deep_completed=max(0, completed_count - 1),
-                        deep_current_item=vuln_name,
+                        graph_progress=graph_progress,
                     ),
                 )
 
                 detailed_results = self._analyze_vulnerability_deep(vuln, vuln_name, all_suspicious_chunks, args.silent)
+
+                dt_vuln = time_module.monotonic() - t_deep_vuln
+                langgraph_emit(
+                    logger,
+                    logging.INFO,
+                    LG_DEEP_VULN_FINISHED,
+                    cli_bold(vuln_name),
+                    dt_vuln,
+                    pbar=deep_vuln_pbar,
+                )
 
                 # Store results for this vulnerability
                 all_results[vuln_name] = detailed_results
@@ -1211,7 +1495,7 @@ Code to analyze:
                         model_name=self.llm_model,
                     )
                 else:
-                    logger.info(f"No suspicious code found for {vuln_name}")
+                    logger.info(f"No suspicious code found for {cli_bold(vuln_name)}")
 
                 _publish_exec_summary_progress(
                     self,
@@ -1221,10 +1505,11 @@ Code to analyze:
                     total_vulnerabilities=vuln_types_total,
                     current_vulnerability=None,
                     tested_vulnerabilities=list(all_results.keys()),
-                    **standard_deep_phase_extras(
-                        n_files,
-                        vuln_types_total,
+                    **self._deep_phase_progress_payload(
+                        n_files=n_files,
+                        vuln_types_total=vuln_types_total,
                         deep_completed=completed_count,
+                        graph_progress=graph_progress,
                     ),
                 )
 
@@ -1267,6 +1552,9 @@ Code to analyze:
             for file_path in suspicious_files:
                 key = (file_path, vuln_name)
                 suspicious_data = all_suspicious_chunks[key]
+
+                if getattr(self.args, "debug", False):
+                    logger.debug(separator_file_scope(Path(file_path).name))
 
                 if file_result := self._analyze_file_suspicious_chunks(
                     file_path, suspicious_data, vuln, silent
@@ -1322,7 +1610,6 @@ Code to analyze:
                     chunk,
                     vuln_name,
                     mode=AnalysisMode.DEEP,
-                    analysis_type=AnalysisType.STANDARD,
                     ollama_json_format=ChunkDeepAnalysis.model_json_schema(),
                     response_model=ChunkDeepAnalysis,
                 )
@@ -1375,39 +1662,6 @@ Code to analyze:
             }
         }
     
-    def _identify_suspicious_files(self, vulnerabilities, threshold):
-        """
-        Identify potentially suspicious files for each vulnerability based on embedding similarity
-        
-        Args:
-            vulnerabilities: List of vulnerability types
-            threshold: Similarity threshold for filtering
-            
-        Returns:
-            Dictionary mapping vulnerability names to suspicious files
-        """
-        suspicious_files_by_vuln = {}
-        
-        # Progress bar for vulnerability similarity analysis
-        with tqdm(total=len(vulnerabilities), desc="Searching for similarities by vulnerability", 
-                 position=0, leave=False) as vuln_pbar:
-            for vuln in vulnerabilities:
-                # Find potentially vulnerable files based on embedding similarity
-                results = self.search_vulnerabilities(vuln, threshold=self.threshold)
-                filtered_results = [(path, score) for path, score in results if score >= threshold]
-                
-                logger.debug(f"Found {len(filtered_results)} potentially vulnerable files for {vuln['name']}")
-                
-                # Store these files for later analysis
-                suspicious_files_by_vuln[vuln['name']] = {
-                    'files': filtered_results,
-                    'vuln_data': vuln
-                }
-                
-                vuln_pbar.update(1)
-            
-        return suspicious_files_by_vuln
-
     @staticmethod
     def get_vulnerabilities_to_check(args, vuln_mapping):
         """
@@ -1533,7 +1787,6 @@ class EmbeddingAnalyzer:
         self.results_cache = {}  # Cache for results by vulnerability type
         self.embedding_analysis_type = embedding_manager.embedding_analysis_type
         self.analyze_by_function = embedding_manager.analyze_by_function
-        self.analyze_type = embedding_manager.analyze_type
 
     def analyze_vulnerability(self, vuln: Dict) -> List[Dict[str, Any]]:
         """
@@ -1543,7 +1796,9 @@ class EmbeddingAnalyzer:
             vuln: Vulnerability to analyze
         """
 
-        cache_key = f"{sanitize_name(vuln['name'])}_{self.embedding_manager.analyze_type}"
+        cache_key = (
+            f"{sanitize_name(vuln['name'])}_{self.embedding_manager.embedding_analysis_type}"
+        )
         if cache_key in self.results_cache:
             return self.results_cache[cache_key]
 
@@ -1897,1446 +2152,6 @@ def analyze_item_parallel(args: tuple) -> Dict:
             'error': str(e),
             'is_function': args.is_function
         }
-
-class AdaptiveAnalysisPipeline:
-    """
-    Pipeline for adaptive multi-level security analysis
-    """
-    def __init__(self, analyzer: SecurityAnalyzer):
-        """
-        Initialize the adaptive analysis pipeline
-        
-        Args:
-            analyzer: SecurityAnalyzer instance with required methods and attributes
-        """
-        self.analyzer = analyzer
-        self.args = analyzer.args
-        self.ollama_manager = analyzer.ollama_manager
-        self.client = analyzer.client
-        self.llm_model = analyzer.llm_model
-        self.scan_model = analyzer.scan_model
-        self.cache_manager = analyzer.cache_manager
-        self.code_base = analyzer.code_base
-
-    @staticmethod
-    def _serialize_adaptive_envelope(markdown: str, structured_chunks: List[Dict[str, Any]]) -> str:
-        payload = {
-            "analysis": markdown,
-            "structured_chunks": structured_chunks,
-            "schema_version": ANALYSIS_SCHEMA_VERSION,
-        }
-        return json.dumps(payload)
-
-    @staticmethod
-    def _decode_adaptive_envelope(payload: Any) -> Tuple[str, Optional[List[Dict[str, Any]]]]:
-        """
-        Decode adaptive analysis payload from cache/results.
-
-        Returns a tuple of (analysis_markdown_or_raw, structured_chunks_or_none).
-        """
-        if payload is None:
-            return "", None
-        if isinstance(payload, str) and payload.strip().startswith("{"):
-            try:
-                envelope = json.loads(payload)
-            except json.JSONDecodeError:
-                return payload, None
-            if isinstance(envelope, dict) and "analysis" in envelope:
-                return str(envelope.get("analysis", payload)), envelope.get("structured_chunks")
-        return str(payload), None
-        
-    def run(self, file_path: str, vulnerability: Union[str, Dict], threshold: float = 0.7) -> str:
-        """
-        Run adaptive analysis on a single file/vulnerability
-        
-        Args:
-            file_path: Path to the file to analyze
-            vulnerability: Vulnerability to analyze
-            threshold: Similarity threshold for filtering
-            
-        Returns:
-            Analysis results as string
-        """
-        # Generate analysis task
-        task = [(file_path, vulnerability, threshold)]
-        
-        # Check if we have a batch processor already running
-        if not hasattr(self, '_batch_processor'):
-            # Create new batch processor
-            self._batch_processor = BatchAdaptiveAnalysis(self)
-        
-        # Submit task to batch processor
-        return self._batch_processor.submit_task(task)
-
-    def _static_pattern_analysis(
-        self,
-        code_chunks: List[str],
-        vuln_patterns: List[str],
-        line_spans: List[Tuple[int, int]],
-    ) -> List[Tuple[int, str, int, int]]:
-        """
-        Perform fast pattern-based static analysis on code chunks.
-        
-        Args:
-            code_chunks: List of code chunks
-            vuln_patterns: List of vulnerability patterns to look for
-            line_spans: Parallel list of (start_line, end_line) per chunk index (1-based inclusive)
-            
-        Returns:
-            List of potentially suspicious chunks with their indices and source line spans
-        """
-        suspicious_chunks = []
-        
-        with tqdm(total=len(code_chunks), desc="Static pattern analysis", leave=False) as pbar:
-            for i, chunk in enumerate(code_chunks):
-                # Convert all patterns and chunk to lowercase for case-insensitive matching
-                chunk_lower = chunk.lower()
-                
-                # Check for common vulnerability patterns
-                # TODO: Add more patterns
-                for pattern in vuln_patterns:
-                    if pattern and pattern.lower() in chunk_lower:
-                        sl, el = line_spans[i]
-                        suspicious_chunks.append((i, chunk, sl, el))
-                        break
-                
-                pbar.update(1)
-        
-        logger.debug(f"Static analysis identified {len(suspicious_chunks)}/{len(code_chunks)} suspicious chunks")
-        return suspicious_chunks
-    
-    def _lightweight_model_scan(
-        self,
-        file_path: str,
-        code_chunks: List[str],
-        static_suspicious_chunks: List[Tuple[int, str, int, int]],
-        line_spans: List[Tuple[int, int]],
-        vuln_name: str,
-        vuln_desc: str,
-    ) -> List[Tuple[int, str, int, int]]:
-        """
-        Scan code chunks with lightweight model.
-        
-        Args:
-            file_path: Path to the file
-            code_chunks: All code chunks
-            static_suspicious_chunks: Chunks identified as suspicious by static analysis
-            vuln_name: Name of the vulnerability
-            vuln_desc: Description of the vulnerability
-            
-        Returns:
-            Updated list of suspicious chunks
-        """
-        # Create a set of indices of chunks already identified as suspicious
-        suspicious_indices = {i for i, *_ in static_suspicious_chunks}
-        final_suspicious_chunks = list(static_suspicious_chunks)
-        
-        # Only scan chunks not already identified as suspicious
-        remaining_chunks = [(i, chunk) for i, chunk in enumerate(code_chunks) if i not in suspicious_indices]
-        
-        with tqdm(total=len(remaining_chunks), desc="Lightweight model scan", leave=False) as pbar:
-            for i, chunk in remaining_chunks:
-                sl, el = line_spans[i]
-                # Use simplified scan prompt
-                scan_prompt = self.analyzer._build_scan_prompt(
-                    vuln_name, vuln_desc, chunk, start_line=sl, end_line=el
-                )
-                scan_result = self.analyzer._analyze_code_chunk(
-                    scan_prompt,
-                    file_path,
-                    chunk,
-                    vuln_name,
-                    mode=AnalysisMode.SCAN,
-                    analysis_type=AnalysisType.ADAPTIVE,
-                    ollama_json_format=ScanVerdict.model_json_schema(),
-                    response_model=ScanVerdict,
-                )
-
-                scan_verdict = str(scan_result).strip().upper() if scan_result is not None else ""
-                if not scan_verdict:
-                    logger.warning(
-                        f"Empty adaptive scan verdict for chunk {i + 1} in {file_path}; treating as ERROR"
-                    )
-                    scan_verdict = "ERROR"
-                if scan_verdict == "SUSPICIOUS":
-                    final_suspicious_chunks.append((i, chunk, sl, el))
-                elif scan_verdict == "ERROR":
-                    logger.warning(
-                        f"Adaptive scan verdict validation failed for chunk {i + 1} in {file_path}; continuing"
-                    )
-                elif scan_verdict == "CLEAN":
-                    logger.debug(
-                        f"Adaptive scan verdict CLEAN for chunk {i + 1} in {file_path}"
-                    )
-                else:
-                    logger.warning(
-                        f"Unexpected adaptive scan verdict '{scan_verdict}' for chunk {i + 1} in {file_path}; treating as CLEAN"
-                    )
-                
-                pbar.update(1)
-        
-        logger.debug(f"After lightweight scan: {len(final_suspicious_chunks)}/{len(code_chunks)} suspicious chunks")
-        return final_suspicious_chunks
-    
-    def _identify_context_sensitive_chunks(
-        self, suspicious_chunks: List[Tuple[int, str, int, int]], vuln_name: str
-    ) -> List[Tuple[int, str, int, int]]:
-        """
-        Identify chunks that require context-sensitive analysis.
-        
-        Args:
-            suspicious_chunks: List of suspicious chunks from previous analysis levels
-            vuln_name: Name of the vulnerability being analyzed
-            
-        Returns:
-            List of chunks that need context-sensitive analysis
-        """
-        context_sensitive_chunks = []
-        
-        # Context-sensitive keywords and patterns
-        context_patterns = [
-            'function', 'def ', 'class ', 'import ', 'require', 
-            'parameter', 'argument', 'argv', 'input(',
-            'request', 'response', 'query', 'params', 
-            'from_user', 'user_input', 'data flow', 'sanitize'
-        ]
-        
-        with tqdm(total=len(suspicious_chunks), desc="Identifying context-sensitive chunks", leave=False) as pbar:
-            for chunk_idx, chunk_text, start_line, end_line in suspicious_chunks:
-                chunk_lower = chunk_text.lower()
-                
-                # Check for context patterns
-                for pattern in context_patterns:
-                    if pattern in chunk_lower:
-                        context_sensitive_chunks.append((chunk_idx, chunk_text, start_line, end_line))
-                        break
-                
-                pbar.update(1)
-        
-        logger.debug(f"Identified {len(context_sensitive_chunks)}/{len(suspicious_chunks)} context-sensitive chunks")
-        return context_sensitive_chunks
-    
-    def _medium_model_analysis(
-        self,
-        file_path: str,
-        context_chunks: List[Tuple[int, str, int, int]],
-        vuln_name: str,
-        vuln_desc: str,
-        vuln_patterns: List[str],
-        vuln_impact: str,
-        vuln_mitigation: str,
-    ) -> List[Dict]:
-        """
-        Perform medium-depth analysis on context-sensitive chunks.
-        
-        Args:
-            file_path: Path to the file being analyzed
-            context_chunks: Context-sensitive chunks to analyze
-            vuln_name: Name of the vulnerability
-            vuln_desc: Description of the vulnerability
-            vuln_patterns: Patterns associated with the vulnerability
-            vuln_impact: Impact of the vulnerability
-            vuln_mitigation: Mitigation strategies
-            
-        Returns:
-            List of analysis results with risk scores
-        """
-        results = []
-
-        with tqdm(total=len(context_chunks), desc="Medium-depth analysis", leave=False) as pbar:
-            for idx, (chunk_idx, chunk_text, _sl, _el) in enumerate(context_chunks):
-                # Build a more detailed prompt than the scan prompt, but less detailed than deep analysis
-                schema_hint = json.dumps(MediumRiskAnalysis.model_json_schema(), indent=2)
-                prompt = f"""You are a security analyst specialized in {vuln_name} vulnerabilities.
-
-VULNERABILITY INFORMATION:
-- Name: {vuln_name}
-- Description: {vuln_desc}
-- Common patterns: {', '.join(vuln_patterns[:3]) if vuln_patterns else 'N/A'}
-
-CODE TO ANALYZE:
-```
-{chunk_text}
-```
-
-INSTRUCTIONS:
-1. Analyze this code ONLY for {vuln_name} vulnerabilities
-2. Provide a brief analysis (max 3 sentences) in field "analysis"
-3. Set "risk_score" from 0-100 (0-25 none/very low, 26-50 low, 51-75 medium, 76-100 high)
-
-Respond with JSON only matching this schema (no markdown fences):
-{schema_hint}
-"""
-
-                analysis_result = self.analyzer._analyze_code_chunk(
-                    prompt,
-                    file_path,
-                    chunk_text,
-                    vuln_name,
-                    mode=AnalysisMode.SCAN,
-                    analysis_type=AnalysisType.ADAPTIVE,
-                    ollama_json_format=MediumRiskAnalysis.model_json_schema(),
-                    response_model=MediumRiskAnalysis,
-                )
-
-                try:
-                    medium = MediumRiskAnalysis.model_validate_json(analysis_result)
-                    risk_score = medium.risk_score
-                    analysis = medium.analysis
-                    validation_error = medium.validation_error
-                except ValidationError as e:
-                    logger.warning(f"Error parsing medium analysis result: {str(e)}")
-                    risk_score = 50
-                    analysis = "Error parsing analysis result (validation_error=True)"
-                    validation_error = True
-
-                results.append({
-                    'chunk_idx': chunk_idx,
-                    'risk_score': risk_score,
-                    'analysis': analysis,
-                    'validation_error': validation_error,
-                    'content': chunk_text
-                })
-
-                pbar.update(1)
-
-        return results
-    
-    def _identify_high_risk_chunks(
-        self,
-        suspicious_chunks: List[Tuple],
-        medium_results: List[Dict],
-        risk_threshold: int = 70,
-    ) -> List[Tuple]:
-        """
-        Identify high-risk chunks that need deep analysis.
-        
-        Args:
-            suspicious_chunks: List of all suspicious chunks
-            medium_results: Results from medium-depth analysis
-            risk_threshold: Risk score threshold for high-risk classification
-            
-        Returns:
-            List of high-risk chunks
-        """
-        # Create a mapping from chunk_idx to risk score
-        risk_map = {result['chunk_idx']: result['risk_score'] for result in medium_results}
-        validation_error_map = {
-            result['chunk_idx']: bool(result.get('validation_error', False))
-            for result in medium_results
-        }
-        
-        # Select high-risk chunks based on risk threshold.
-        # Keep backward compatibility with legacy tuples: (chunk_idx, chunk_text).
-        high_risk_chunks: List[Tuple] = []
-        for chunk in suspicious_chunks:
-            if len(chunk) >= 4:
-                chunk_idx, chunk_text, start_line, end_line = chunk[:4]
-                selected_chunk: Tuple = (chunk_idx, chunk_text, start_line, end_line)
-            elif len(chunk) == 2:
-                chunk_idx, chunk_text = chunk
-                selected_chunk = (chunk_idx, chunk_text)
-            else:
-                continue
-
-            if validation_error_map.get(chunk_idx, False):
-                continue
-            if risk_map.get(chunk_idx, 0) < risk_threshold:
-                continue
-            high_risk_chunks.append(selected_chunk)
-        
-        logger.debug(f"Identified {len(high_risk_chunks)}/{len(suspicious_chunks)} high-risk chunks")
-        return high_risk_chunks
-
-    def _deep_model_analysis(
-        self,
-        file_path: str,
-        high_risk_chunks: List[Tuple[int, str, int, int]],
-        vuln_name: str,
-        vuln_desc: str,
-        vuln_patterns: List[str],
-        vuln_impact: str,
-        vuln_mitigation: str,
-    ) -> List[Dict]:
-        """
-        Perform deep analysis on high-risk chunks.
-        
-        Args:
-            file_path: Path to the file being analyzed
-            high_risk_chunks: High-risk chunks to analyze
-            vuln_name: Name of the vulnerability
-            vuln_desc: Description of the vulnerability
-            vuln_patterns: Patterns associated with the vulnerability
-            vuln_impact: Impact of the vulnerability
-            vuln_mitigation: Mitigation strategies
-            
-        Returns:
-            List of deep analysis results
-        """
-        deep_results = []
-        
-        # Get common format requirements
-        common_prompt = _get_structured_deep_instructions(vuln_name)
-
-        with tqdm(total=len(high_risk_chunks), desc="Deep analysis of high-risk chunks", leave=False) as pbar:
-            for chunk in high_risk_chunks:
-                if len(chunk) >= 4:
-                    chunk_idx, chunk_text, start_line, end_line = chunk[:4]
-                elif len(chunk) == 2:
-                    chunk_idx, chunk_text = chunk
-                    start_line, end_line = None, None
-                else:
-                    pbar.update(1)
-                    continue
-                location_note = ""
-                if start_line is not None and end_line is not None:
-                    location_note = (
-                        f"\nSOURCE LOCATION: Lines {start_line}-{end_line} (1-based, inclusive) in the file.\n"
-                    )
-                prompt = f"""{self.get_language_instruction()}You are a cybersecurity expert specialized in {vuln_name} vulnerabilities ONLY.
-
-VULNERABILITY DETAILS:
-- Name: {vuln_name}
-- Description: {vuln_desc}
-- Common patterns: {', '.join(vuln_patterns) if vuln_patterns else 'N/A'}
-- Security impact: {vuln_impact}
-- Mitigation: {vuln_mitigation}
-{location_note}
-CODE SEGMENT TO ANALYZE:
-
-```
-{chunk_text}
-```
-
-YOUR TASK:
-Analyze this code segment for {vuln_name} vulnerabilities ONLY.
-
-{common_prompt}
-"""
-
-                analysis_result = self.analyzer._analyze_code_chunk(
-                    prompt,
-                    file_path,
-                    chunk_text,
-                    vuln_name,
-                    mode=AnalysisMode.DEEP,
-                    analysis_type=AnalysisType.ADAPTIVE,
-                    ollama_json_format=ChunkDeepAnalysis.model_json_schema(),
-                    response_model=ChunkDeepAnalysis,
-                )
-
-                deep_results.append(
-                    {
-                        "chunk_idx": chunk_idx,
-                        "analysis": analysis_result,
-                        "content": chunk_text,
-                        "start_line": start_line,
-                        "end_line": end_line,
-                    }
-                )
-                
-                pbar.update(1)
-        
-        return deep_results
-
-    def _combine_adaptive_results(
-        self,
-        file_path: str,
-        code_chunks: List[str],
-        suspicious_chunks: List[Tuple[int, str, int, int]],
-        medium_results: List[Dict],
-        deep_results: List[Dict],
-    ) -> Dict[str, Any]:
-        """
-        Combine adaptive phases into markdown plus structured deep chunk payloads.
-        """
-        # Extract all chunk indices
-        suspicious_indices = {idx for idx, *_ in suspicious_chunks}
-        medium_indices = {result['chunk_idx'] for result in medium_results}
-        deep_indices = {result['chunk_idx'] for result in deep_results}
-        
-        # Statistics for summary
-        total_chunks = len(code_chunks)
-        suspicious_count = len(suspicious_indices)
-        medium_analyzed = len(medium_indices)
-        deep_analyzed = len(deep_indices)
-        medium_validation_errors = len(
-            [result for result in medium_results if result.get("validation_error")]
-        )
-        
-        unparsed_deep_chunks: List[Dict[str, Any]] = []
-        suspect_deep_chunks: List[Dict[str, Any]] = []
-        parsed_deep_results: List[Dict[str, Any]] = []
-        structured_chunks: List[Dict[str, Any]] = []
-
-        for result in deep_results:
-            raw = result.get("analysis", "")
-            chunk_idx = result.get("chunk_idx", "unknown")
-            sl, el = result.get("start_line"), result.get("end_line")
-            try:
-                chunk_model = ChunkDeepAnalysis.model_validate_json(raw)
-                if isinstance(sl, int) and isinstance(el, int):
-                    chunk_model = chunk_model.model_copy(update={"start_line": sl, "end_line": el})
-                chunk_text = result.get("content") or ""
-                if isinstance(chunk_text, str):
-                    chunk_model = _enrich_findings_with_snippet_file_lines(
-                        chunk_model,
-                        chunk_text,
-                        sl if isinstance(sl, int) else None,
-                    )
-                parsed_deep_results.append({"result": result, "model": chunk_model})
-                structured_chunks.append(chunk_model.model_dump())
-            except Exception as exc:
-                self.analyzer._log_structured_output_error(
-                    phase="adaptive_deep_parse",
-                    response_model=ChunkDeepAnalysis,
-                    model_display=self.analyzer.ollama_manager.get_model_display_name(self.analyzer.llm_model),
-                    raw=raw,
-                    error=exc,
-                    file_path=file_path,
-                    chunk_index=chunk_idx if isinstance(chunk_idx, int) else None,
-                )
-                logger.warning(
-                    "Unable to parse deep analysis for chunk %s in %s: %s",
-                    chunk_idx,
-                    file_path,
-                    exc,
-                )
-                unparsed_deep_chunks.append(result)
-                suspect_deep_chunks.append(
-                    {
-                        "chunk_idx": chunk_idx,
-                        "validation_error": True,
-                        "potential_vulnerabilities": True,
-                        "reason": "deep_analysis_parse_failure",
-                    }
-                )
-                raw_text = raw or ""
-                notes = raw_text
-                if len(raw_text) > 4000:
-                    logger.warning(
-                        "Truncating deep analysis fallback notes for chunk %s from %s to 4000 characters",
-                        chunk_idx,
-                        len(raw_text),
-                    )
-                    notes = f"{raw_text[:4000]}... [truncated]"
-                fb_sl = result.get("start_line") if isinstance(result.get("start_line"), int) else None
-                fb_el = result.get("end_line") if isinstance(result.get("end_line"), int) else None
-                structured_chunks.append(
-                    ChunkDeepAnalysis(
-                        findings=[],
-                        notes=notes,
-                        validation_error=True,
-                        potential_vulnerabilities=True,
-                        start_line=fb_sl,
-                        end_line=fb_el,
-                    ).model_dump()
-                )
-
-        vulnerable_chunks = [
-            item for item in parsed_deep_results if item["model"].findings
-        ]
-        vulnerable_items = [
-            (item["result"]["chunk_idx"], item["model"]) for item in vulnerable_chunks
-        ]
-
-        markdown = build_adaptive_deep_phase_markdown(
-            Path(file_path).name,
-            total_chunks=total_chunks,
-            suspicious_count=suspicious_count,
-            medium_analyzed=medium_analyzed,
-            medium_validation_errors=medium_validation_errors,
-            deep_analyzed=deep_analyzed,
-            vulnerable_items=vulnerable_items,
-            unparsed_deep_chunks=unparsed_deep_chunks,
-            suspect_deep_count=len(suspect_deep_chunks),
-        )
-
-        return {
-            "markdown": markdown,
-            "structured_chunks": structured_chunks,
-            "suspect_deep_chunks": suspect_deep_chunks,
-        }
-
-    def perform_adaptive_analysis(self, vulnerabilities, args, report):
-        """
-        Perform adaptive multi-level analysis that adjusts depth based on risk
-        assessment for each file and vulnerability, optimized for RAM usage
-        
-        Args:
-            vulnerabilities: List of vulnerability types to analyze
-            args: Command line arguments
-            report: Report object
-        
-        Returns:
-            Dictionary with analysis results
-        """
-        logger.info(f"Using {self.ollama_manager.get_model_display_name(self.llm_model)} for adaptive analysis")
-
-        all_results = {}
-        n_files = safe_code_base_file_count(self)
-        nv = len(vulnerabilities)
-        progress_total_while_identifying = nv
-
-        # Initialize batch processor if not exists
-        if not hasattr(self, '_batch_processor'):
-            self._batch_processor = BatchAdaptiveAnalysis(self)
-
-        # 1. Collect all vulnerability-file pairs that need analysis
-        all_vulnerability_files = {}
-        all_tasks = []
-
-        # Progress payload denominators intentionally differ by phase:
-        # - Identification: ``total_vulnerabilities`` follows the vuln-type sweep (``nv``).
-        # - Collection: ``total_vulnerabilities`` switches to ``progress_total_while_collecting``.
-        # ``vulnerability_types_total`` is always ``nv`` so consumers can tell the two apart.
-        # Adaptive phase rows still use ``nv`` for the top-level adaptive row during identification.
-
-        # Denominator = ``nv`` (identification sweep).
-        _publish_exec_summary_progress(
-            self,
-            report,
-            {},
-            completed_vulnerabilities=0,
-            total_vulnerabilities=progress_total_while_identifying,
-            current_vulnerability=None,
-            tested_vulnerabilities=[],
-            **adaptive_identification_start_extras(
-                n_files=n_files,
-                nv=nv,
-                n_batch_tasks=len(all_tasks),
-                collect_results_total=nv,
-            ),
-        )
-
-        # Main progress bar for vulnerabilities identification
-        with tqdm(
-                total=nv,
-                desc="Identifying vulnerable files",
-                position=0,
-                leave=False,
-                disable=args.silent,
-            ) as vuln_pbar:
-
-            for _vuln_ix, vuln in enumerate(vulnerabilities):
-                vuln_name = vuln['name']
-                vuln_pbar.set_postfix_str(f"Scanning: {vuln_name}")
-
-                # Denominator = ``nv`` (same identification sweep).
-                _publish_exec_summary_progress(
-                    self,
-                    report,
-                    {},
-                    completed_vulnerabilities=0,
-                    total_vulnerabilities=progress_total_while_identifying,
-                    current_vulnerability=vuln_name,
-                    tested_vulnerabilities=[],
-                    **adaptive_identifying_loop_extras(
-                        n_files=n_files,
-                        nv=nv,
-                        vuln_pbar_n=vuln_pbar.n,
-                        n_batch_tasks=len(all_tasks),
-                        n_vulns_with_files=len(all_vulnerability_files),
-                        phase_current_item=vuln_name,
-                    ),
-                )
-
-                # Find potentially vulnerable files using embeddings
-                results = self.analyzer.search_vulnerabilities(vuln, threshold=args.threshold)
-                if filtered_results := [
-                    (path, score)
-                    for path, score in results
-                    if score >= args.threshold
-                ]:
-                    # Store for later use
-                    all_vulnerability_files[vuln_name] = {
-                        'files': filtered_results,
-                        'vuln_data': vuln
-                    }
-
-                    # Create batch tasks for these files
-                    all_tasks.extend(
-                        (file_path, vuln, args.threshold)
-                        for file_path, _ in filtered_results
-                    )
-                else:
-                    logger.info(f"No files found above threshold for {vuln_name}")
-                vuln_pbar.update(1)
-                # Denominator = ``nv`` (identification sweep end-of-step).
-                _publish_exec_summary_progress(
-                    self,
-                    report,
-                    {},
-                    completed_vulnerabilities=0,
-                    total_vulnerabilities=progress_total_while_identifying,
-                    current_vulnerability=None,
-                    tested_vulnerabilities=[],
-                    **adaptive_identifying_loop_extras(
-                        n_files=n_files,
-                        nv=nv,
-                        vuln_pbar_n=vuln_pbar.n,
-                        n_batch_tasks=len(all_tasks),
-                        n_vulns_with_files=len(all_vulnerability_files),
-                    ),
-                )
-
-        n_collect = len(all_vulnerability_files)
-        n_batch_tasks = len(all_tasks)
-        progress_total_while_collecting = max(n_collect, 1)
-
-        # Denominator switches to ``progress_total_while_collecting`` (collection workload).
-        _publish_exec_summary_progress(
-            self,
-            report,
-            {},
-            completed_vulnerabilities=0,
-            total_vulnerabilities=progress_total_while_collecting,
-            current_vulnerability=None,
-            tested_vulnerabilities=[],
-            **adaptive_after_identification_extras(
-                n_files=n_files,
-                nv=nv,
-                n_batch_tasks=n_batch_tasks,
-                progress_total_while_collecting=progress_total_while_collecting,
-            ),
-        )
-
-        # 2. Process all tasks at once with optimized model loading
-        if all_tasks:
-            logger.info(f"Processing {len(all_tasks)} tasks with optimized model loading")
-            with tqdm(
-                total=1,
-                desc="Adaptive batch processing",
-                position=0,
-                leave=False,
-                disable=args.silent,
-            ) as batch_pbar:
-                self._batch_processor.process_all_tasks_in_batches(all_tasks)
-                batch_pbar.update(1)
-
-        # Denominator = ``progress_total_while_collecting`` (batch done, collection starting).
-        _publish_exec_summary_progress(
-            self,
-            report,
-            {},
-            completed_vulnerabilities=0,
-            total_vulnerabilities=progress_total_while_collecting,
-            current_vulnerability=None,
-            tested_vulnerabilities=[],
-            **adaptive_after_batch_extras(
-                n_files=n_files,
-                nv=nv,
-                n_batch_tasks=n_batch_tasks,
-                progress_total_while_collecting=progress_total_while_collecting,
-            ),
-        )
-
-        # 3. Now collect results and organize by vulnerability for reporting
-        with tqdm(
-            total=progress_total_while_collecting,
-            desc="Collecting results",
-            position=0,
-            leave=True,
-            disable=args.silent,
-        ) as vuln_pbar:
-
-            if n_collect == 0:
-                vuln_pbar.update(1)
-
-            for completed_count, (vuln_name, data) in enumerate(all_vulnerability_files.items(), start=1):
-                vuln = data['vuln_data']
-                filtered_results = data['files']
-                vuln_pbar.set_postfix_str(f"Analyzing: {vuln_name}")
-
-                # Denominator = ``progress_total_while_collecting``; top adaptive row tracks collection.
-                _publish_exec_summary_progress(
-                    self,
-                    report,
-                    all_results,
-                    completed_vulnerabilities=completed_count - 1,
-                    total_vulnerabilities=progress_total_while_collecting,
-                    current_vulnerability=vuln_name,
-                    tested_vulnerabilities=list(all_results.keys()),
-                    **adaptive_collect_step_extras(
-                        n_files=n_files,
-                        nv=nv,
-                        n_batch_tasks=n_batch_tasks,
-                        progress_total_while_collecting=progress_total_while_collecting,
-                        collect_completed=max(0, completed_count - 1),
-                        adaptive_row_completed=max(0, completed_count - 1),
-                        phase_current_item=vuln_name,
-                    ),
-                )
-
-                # Process all files for this vulnerability using adaptive approach
-                detailed_results = self._collect_vulnerability_results(filtered_results, vuln)
-
-                # Store results
-                all_results[vuln_name] = detailed_results
-
-                # Generate vulnerability report
-                if detailed_results:
-                    report.generate_vulnerability_report(
-                        vulnerability=vuln,
-                        results=detailed_results,
-                        model_name=self.llm_model,
-                    )
-
-                # Same collection denominator; milestone after finishing this vuln type.
-                _publish_exec_summary_progress(
-                    self,
-                    report,
-                    all_results,
-                    completed_vulnerabilities=completed_count,
-                    total_vulnerabilities=progress_total_while_collecting,
-                    current_vulnerability=None,
-                    tested_vulnerabilities=list(all_results.keys()),
-                    **adaptive_collect_step_extras(
-                        n_files=n_files,
-                        nv=nv,
-                        n_batch_tasks=n_batch_tasks,
-                        progress_total_while_collecting=progress_total_while_collecting,
-                        collect_completed=completed_count,
-                        adaptive_row_completed=completed_count,
-                    ),
-                )
-
-                vuln_pbar.update(1)
-
-        return all_results
-
-    def _collect_vulnerability_results(self, filtered_results, vuln):
-        """
-        Collect analysis results for a specific vulnerability
-        
-        Args:
-            filtered_results: List of (file_path, similarity_score) tuples
-            vuln: Vulnerability data
-            
-        Returns:
-            List of detailed analysis results
-        """
-        detailed_results = []
-        vuln_name = vuln['name']
-        
-        # Get the batch processor results
-        for file_path, similarity_score in filtered_results:
-            result_key = (file_path, vuln_name)
-            
-            # Get analysis result from batch processor
-            analysis = self._batch_processor.get_result(result_key)
-            analysis, structured_chunks = self._decode_adaptive_envelope(analysis)
-
-            if analysis and not analysis.startswith("Error") and not analysis.startswith("No results"):
-                row = {
-                    "file_path": file_path,
-                    "similarity_score": similarity_score,
-                    "analysis": analysis,
-                    "vulnerability": {
-                        "name": vuln_name,
-                        "description": vuln.get("description", ""),
-                        "impact": vuln.get("impact", ""),
-                        "mitigation": vuln.get("mitigation", ""),
-                    },
-                }
-                if structured_chunks is not None:
-                    row["structured_chunks"] = structured_chunks
-                detailed_results.append(row)
-        
-        return detailed_results
-
-class BatchAdaptiveAnalysis:
-    """Handles batch processing of adaptive analysis tasks to optimize model loading"""
-    
-    def __init__(self, pipeline: AdaptiveAnalysisPipeline):
-        """
-        Initialize batch processor
-
-        Args:
-            pipeline: Reference to parent AdaptiveAnalysisPipeline
-        """
-        self.pipeline = pipeline
-        self.analyzer = pipeline.analyzer
-        self.args = pipeline.analyzer.args
-        self.ollama_manager = pipeline.ollama_manager
-        self.client = pipeline.client
-        self.llm_model = pipeline.llm_model
-        self.scan_model = pipeline.scan_model
-        self.cache_manager = pipeline.cache_manager
-        self.code_base = pipeline.code_base
-        
-        # Accumulated tasks waiting for processing
-        self.pending_tasks = []
-        
-        # Results from processing
-        self.results = {}  # Sera modifié pour utiliser (file_path, vuln_name) comme clé
-        
-        # Analysis data for all tasks
-        self.analysis_data = {}
-        
-        # Flag to track if models have been loaded
-        self.models_loaded = {"scan": False, "deep": False}
-        
-    def submit_task(self, task: List[Tuple[str, str, Any]]):
-        """
-        Submit a task for batch processing
-        
-        Args:
-            task: Analysis task tuple (file_path, vulnerability, threshold)
-            
-        Returns:
-            Analysis result if already available, or schedules task for processing
-        """
-        file_path = task[0][0]
-        vulnerability = task[0][1]
-
-        # Extract vulnerability name for cache key
-        vuln_name, _, _, _, _ = self.analyzer._get_vulnerability_details(vulnerability)
-
-        # Create a composite key (file_path, vuln_name) for results
-        result_key = (file_path, vuln_name)
-
-        # Check if we already have the result in memory
-        if result_key in self.results:
-            return self.results[result_key]
-
-        # Check if results exist in cache
-        # We use a placeholder for chunk_text and prompt since adaptive analysis 
-        # caches entire file results, not individual chunks
-        if self.cache_manager.has_caching_info(file_path, "", vuln_name, AnalysisType.ADAPTIVE):
-            if cached_result := self.cache_manager.get_cached_analysis(
-                file_path=file_path,
-                chunk="",  # Placeholder for chunk
-                vuln_name=vuln_name,
-                prompt="",  # Placeholder for prompt
-                mode=AnalysisMode.DEEP,
-                analysis_type=AnalysisType.ADAPTIVE,
-            ):
-                logger.info(f"Using cached adaptive analysis for {file_path} - {vuln_name}")
-                self.results[result_key] = cached_result
-                return cached_result
-
-        # Add task to pending tasks if new
-        if task not in self.pending_tasks:
-            self.pending_tasks.extend(task)
-
-        # Perform initial processing and return result
-        self._process_all_tasks()
-        return self.results.get(result_key, f"No results for {file_path} - {vuln_name}")
-    
-    def _process_all_tasks(self):
-        """Process all pending tasks with optimized model loading"""
-        if not self.pending_tasks:
-            return
-            
-        # 1. Static analysis phase (no model needed)
-        self._perform_static_analysis()
-        
-        # 2. Lightweight and medium analysis phases (scan model)
-        self._perform_scan_model_phases()
-        
-        # 3. Deep analysis phase (llm model)
-        self._perform_deep_model_phase()
-        
-        # 4. Generate final results
-        self._generate_final_results()
-        
-        # Clear pending tasks
-        self.pending_tasks = []
-        
-    def _perform_static_analysis(self):
-        """Perform static analysis on all pending tasks (no model needed)"""
-        for file_path, vulnerability, threshold in self.pending_tasks:
-            try:
-                # Extract vulnerability details
-                vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation = self.analyzer._get_vulnerability_details(vulnerability)
-                analysis_cache_key = f"{sanitize_name(file_path)}_{sanitize_name(vuln_name)}"
-                
-                # Skip if result already in cache
-                if analysis_cache_key in self.cache_manager.adaptive_analysis_cache:
-                    self.results[file_path] = self.cache_manager.adaptive_analysis_cache[analysis_cache_key]
-                    continue
-                    
-                # Skip if file not in code base
-                if file_path not in self.code_base:
-                    self.results[file_path] = "File not found in indexed code base"
-                    continue
-                
-                # Static analysis phase
-                code = self.code_base[file_path]["content"]
-                spanned = chunk_content_with_spans(code, MAX_CHUNK_SIZE)
-                code_chunks = [t[0] for t in spanned]
-                line_spans = [(t[1], t[2]) for t in spanned]
-
-                logger.debug(f"PHASE 1: Static pattern analysis for {file_path} - {vuln_name}")
-                suspicious_chunks = self.pipeline._static_pattern_analysis(
-                    code_chunks, vuln_patterns, line_spans
-                )
-
-                # Store results for next phases
-                self.analysis_data[(file_path, vuln_name)] = {
-                    'file_path': file_path,
-                    'code_chunks': code_chunks,
-                    'line_spans': line_spans,
-                    'suspicious_chunks': suspicious_chunks,
-                    'vuln_data': vulnerability,
-                    'vuln_details': (vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation),
-                    'threshold': threshold,
-                    'cache_key': analysis_cache_key,
-                    'medium_results': [],
-                    'deep_results': [],
-                    'context_sensitive_chunks': [],
-                    'high_risk_chunks': []
-                }
-            except Exception as e:
-                logger.exception(f"Error during static analysis for {file_path}: {str(e)}")
-                self.results[file_path] = f"Error during static analysis: {str(e)}"
-    
-    def _perform_scan_model_phases(self):
-        """Perform all lightweight and medium analyses with scan model"""
-        # Filter tasks for scan model
-        scan_tasks = [(key, data) for key, data in self.analysis_data.items()
-                      if key[0] not in self.results]
-        
-        if not scan_tasks:
-            return
-            
-        # Only load model once for all scan tasks
-        if not self.models_loaded["scan"]:
-            logger.debug(f"\nPHASE 2-3: Loading scan model {self.ollama_manager.get_model_display_name(self.scan_model)}")
-            self.ollama_manager.ensure_model_available(self.scan_model)
-            self.models_loaded["scan"] = True
-        
-        # PHASE 2: Lightweight scanning for all files/vulnerabilities
-        for (file_path, vuln_name), data in scan_tasks:
-            try:
-                logger.debug(f"PHASE 2: Lightweight model scan for {file_path} - {vuln_name}")
-                code_chunks = data['code_chunks']
-                suspicious_chunks = data['suspicious_chunks']
-                vuln_details = data['vuln_details']
-                threshold = data['threshold']
-                
-                # Only scan if static analysis filtered enough chunks
-                if len(suspicious_chunks) < len(code_chunks) * threshold:
-                    suspicious_chunks = self.pipeline._lightweight_model_scan(
-                        file_path,
-                        code_chunks,
-                        suspicious_chunks,
-                        data["line_spans"],
-                        vuln_details[0],
-                        vuln_details[1],
-                    )
-                    # Update suspicious chunks
-                    self.analysis_data[(file_path, vuln_name)]['suspicious_chunks'] = suspicious_chunks
-            except Exception as e:
-                logger.exception(f"Error during lightweight scan for {file_path}: {str(e)}")
-                self.results[file_path] = f"Error during lightweight scan: {str(e)}"
-        
-        # PHASE 3: Medium-depth analysis for all files/vulnerabilities
-        for (file_path, vuln_name), data in scan_tasks:
-            if file_path in self.results:
-                continue
-                
-            try:
-                logger.debug(f"PHASE 3: Context-sensitive analysis for {file_path} - {vuln_name}")
-                suspicious_chunks = data['suspicious_chunks']
-                vuln_details = data['vuln_details']
-                
-                # Identify context-sensitive chunks
-                context_sensitive_chunks = self.pipeline._identify_context_sensitive_chunks(suspicious_chunks, vuln_name)
-                self.analysis_data[(file_path, vuln_name)]['context_sensitive_chunks'] = context_sensitive_chunks
-                
-                # Analyze with medium model
-                if context_sensitive_chunks:
-                    medium_results = self.pipeline._medium_model_analysis(
-                        file_path, context_sensitive_chunks, *vuln_details
-                    )
-                    self.analysis_data[(file_path, vuln_name)]['medium_results'] = medium_results
-                    
-                    # Identify high-risk chunks for deep analysis
-                    high_risk_chunks = self.pipeline._identify_high_risk_chunks(suspicious_chunks, medium_results)
-                    self.analysis_data[(file_path, vuln_name)]['high_risk_chunks'] = high_risk_chunks
-            except Exception as e:
-                logger.exception(f"Error during medium analysis for {file_path}: {str(e)}")
-                self.results[file_path] = f"Error during medium analysis: {str(e)}"
-    
-    def _perform_deep_model_phase(self):
-        """Perform all deep analyses with llm model"""
-        # Filter tasks for deep model
-        deep_tasks = [(key, data) for key, data in self.analysis_data.items()
-                     if key[0] not in self.results and data['high_risk_chunks']]
-        
-        if not deep_tasks:
-            return
-            
-        # Only load model once for all deep tasks
-        if not self.models_loaded["deep"]:
-            logger.debug(f"\nPHASE 4: Loading deep model {self.ollama_manager.get_model_display_name(self.llm_model)}")
-            self.ollama_manager.ensure_model_available(self.llm_model)
-            self.models_loaded["deep"] = True
-        
-        # PHASE 4: Deep analysis for all files/vulnerabilities
-        for (file_path, vuln_name), data in deep_tasks:
-            try:
-                logger.debug(f"PHASE 4: Deep analysis for {file_path} - {vuln_name}")
-                high_risk_chunks = data['high_risk_chunks']
-                vuln_details = data['vuln_details']
-                
-                # Deep analysis
-                deep_results = self.pipeline._deep_model_analysis(
-                    file_path, high_risk_chunks, *vuln_details
-                )
-                self.analysis_data[(file_path, vuln_name)]['deep_results'] = deep_results
-            except Exception as e:
-                logger.exception(f"Error during deep analysis for {file_path}: {str(e)}")
-                self.results[file_path] = f"Error during deep analysis: {str(e)}"
-    
-    def _generate_final_results(self):
-        """Generate final results for all processed tasks"""
-        for (file_path, vuln_name), data in self.analysis_data.items():
-            # Create a composite key for results
-            result_key = (file_path, vuln_name)
-            
-            # Skip if result already generated
-            if result_key in self.results:
-                continue
-                
-            try:
-                combined = self.pipeline._combine_adaptive_results(
-                    file_path,
-                    data["code_chunks"],
-                    data["suspicious_chunks"],
-                    data["medium_results"],
-                    data["deep_results"],
-                )
-                serialized = self.pipeline._serialize_adaptive_envelope(
-                    markdown=combined["markdown"],
-                    structured_chunks=combined.get("structured_chunks", []),
-                )
-                self.results[result_key] = serialized
-
-                self.cache_manager.store_analysis(
-                    file_path=file_path,
-                    chunk="",
-                    vuln_name=vuln_name,
-                    prompt="",
-                    result=serialized,
-                    mode=AnalysisMode.DEEP,
-                    analysis_type=AnalysisType.ADAPTIVE,
-                )
-                
-                logger.debug(f"Stored adaptive analysis result in cache for {file_path} - {vuln_name}")
-                
-            except Exception as e:
-                logger.exception(f"Error combining results for {file_path} - {vuln_name}: {str(e)}")
-                self.results[result_key] = f"Error combining results: {str(e)}"
-
-    def process_all_tasks_in_batches(self, tasks):
-        """
-        Process all tasks in optimized batches to minimize model loading
-        
-        Args:
-            tasks: List of tasks [(file_path, vulnerability, threshold),...]
-        """
-        if not tasks:
-            return
-        
-        # Add all tasks to pending queue
-        self.pending_tasks = list(tasks)
-        
-        # Process all tasks together to optimize model loading
-        self._process_all_tasks_in_batches()
-    
-    def get_result(self, result_key):
-        """
-        Get result for a specific file and vulnerability
-        
-        Args:
-            result_key: Tuple of (file_path, vuln_name)
-            
-        Returns:
-            Analysis result or error message
-        """
-        return self.results.get(result_key, f"No results for {result_key[0]} - {result_key[1]}")
-    
-    def _process_all_tasks_in_batches(self):
-        """Process all pending tasks with optimized model loading in batches"""
-        if not self.pending_tasks:
-            return
-            
-        # 1. Perform static analysis on all tasks (no model needed)
-        logger.debug(f"PHASE 1: Performing static pattern analysis for {len(self.pending_tasks)} tasks")
-        self._perform_static_analysis_batch()
-        
-        # 2. Perform lightweight and medium analysis on all tasks with SCAN model
-        logger.debug("PHASES 2-3: Processing all tasks with lightweight model")
-        self._perform_scan_model_phases_batch()
-        
-        # 3. Perform deep analysis on all high-risk chunks with DEEP model
-        logger.debug("PHASE 4: Processing high-risk chunks with deep model")
-        self._perform_deep_model_phase_batch()
-        
-        # 4. Generate final results for all tasks
-        logger.debug("Generating final results for all tasks")
-        self._generate_final_results_batch()
-    
-    def _perform_static_analysis_batch(self):
-        """Perform static analysis on all pending tasks in batch (no model needed)"""
-        # Initialize cache statistics
-        self.cache_stats = {
-            "static": {"total": len(self.pending_tasks), "cache_hits": 0},
-            "scan": {"total": 0, "cache_hits": 0},
-            "deep": {"total": 0, "cache_hits": 0}
-        }
-        
-        with tqdm(total=len(self.pending_tasks), desc="Static analysis", leave=False) as pbar:
-            for file_path, vulnerability, threshold in self.pending_tasks:
-                try:
-                    # Extract vulnerability details
-                    vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation = self.analyzer._get_vulnerability_details(vulnerability)
-
-                    # Create a composite key for results
-                    result_key = (file_path, vuln_name)
-
-                    # Check for complete cached results and store them, but still perform analysis
-                    cached_result = None
-                    if self.cache_manager.has_caching_info(file_path, "", vuln_name, AnalysisType.ADAPTIVE):
-                        cached_result = self.cache_manager.get_cached_analysis(
-                            file_path=file_path,
-                            chunk="",
-                            vuln_name=vuln_name,
-                            prompt="",
-                            mode=AnalysisMode.DEEP,
-                            analysis_type=AnalysisType.ADAPTIVE,
-                        )
-                    
-                    if cached_result:
-                        logger.debug(f"Using cached adaptive analysis for {file_path} - {vuln_name}")
-                        self.results[result_key] = cached_result
-                        self.cache_stats["static"]["cache_hits"] += 1
-
-                    # Skip if file not in code base
-                    if file_path not in self.code_base:
-                        if result_key not in self.results:  # Only set if not already set from cache
-                            self.results[result_key] = "File not found in indexed code base"
-                        pbar.update(1)
-                        continue
-
-                    # Static analysis phase - always perform regardless of cache
-                    code = self.code_base[file_path]["content"]
-                    spanned = chunk_content_with_spans(code, MAX_CHUNK_SIZE)
-                    code_chunks = [t[0] for t in spanned]
-                    line_spans = [(t[1], t[2]) for t in spanned]
-
-                    suspicious_chunks = self.pipeline._static_pattern_analysis(
-                        code_chunks, vuln_patterns, line_spans
-                    )
-
-                    # Store results for next phases
-                    self.analysis_data[result_key] = {
-                        'file_path': file_path,
-                        'code_chunks': code_chunks,
-                        'line_spans': line_spans,
-                        'suspicious_chunks': suspicious_chunks,
-                        'vuln_data': vulnerability,
-                        'vuln_details': (vuln_name, vuln_desc, vuln_patterns, vuln_impact, vuln_mitigation),
-                        'threshold': threshold,
-                        'medium_results': [],
-                        'deep_results': [],
-                        'context_sensitive_chunks': [],
-                        'high_risk_chunks': [],
-                        'has_cached_result': cached_result is not None
-                    }
-
-                except Exception as e:
-                    logger.exception(f"Error during static analysis for {file_path}: {str(e)}")
-                    self.results[(file_path, vuln_name)] = f"Error during static analysis: {str(e)}"
-
-                pbar.update(1)
-
-        logger.info(f"Cache utilization - Static analysis: {self.cache_stats['static']['cache_hits']}/{self.cache_stats['static']['total']} files ({self.cache_stats['static']['cache_hits']/self.cache_stats['static']['total']*100:.1f}%)")
-    
-    def _perform_scan_model_phases_batch(self):
-        """Perform lightweight and medium analysis on all tasks with scan model loaded once"""
-        # Process all tasks, regardless of whether they have results in cache
-        scan_tasks = self.analysis_data
-        
-        if not scan_tasks:
-            return
-
-        # Load the scan model ONCE for all tasks
-        if not self.models_loaded["scan"]:
-            logger.info(f"Loading scan model {self.ollama_manager.get_model_display_name(self.scan_model)} for all tasks")
-            self.ollama_manager.ensure_model_available(self.scan_model)
-            self.models_loaded["scan"] = True
-
-        # PHASE 2: Lightweight scanning for all files/vulnerabilities
-        logger.info(f"PHASE 2: Lightweight model scan for {len(scan_tasks)} tasks")
-        self.cache_stats["scan"]["total"] = len(scan_tasks)
-        
-        with tqdm(total=len(scan_tasks), desc="Lightweight scanning", leave=False) as pbar:
-            for result_key, data in scan_tasks.items():
-                try:
-                    file_path, vuln_name = result_key
-                    code_chunks = data['code_chunks']
-                    suspicious_chunks = data['suspicious_chunks']
-                    vuln_details = data['vuln_details']
-                    threshold = data['threshold']
-                    has_cached_result = data.get('has_cached_result', False)
-
-                    pbar.set_postfix_str(f"File: {Path(file_path).name}, Vuln: {vuln_name}")
-
-                    # If we have a cached result, count it but still perform analysis
-                    if has_cached_result:
-                        self.cache_stats["scan"]["cache_hits"] += 1
-                        logger.debug(f"Using cached result for scan phase: {file_path} - {vuln_name}")
-
-                    # Only scan if static analysis didn't find enough
-                    if len(suspicious_chunks) < len(code_chunks) * threshold:
-                        suspicious_chunks = self.pipeline._lightweight_model_scan(
-                            file_path,
-                            code_chunks,
-                            suspicious_chunks,
-                            data["line_spans"],
-                            vuln_details[0],
-                            vuln_details[1],
-                        )
-                        # Update suspicious chunks
-                        self.analysis_data[result_key]['suspicious_chunks'] = suspicious_chunks
-
-                except Exception as e:
-                    logger.exception(f"Error during lightweight scan for {file_path} - {vuln_name}: {str(e)}")
-                    if result_key not in self.results:  # Only set if not already set from cache
-                        self.results[result_key] = f"Error during lightweight scan: {str(e)}"
-
-                pbar.update(1)
-
-        logger.info(f"Cache utilization - Lightweight scan: {self.cache_stats['scan']['cache_hits']}/{self.cache_stats['scan']['total']} files ({self.cache_stats['scan']['cache_hits']/self.cache_stats['scan']['total']*100:.1f}%)")
-
-        # PHASE 3: Medium-depth analysis for all files/vulnerabilities
-        logger.info(f"PHASE 3: Context-sensitive analysis for {len(scan_tasks)} tasks")
-        
-        with tqdm(total=len(scan_tasks), desc="Medium-depth analysis", leave=False) as pbar:
-            for result_key, data in scan_tasks.items():
-                try:
-                    file_path, vuln_name = result_key
-                    suspicious_chunks = data['suspicious_chunks']
-                    vuln_details = data['vuln_details']
-                    has_cached_result = data.get('has_cached_result', False)
-
-                    pbar.set_postfix_str(f"File: {Path(file_path).name}, Vuln: {vuln_name}")
-
-                    # Identify context-sensitive chunks
-                    context_sensitive_chunks = self.pipeline._identify_context_sensitive_chunks(suspicious_chunks, vuln_name)
-                    self.analysis_data[result_key]['context_sensitive_chunks'] = context_sensitive_chunks
-
-                    # Analyze with medium model
-                    if context_sensitive_chunks:
-                        medium_results = self.pipeline._medium_model_analysis(
-                            file_path, context_sensitive_chunks, *vuln_details
-                        )
-                        self.analysis_data[result_key]['medium_results'] = medium_results
-
-                        # Identify high-risk chunks for deep analysis
-                        high_risk_chunks = self.pipeline._identify_high_risk_chunks(suspicious_chunks, medium_results)
-                        self.analysis_data[result_key]['high_risk_chunks'] = high_risk_chunks
-
-                except Exception as e:
-                    logger.exception(f"Error during medium analysis for {file_path} - {vuln_name}: {str(e)}")
-                    if result_key not in self.results:  # Only set if not already set from cache
-                        self.results[result_key] = f"Error during medium analysis: {str(e)}"
-
-                pbar.update(1)
-    
-    def _perform_deep_model_phase_batch(self):
-        """Perform deep analysis on all high-risk chunks with llm model loaded once"""
-        # Process all tasks that have high-risk chunks, regardless of cache status
-        deep_tasks = {key: data for key, data in self.analysis_data.items() 
-                     if data['high_risk_chunks']}
-        
-        if not deep_tasks:
-            logger.info("No high-risk chunks identified for deep analysis")
-            return
-        
-        # Load the deep model ONCE for all tasks
-        if not self.models_loaded["deep"]:
-            logger.info(f"Loading deep model {self.ollama_manager.get_model_display_name(self.llm_model)} for all tasks")
-            self.ollama_manager.ensure_model_available(self.llm_model)
-            self.models_loaded["deep"] = True
-        
-        # PHASE 4: Deep analysis for all high-risk chunks
-        logger.info(f"PHASE 4: Deep analysis for {len(deep_tasks)} tasks with high-risk chunks")
-        self.cache_stats["deep"]["total"] = len(deep_tasks)
-        
-        with tqdm(total=len(deep_tasks), desc="Deep analysis", leave=False) as pbar:
-            for result_key, data in deep_tasks.items():
-                try:
-                    file_path, vuln_name = result_key
-                    high_risk_chunks = data['high_risk_chunks']
-                    vuln_details = data['vuln_details']
-                    has_cached_result = data.get('has_cached_result', False)
-                    
-                    pbar.set_postfix_str(f"File: {Path(file_path).name}, Vuln: {vuln_name}")
-                    
-                    # If we have a cached result, count it but still perform analysis
-                    if has_cached_result:
-                        self.cache_stats["deep"]["cache_hits"] += 1
-                        logger.debug(f"Using cached result for deep phase: {file_path} - {vuln_name}")
-                    
-                    # Deep analysis
-                    deep_results = self.pipeline._deep_model_analysis(
-                        file_path, high_risk_chunks, *vuln_details
-                    )
-                    self.analysis_data[result_key]['deep_results'] = deep_results
-                    
-                except Exception as e:
-                    logger.exception(f"Error during deep analysis for {file_path} - {vuln_name}: {str(e)}")
-                    if result_key not in self.results:  # Only set if not already set from cache
-                        self.results[result_key] = f"Error during deep analysis: {str(e)}"
-                
-                pbar.update(1)
-        
-        logger.info(f"Cache utilization - Deep analysis: {self.cache_stats['deep']['cache_hits']}/{self.cache_stats['deep']['total']} files ({self.cache_stats['deep']['cache_hits']/self.cache_stats['deep']['total']*100:.1f}%)")
-    
-    def _generate_final_results_batch(self):
-        """Generate final results for all processed tasks"""
-        with tqdm(total=len(self.analysis_data), desc="Generating reports", leave=False) as pbar:
-            for result_key, data in self.analysis_data.items():
-                # Only generate new results if we don't already have them from cache
-                if result_key not in self.results:
-                    try:
-                        file_path, vuln_name = result_key
-                        
-                        combined = self.pipeline._combine_adaptive_results(
-                            file_path,
-                            data["code_chunks"],
-                            data["suspicious_chunks"],
-                            data["medium_results"],
-                            data["deep_results"],
-                        )
-                        serialized = self.pipeline._serialize_adaptive_envelope(
-                            markdown=combined["markdown"],
-                            structured_chunks=combined.get("structured_chunks", []),
-                        )
-                        self.results[result_key] = serialized
-
-                        self.cache_manager.store_analysis(
-                            file_path=file_path,
-                            chunk="",
-                            vuln_name=vuln_name,
-                            prompt="",
-                            result=serialized,
-                            mode=AnalysisMode.DEEP,
-                            analysis_type=AnalysisType.ADAPTIVE,
-                        )
-                        
-                    except Exception as e:
-                        logger.exception(f"Error combining results for {file_path} - {vuln_name}: {str(e)}")
-                        self.results[result_key] = f"Error combining results: {str(e)}"
-                
-                pbar.update(1)
-    
-    # All existing methods remain intact
 
 def _get_structured_deep_instructions(vuln_name: str) -> str:
     """

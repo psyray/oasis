@@ -10,9 +10,10 @@ if str(ROOT) not in sys.path:
 
 
 try:
-    from oasis.report import executive_summary_progress_sidecar_path
+    from oasis.report import executive_summary_progress_sidecar_path, is_executive_summary_progress_sidecar
 except ImportError:
     executive_summary_progress_sidecar_path = None
+    is_executive_summary_progress_sidecar = None
 
 
 @unittest.skipIf(
@@ -25,6 +26,14 @@ class TestReportPathHelpers(unittest.TestCase):
         sidecar = executive_summary_progress_sidecar_path(base)
         self.assertEqual(sidecar.name, "_executive_summary.progress.json")
         self.assertEqual(sidecar.parent, base.parent)
+
+    def test_is_executive_summary_progress_sidecar_true(self):
+        p = Path("/x/json/_executive_summary.progress.json")
+        self.assertTrue(is_executive_summary_progress_sidecar(p))
+
+    def test_is_executive_summary_progress_sidecar_false_for_main(self):
+        p = Path("/x/json/_executive_summary.json")
+        self.assertFalse(is_executive_summary_progress_sidecar(p))
 
 
 if __name__ == "__main__":
