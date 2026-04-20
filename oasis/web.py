@@ -51,8 +51,9 @@ from .helpers.dashboard import (
     parse_phase_counts_from_progress_cell,
     socketio_lan_http_origins,
 )
+from .helpers.dashboard_report_html import rewrite_report_preview_anchor_hrefs
 from .helpers.progress import SCAN_PROGRESS_EXTENDED_KEYS, coerce_scan_progress_event_version
-from .report import Report, executive_summary_progress_sidecar_path
+from .report import Report, executive_summary_progress_sidecar_path, is_executive_summary_progress_sidecar
 from .tools import parse_iso_date, parse_report_date
 
 logger = logging.getLogger(__name__)
@@ -513,6 +514,7 @@ class WebServer:
                         409,
                     )
                 html_content = self.report.read_and_convert_markdown(resolved_path)
+                html_content = rewrite_report_preview_anchor_hrefs(html_content, resolved_path, security_root)
                 return jsonify({'content': html_content})
             except Exception:
                 return self._report_preview_error_response("Error while generating markdown report preview")
@@ -529,6 +531,10 @@ class WebServer:
                     return jsonify({'error': 'Invalid path'}), 403
                 if not resolved_path.exists() or resolved_path.suffix != '.json':
                     return jsonify({'error': 'File not found or not JSON'}), 404
+                if is_executive_summary_progress_sidecar(resolved_path):
+                    return jsonify(
+                        {'error': 'Incremental progress sidecar is not a canonical vulnerability report JSON'}
+                    ), 404
                 with open(resolved_path, 'r', encoding='utf-8') as f:
                     payload = json.load(f)
                 if not isinstance(payload, dict):
@@ -547,6 +553,15 @@ class WebServer:
                     return jsonify({'error': 'Invalid path'}), 403
                 if not resolved_path.exists() or resolved_path.suffix != '.json':
                     return jsonify({'error': 'File not found or not JSON'}), 404
+                if is_executive_summary_progress_sidecar(resolved_path):
+                    return jsonify(
+                        {
+                            "error": (
+                                "Path is an incremental progress sidecar, not a canonical report JSON; "
+                                "open the executive summary JSON instead."
+                            )
+                        }
+                    ), 404
 
                 with open(resolved_path, 'r', encoding='utf-8') as f:
                     payload = json.load(f)
@@ -946,6 +961,8 @@ class WebServer:
                     model_dir,
                 )
                 for report_file in globber
+                if fmt != "json"
+                or not is_executive_summary_progress_sidecar(report_file)
             )
         return model_reports
         

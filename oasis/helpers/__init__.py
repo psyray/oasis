@@ -4,6 +4,7 @@ from .embedding import EMBEDDING_PROGRESS_MIN_INTERVAL_SEC, EmbeddingProgressThr
 from .progress import (
     EXEC_SUMMARY_PROGRESS_EVENT_VERSION,
     SCAN_PROGRESS_EXTENDED_KEYS,
+    tqdm_safe_log,
     adaptive_after_batch_extras,
     adaptive_after_identification_extras,
     adaptive_collect_step_extras,
@@ -55,6 +56,7 @@ __all__ = [
     "phase_progress_row",
     "phase_triple",
     "reset_tqdm_phase_bar",
+    "tqdm_safe_log",
     "safe_code_base_file_count",
     "standard_deep_phase_extras",
     "standard_final_complete_extras",

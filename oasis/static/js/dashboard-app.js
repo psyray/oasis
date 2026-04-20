@@ -16,9 +16,47 @@ const DashboardApp = {
         dateRange: null
     },
     filtersPopulated: false,
-    currentReportPath: '',
-    currentReportFormat: '',
-    currentResizeObserver: null,
+    /**
+     * Single place for report-modal cross-cutting state: preview path/format, back stack,
+     * PDF embed URL token, scroll lock, resize observers. Modal code reads/writes via this object.
+     */
+    reportModalState: {
+        currentPath: '',
+        currentFormat: '',
+        stack: [],
+        pdfEmbedInfo: null,
+        savedWindowScrollY: 0,
+        resizeObserver: null,
+    },
+
+    /**
+     * Ensure ``reportModalState`` has every expected field (tests, partial merges, or future
+     * reload paths may omit keys). Safe to call multiple times.
+     */
+    ensureReportModalState: function () {
+        const defaults = {
+            currentPath: '',
+            currentFormat: '',
+            stack: [],
+            pdfEmbedInfo: null,
+            savedWindowScrollY: 0,
+            resizeObserver: null,
+        };
+        if (!DashboardApp.reportModalState || typeof DashboardApp.reportModalState !== 'object') {
+            DashboardApp.reportModalState = {};
+        }
+        const rms = DashboardApp.reportModalState;
+        Object.keys(defaults).forEach(function (key) {
+            if (rms[key] === undefined) {
+                rms[key] = defaults[key];
+            }
+        });
+        if (!Array.isArray(rms.stack)) {
+            rms.stack = [];
+        }
+        return rms;
+    },
+
     socket: null,
     progressState: null,
     debugMode: false, // Initialize debug flag
@@ -118,6 +156,14 @@ const DashboardApp = {
                 console.error("closeReportModal not yet loaded");
             }
         };
+
+        window.modalReportNavigateBack = function() {
+            if (DashboardApp.modalReportNavigateBack) {
+                DashboardApp.modalReportNavigateBack();
+            } else {
+                console.error("modalReportNavigateBack not yet loaded");
+            }
+        };
         
         window.filterDatesByModel = function(modelElement) {
             if (DashboardApp.filterDatesByModel) {
@@ -181,6 +227,7 @@ const DashboardApp = {
     
     // Start the application after modules are loaded
     startApplication: function() {
+        DashboardApp.ensureReportModalState();
         DashboardApp.debug("Starting application...");
         
         // Load templates first

@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 import time
 import traceback
-from typing import Union
+from typing import List, Optional, Union
 
 
 # Import from configuration
@@ -15,6 +15,7 @@ from .tools import generate_timestamp, setup_logging, logger, display_logo, get_
 from .ollama_manager import OllamaManager
 from .embedding import EmbeddingManager
 from .analyze import SecurityAnalyzer, EmbeddingAnalyzer
+from .helpers.langgraph_console import LG_PIPELINE_INFO, cli_bold, cli_emit_section_banner
 from .report import Report
 from .web import WebServer
 
@@ -165,12 +166,42 @@ class OasisScanner:
         
         # Analysis Configuration
         analysis_group = parser.add_argument_group('Analysis Configuration')
-        analysis_group.add_argument('-at', '--analyze-type', choices=['standard', 'deep'], default=DEFAULT_ARGS['ANALYSIS_TYPE'],
-                                    help=f'Analyze type (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
-        analysis_group.add_argument('-eat', '--embeddings-analyze-type', choices=['file', 'function'], default=DEFAULT_ARGS['ANALYSIS_TYPE'],
-                                    help=f'Analyze code by entire file or by individual functions [EXPERIMENTAL] (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
-        analysis_group.add_argument('-ad', '--adaptive', action='store_true', 
-                                    help='Use adaptive multi-level analysis that adjusts depth based on risk assessment')
+        analysis_group.add_argument(
+            '-eat',
+            '--embeddings-analyze-type',
+            choices=['file', 'function'],
+            default=DEFAULT_ARGS['EMBEDDING_ANALYSIS_TYPE'],
+            help=(
+                'Analyze code by entire file or by individual functions [EXPERIMENTAL] '
+                f'(default: {DEFAULT_ARGS["EMBEDDING_ANALYSIS_TYPE"]})'
+            ),
+        )
+        analysis_group.add_argument(
+            '--langgraph-max-expand',
+            dest='langgraph_max_expand_iterations',
+            type=int,
+            default=2,
+            metavar='N',
+            help='Maximum context-expand retries after verify detects structured-output issues (default: 2)',
+        )
+        analysis_group.add_argument(
+            '--poc-hints',
+            dest='poc_hints',
+            action='store_true',
+            help=(
+                'Log optional high-level PoC hint bullets derived from structured findings only; '
+                'does not call the LLM for new exploit code'
+            ),
+        )
+        analysis_group.add_argument(
+            '--poc-assist',
+            dest='poc_assist',
+            action='store_true',
+            help=(
+                'Ask the deep model for a standalone executable PoC script or commands from findings; '
+                'output is logged only — OASIS does not run generated code'
+            ),
+        )
         analysis_group.add_argument('-t', '--threshold', type=float, default=DEFAULT_ARGS['THRESHOLD'], 
                                     help=f'Similarity threshold (default: {DEFAULT_ARGS["THRESHOLD"]})')
         analysis_group.add_argument('-v', '--vulns', type=str, default=DEFAULT_ARGS['VULNS'], 
@@ -230,6 +261,31 @@ class OasisScanner:
                                 help='Show OASIS version and exit')
         
         return parser
+
+    _REMOVED_LEGACY_ANALYSIS_FLAGS = frozenset({"--adaptive", "-ad", "--analyze-type", "-at"})
+
+    @staticmethod
+    def removed_cli_flag_error(argv: Optional[List[str]] = None) -> Optional[str]:
+        """
+        Return an error message if argv uses removed adaptive / standard-vs-deep flags, else None.
+
+        These options were removed in favor of LangGraph-only orchestration; callers should drop
+        them and use ``--langgraph-max-expand``, PoC flags, and ``--embeddings-analyze-type``.
+        """
+        tokens = argv if argv is not None else sys.argv[1:]
+        body = (
+            "OASIS uses LangGraph-only orchestration. Remove this flag from scripts or CI.\n"
+            "See README (LangGraph pipeline). Related CLI: --langgraph-max-expand, "
+            "--poc-hints, --poc-assist; embedding segmentation: --embeddings-analyze-type / -eat "
+            "(file or function)."
+        )
+        for tok in tokens:
+            if tok in OasisScanner._REMOVED_LEGACY_ANALYSIS_FLAGS:
+                return f"error: {tok} was removed.\n{body}"
+            if tok.startswith("--analyze-type=") or tok.startswith("-at="):
+                return f"error: --analyze-type was removed ({tok!r}).\n{body}"
+        return None
+
     def get_vulnerability_help(self) -> str:
         """
         Generate help text for vulnerability arguments
@@ -266,20 +322,20 @@ class OasisScanner:
         if invalid_tags:
             return False
 
-        logger.info(f"\nStarting security analysis at {generate_timestamp()}\n")
+        cli_emit_section_banner(
+            logger, "🚀", "Security analysis", f"starting at {generate_timestamp()}"
+        )
         start_time = time.time()
-        
-        # Determine analysis type (adaptive or standard)
-        adaptive = hasattr(self.args, 'adaptive') and self.args.adaptive
-        analysis_type = "🧠 adaptive" if adaptive else "📋 standard"
-        logger.info(f"Using {analysis_type} analysis mode")
+        logger.info(LG_PIPELINE_INFO)
 
         # Process all main models one by one
         for i, main_model in enumerate(main_models):
-            msg = f"Running analysis with model {i+1}/{len(main_models)}: {main_model}"
-            logger.info(f"\n{'='*len(msg)}")
-            logger.info(msg)
-            logger.info(f"{'='*len(msg)}")
+            cli_emit_section_banner(
+                logger,
+                "⚙️",
+                "Analysis pass",
+                f"{i + 1}/{len(main_models)} · {cli_bold(main_model)}",
+            )
             
             # Create analyzer with current main model and scan model
             security_analyzer = SecurityAnalyzer(
@@ -419,8 +475,6 @@ class OasisScanner:
             ignored_flags.append("--models")
         if getattr(self.args, "scan_model", None):
             ignored_flags.append("--scan-model")
-        if getattr(self.args, "adaptive", False):
-            ignored_flags.append("--adaptive")
         if float(getattr(self.args, "threshold", DEFAULT_ARGS["THRESHOLD"])) != float(DEFAULT_ARGS["THRESHOLD"]):
             ignored_flags.append("--threshold")
         if str(getattr(self.args, "vulns", DEFAULT_ARGS["VULNS"])) != str(DEFAULT_ARGS["VULNS"]):
@@ -444,6 +498,9 @@ class OasisScanner:
         """
         # Parse command line arguments if not provided
         if args is None:
+            if legacy_err := OasisScanner.removed_cli_flag_error():
+                print(legacy_err, file=sys.stderr)
+                sys.exit(2)
             parser = self.setup_argument_parser()
             self.args = parser.parse_args()
         else:
@@ -511,6 +568,10 @@ class OasisScanner:
         if not check_embeddings:
             return True
 
+        cli_emit_section_banner(
+            logger, "🔌", "Ollama & embed model", "context length, chunk size, model pull"
+        )
+
         # Auto-detect chunk size if not specified
         if self.args.chunk_size is None:
             self.args.chunk_size = self.ollama_manager.detect_optimal_chunk_size(self.args.embed_model)
@@ -531,6 +592,9 @@ class OasisScanner:
         Returns:
             True if processing is successful, False otherwise
         """
+        cli_emit_section_banner(
+            logger, "📂", "Source index & embeddings", "parse tree, cache, vectorize new files"
+        )
 
         # Initialize embedding manager
         self.embedding_manager = EmbeddingManager(self.args, self.ollama_manager)
@@ -562,11 +626,6 @@ class OasisScanner:
         Args:
             vuln_mapping: Vulnerability mapping
         """
-        # Get analysis type
-        analysis_type = self.ollama_manager.select_analysis_type(self.args)
-        if not analysis_type:
-            return 1
-
         # Get available models
         available_models = self.ollama_manager.get_available_models()
         if not available_models:
@@ -601,14 +660,23 @@ class OasisScanner:
         
         # Store the scan model in the arguments
         self.args.scan_model = scan_model_name
-        
+
+        cli_emit_section_banner(
+            logger, "🤖", "LLM selection", "scan model, deep model(s), thinking flags"
+        )
+
         # Log model selection information
         display_scan_model = self.ollama_manager.get_model_display_name(scan_model_name)
         display_main_models = ", ".join([self.ollama_manager.get_model_display_name(m) for m in main_models])
         if len(main_models) == 1 and scan_model_name == main_models[0]:
-            logger.info(f"{MODEL_EMOJIS['default']}Using '{display_scan_model}' for both scanning and deep analysis")
+            logger.info(
+                f"{MODEL_EMOJIS['default']}Using '{cli_bold(display_scan_model)}' for both scanning and deep analysis"
+            )
         else:
-            logger.info(f"{MODEL_EMOJIS['default']}Using '{display_scan_model}' for scanning and {display_main_models} for deep analysis")
+            logger.info(
+                f"{MODEL_EMOJIS['default']}Using '{cli_bold(display_scan_model)}' for scanning and "
+                f"{cli_bold(display_main_models)} for deep analysis"
+            )
 
         self.ollama_manager.configure_analysis_model_thinking(
             scan_model=scan_model_name,
@@ -623,7 +691,7 @@ class OasisScanner:
         logger.info(
             f"{MODEL_EMOJIS['default']}Model thinking: scan={self.args.small_model_thinking}, deep={self.args.model_thinking}"
         )
-        
+
         # Create the report directories for all main models
         self.report.models = main_models
         self.report.create_report_directories(self.args.input_path, models=main_models)

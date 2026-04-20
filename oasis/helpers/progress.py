@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from ..enums import AnalysisType, PhaseRowStatus, ProgressActivePhase
@@ -13,38 +14,27 @@ from .scan import (
     phase_triple,
     standard_scan_phases_vuln_types,
 )
-
-# Canonical keys for executive-summary progress payload extensions (wire JSON / Markdown).
-# Keep in sync across publish_incremental_summary, Report, and oasis.web dashboard readers.
-
-EXEC_SUMMARY_PROGRESS_EVENT_VERSION = 2
-
-SCAN_PROGRESS_STATUS_EXPLICIT = frozenset(
-    {
-        "in_progress",
-        "complete",
-        "aborted",
-        "failed",
-        "succeeded",
-        "finished",
-    }
+from .progress_constants import (
+    EXEC_SUMMARY_PROGRESS_EVENT_VERSION,
+    SCAN_PROGRESS_EXTENDED_KEYS,
+    SCAN_PROGRESS_NON_PARTIAL_STATUSES,
+    SCAN_PROGRESS_STATUS_EXPLICIT,
 )
 
-SCAN_PROGRESS_NON_PARTIAL_STATUSES = frozenset({"complete", "succeeded", "finished"})
 
-SCAN_PROGRESS_EXTENDED_KEYS = frozenset(
-    {
-        "updated_at",
-        "active_phase",
-        "phases",
-        "adaptive_subphases",
-        "overall",
-        "scan_mode",
-        "event_version",
-        "vulnerability_types_total",
-        "status",
-    }
-)
+def tqdm_safe_log(
+    logger: logging.Logger,
+    pbar: Any,
+    level: int,
+    msg: str,
+    *args: Any,
+) -> None:
+    """Log without corrupting tqdm: use ``pbar.write`` while the bar is shown (``disable`` False)."""
+    text = msg % args if args else msg
+    if getattr(pbar, "disable", True):
+        logger.log(level, msg, *args)
+    else:
+        pbar.write(text)
 
 
 def reset_tqdm_phase_bar(
@@ -89,10 +79,10 @@ def standard_progress_extras(
     adaptive_subphases: Optional[Dict[str, Dict[str, Any]]] = None,
     updated_at: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Shared progress fields for ``AnalysisType.STANDARD`` runs."""
+    """Shared progress extras for phased scan rows (tests and markdown fixtures)."""
     extras: Dict[str, Any] = {
         "active_phase": active_phase.value,
-        "scan_mode": AnalysisType.STANDARD.value,
+        "scan_mode": AnalysisType.GRAPH.value,
         "phases": phases,
     }
     if vulnerability_types_total is not None:
@@ -111,10 +101,10 @@ def adaptive_progress_extras(
     nv: int,
     updated_at: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Shared progress fields for ``AnalysisType.ADAPTIVE`` runs (``nv`` = vuln-type count)."""
+    """Progress extras with adaptive-shaped phase rows (wire compatibility for fixtures)."""
     extras: Dict[str, Any] = {
         "active_phase": ProgressActivePhase.ADAPTIVE_SCAN.value,
-        "scan_mode": AnalysisType.ADAPTIVE.value,
+        "scan_mode": AnalysisType.GRAPH.value,
         "vulnerability_types_total": nv,
         "phases": phases,
         "adaptive_subphases": adaptive_subphases,
@@ -353,7 +343,7 @@ def adaptive_final_summary_extras(
     n_collect_completed: int,
     updated_at: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Adaptive run finished: all sub-phases and top-level adaptive row complete."""
+    """Legacy adaptive-shaped run finished: sub-phases and top-level adaptive row complete."""
     return adaptive_progress_extras(
         phases=adaptive_scan_phases(
             n_files,

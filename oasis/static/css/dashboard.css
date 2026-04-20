@@ -1713,10 +1713,8 @@ h1 {
     display: flex;
 }
 
-.modal-body {
-    max-height: 70vh;
-    overflow-y: auto;
-}
+/* Note: do not cap .modal-body globally with vh — report modal uses a flex column
+   (.modal-content) and needs only the body to scroll between header and footer. */
 
 /* Modal for report preview */
 .modal-overlay {
@@ -1773,6 +1771,18 @@ h1 {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 12px;
+}
+
+#report-modal .modal-header #report-modal-title {
+    flex: 1;
+    margin: 0;
+    text-align: center;
+    font-size: 1.25rem;
+}
+
+#report-modal .modal-header .report-modal-back {
+    flex-shrink: 0;
 }
 
 .modal-title {
@@ -1859,18 +1869,32 @@ h1 {
     overflow: auto;
 } */
 
+/* Full-screen overlay only — must NOT inherit `.modal` translate(-50%,-50%) (would clip off-screen). */
+#report-modal.report-modal-overlay,
 #report-modal {
     display: none;
     position: fixed;
+    top: 0;
+    left: 0;
     z-index: 1000;
     width: 100%;
     height: 100%;
     background-color: rgba(0, 0, 0, 0.7);
-    overflow: auto;
+    transform: none;
+    box-shadow: none;
+    /* Do not scroll the overlay — only .modal-body scrolls — avoids chaining scroll to the page */
+    overflow: hidden;
+    overscroll-behavior: contain;
 }
 
 #report-modal.visible {
-    display: block;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding-top: min(5vh, 48px);
+    padding-bottom: min(5vh, 48px);
+    box-sizing: border-box;
 }
 
 .modal-dialog {
@@ -1878,16 +1902,26 @@ h1 {
     background: white;
     border-radius: 5px;
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
-    width: 80%;
-    height: 80%;
-    margin: 0px auto;
-    margin-top: 5%;
+    width: min(92vw, 960px);
+    max-width: 90%;
+    max-height: calc(100vh - min(10vh, 96px));
+    height: auto;
+    min-height: 0;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 .modal-content {
     display: flex;
     flex-direction: column;
-    height: 80vh;
+    flex: 1;
+    min-height: 0;
+    height: auto;
+    max-height: 100%;
+    background: #fff;
+    border-radius: 5px;
 }
 
 .modal-header {
@@ -1896,18 +1930,34 @@ h1 {
     align-items: center;
     padding: 15px;
     border-bottom: 1px solid #e5e5e5;
+    flex-shrink: 0;
 }
 
 .modal-body {
     flex: 1;
+    min-height: 0;
     padding: 15px;
     overflow-y: auto;
+    overscroll-behavior-y: contain;
+}
+
+#report-modal .modal-dialog {
+    margin: 0 auto;
+    flex-shrink: 0;
+    overscroll-behavior: contain;
+}
+
+html.report-modal-scroll-locked,
+body.report-modal-scroll-locked {
+    overflow: hidden !important;
 }
 
 .modal-footer {
     padding: 15px;
     border-top: 1px solid #e5e5e5;
     text-align: right;
+    flex-shrink: 0;
+    background: #fff;
 }
 
 .close {

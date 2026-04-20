@@ -149,7 +149,7 @@ def build_dashboard_stats(files: List[FileReportEntry]) -> DashboardStats:
 
 
 def chunk_analysis_to_markdown(chunk: ChunkDeepAnalysis, chunk_index: int) -> str:
-    """Render chunk structured analysis as markdown for adaptive combined reports."""
+    """Render chunk structured analysis as Markdown for vulnerability report sections."""
     parts: List[str] = []
     line_hint = ""
     if chunk.start_line is not None and chunk.end_line is not None:

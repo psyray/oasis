@@ -1,5 +1,76 @@
 """
-Configuration constants for OASIS
+Configuration constants for OASIS.
+
+Environment-driven tunables are grouped below under explicit section headers.
+
+Developer guide — **safe to tweak together** vs **orthogonal knobs**:
+
+1. **Structured-output degeneracy (deep JSON quality)** — tune together when models collapse or
+   spam repeated tokens in structured output. Env vars: ``OASIS_STRUCTURED_DEGENERACY_*``
+   (see ``STRUCTURED_OUTPUT_DEGENERACY_*`` below). Implemented in
+   ``oasis/helpers/structured_output_degeneracy.py``. Related LLM budgets: ``OASIS_CHUNK_*``
+   (timeouts / ``num_predict``) in the Ollama section above.
+
+2. **PoC budgeting (prompts + logs, not SARIF/HTML report bodies)** — tune together when PoC
+   assist/hints truncate or dominate context. Env vars: ``OASIS_POC_*`` / ``POC_*`` constants
+   below; helpers in ``oasis/helpers/poc_digest.py`` and ``oasis/helpers/poc_pipeline.py``.
+   Keep aligned with structured-output caps if both feed the same LLM turn.
+
+3. **Context expansion (LangGraph)** — ``OASIS_CONTEXT_EXPAND_*`` / ``CONTEXT_EXPAND_*``;
+   separate from PoC digest size but shares overall token pressure with chunk analysis.
+
+4. **CLI debug transcripts** — ``OASIS_LLM_DEBUG_CONTENT_MAX_CHARS`` only affects ``-d`` logging,
+   not report payloads.
+
+Section overview:
+
+- **Ollama / HTTP client** — chunk LLM timeouts, structured ``num_predict`` ceiling, HTTP client
+  timeout, slow-call warning (model I/O and transport).
+- **Structured-output degeneracy** — heuristics when validating deep structured JSON from models.
+- **LangGraph context expansion** — padding and max chars around suspicious spans.
+- **Heuristic tuning (grouped)** — ties structured-output degeneracy and ``POC_*`` caps; read
+  before changing one threshold in isolation.
+- **PoC pipeline** — digest size, hints markdown cap, PoC stage log cap for DEBUG.
+- **CLI debug** — truncation for ``-d`` / ``llm_debug_log`` transcripts (not report payloads).
+
+**Reference — ``OASIS_*`` env vars for structured-output tuning vs PoC (single source for docs/tests):**
+
+Keep this list in sync when adding new ``_parse_env_int`` / ``_parse_env_float`` calls below.
+
+Structured-output degeneracy (maps to ``STRUCTURED_OUTPUT_DEGENERACY_*``):
+
+- ``OASIS_STRUCTURED_DEGENERACY_MIN_CHARS``
+- ``OASIS_STRUCTURED_DEGENERACY_RATIO_MAX``
+- ``OASIS_STRUCTURED_DEGENERACY_ZLIB_LEVEL``
+- ``OASIS_STRUCTURED_DEGENERACY_REPEAT_UNIT_LEN``
+- ``OASIS_STRUCTURED_DEGENERACY_REPEAT_MIN_RUNS``
+
+LangGraph context expansion:
+
+- ``OASIS_CONTEXT_EXPAND_PADDING_BEFORE``
+- ``OASIS_CONTEXT_EXPAND_PADDING_AFTER``
+- ``OASIS_CONTEXT_EXPAND_MAX_CHARS``
+
+PoC pipeline (digest / hints / DEBUG logs):
+
+- ``OASIS_POC_DIGEST_JSON_MAX_CHARS``
+- ``OASIS_POC_STAGE_LOG_MAX_CHARS``
+- ``OASIS_POC_HINTS_MAX_CHARS``
+
+Related chunk LLM budgets (often tuned with degeneracy thresholds):
+
+- ``OASIS_CHUNK_ANALYZE_TIMEOUT_SEC``
+- ``OASIS_CHUNK_DEEP_NUM_PREDICT``
+
+CLI debug only (orthogonal to reports):
+
+- ``OASIS_LLM_DEBUG_CONTENT_MAX_CHARS``
+
+Transport / diagnostics (same file, separate concern):
+
+- ``OASIS_OLLAMA_HTTP_CLIENT_TIMEOUT_SEC``, ``OASIS_OLLAMA_SLOW_CALL_WARNING_SEC``
+
+Static lists (extensions, models, languages, …) follow those sections.
 """
 import copy
 import logging
@@ -12,6 +83,44 @@ from .legacy_vulnerability_mapping import LEGACY_VULNERABILITY_MAPPING
 
 logger = logging.getLogger("oasis")
 
+
+def _parse_env_int(name: str, default: int, *, minimum: Optional[int] = None, maximum: Optional[int] = None) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        v = default
+    else:
+        try:
+            v = int(str(raw).strip(), 10)
+        except ValueError:
+            logger.warning("Invalid integer for %s=%r; using default %s", name, raw, default)
+            v = default
+    if minimum is not None and v < minimum:
+        logger.warning("%s=%s below minimum %s; clamping", name, v, minimum)
+        v = minimum
+    if maximum is not None and v > maximum:
+        logger.warning("%s=%s above maximum %s; clamping", name, v, maximum)
+        v = maximum
+    return v
+
+
+def _parse_env_float(name: str, default: float, *, minimum: Optional[float] = None, maximum: Optional[float] = None) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        v = default
+    else:
+        try:
+            v = float(str(raw).strip())
+        except ValueError:
+            logger.warning("Invalid float for %s=%r; using default %s", name, raw, default)
+            v = default
+    if minimum is not None and v < minimum:
+        logger.warning("%s=%s below minimum %s; clamping", name, v, minimum)
+        v = minimum
+    if maximum is not None and v > maximum:
+        logger.warning("%s=%s above maximum %s; clamping", name, v, maximum)
+        v = maximum
+    return v
+
 # Analysis version (used for cache compatibility)
 # This constant must be incremented manually ONLY when the analysis behavior changes in a way that would make cached results obsolete.
 #
@@ -20,7 +129,7 @@ logger = logging.getLogger("oasis")
 # The result interpretation logic
 # The chunking logic
 # The prompt extensions (VULNERABILITY_PROMPT_EXTENSION)
-ANALYSIS_VERSION = "1.0"
+ANALYSIS_VERSION = "2.0"
 
 # Default args values
 DEFAULT_ARGS = {
@@ -28,10 +137,9 @@ DEFAULT_ARGS = {
     'CHUNK_SIZE': 'auto-detected',
     'VULNS': 'all',
     'OUTPUT_FORMAT': 'all',
-    'ANALYSIS_TYPE': 'standard',
     'EMBEDDING_ANALYSIS_TYPE': 'file',
     'CACHE_DAYS': 7,
-    'EMBED_MODEL': 'nomic-embed-text:latest',
+    'EMBED_MODEL': 'nomic-embed-text-v2-moe:latest',
     'SCAN_MODEL': None,  # If None, same as main model
 }
 
@@ -109,9 +217,104 @@ SUPPORTED_EXTENSIONS: Set[str] = {
     'gitignore', 'gitattributes', 'gitmodules'
 } 
 
-# Chunk configuration
+# Chunk configuration (static)
 MAX_CHUNK_SIZE = 2048
-CHUNK_ANALYZE_TIMEOUT = 120
+
+# =============================================================================
+# Ollama & HTTP client — chunk LLM timeouts, generation budget, transport
+# =============================================================================
+# Larger ``num_predict`` and longer server timeouts increase VRAM pressure and worst-case latency.
+CHUNK_ANALYZE_TIMEOUT = _parse_env_int(
+    "OASIS_CHUNK_ANALYZE_TIMEOUT_SEC",
+    120,
+    minimum=30,
+)
+# Upper bound for structured deep-generation tokens (VRAM / latency guardrail for misconfigured env).
+CHUNK_DEEP_NUM_PREDICT_CEILING = 32768
+
+CHUNK_DEEP_NUM_PREDICT = _parse_env_int(
+    "OASIS_CHUNK_DEEP_NUM_PREDICT",
+    8192,
+    minimum=256,
+    maximum=CHUNK_DEEP_NUM_PREDICT_CEILING,
+)
+
+_default_ollama_http_timeout = max(CHUNK_ANALYZE_TIMEOUT + 120, 240)
+OLLAMA_HTTP_CLIENT_TIMEOUT_SEC = _parse_env_int(
+    "OASIS_OLLAMA_HTTP_CLIENT_TIMEOUT_SEC",
+    _default_ollama_http_timeout,
+    minimum=max(60, CHUNK_ANALYZE_TIMEOUT),
+)
+
+OLLAMA_SLOW_CALL_WARNING_SEC = _parse_env_float(
+    "OASIS_OLLAMA_SLOW_CALL_WARNING_SEC",
+    45.0,
+    minimum=1.0,
+)
+
+# =============================================================================
+# Heuristic tuning — structured-output degeneracy + PoC pipeline (read before changing one knob)
+# =============================================================================
+# These interact through prompt size, VRAM, and latency. Prefer adjusting related constants
+# together and re-checking behavior under ``-d`` / DEBUG when tuning:
+# - STRUCTURED_OUTPUT_DEGENERACY_* — ``oasis/helpers/structured_output_degeneracy.py`` (zlib ratio +
+#   repeated-pattern probe on raw deep JSON before schema validation).
+# - POC_DIGEST_JSON_MAX_CHARS, POC_HINTS_MAX_CHARS, POC_STAGE_LOG_MAX_CHARS —
+#   ``oasis/helpers/poc_digest.py``, ``oasis/helpers/poc_pipeline.py`` (digest into LLM prompts,
+#   optional hints markdown, DEBUG truncation for stage logs).
+# Context expansion windows (CONTEXT_EXPAND_*) are separate but share the same token budget;
+# see ``oasis/helpers/context_expand.py``.
+# Defaults target consumer GPUs; env var names are on each constant below.
+
+# =============================================================================
+# Structured-output degeneracy — deep JSON quality probe (zlib + repeat patterns)
+# =============================================================================
+STRUCTURED_OUTPUT_DEGENERACY_MIN_RAW_CHARS = _parse_env_int(
+    "OASIS_STRUCTURED_DEGENERACY_MIN_CHARS",
+    1600,
+    minimum=100,
+)
+STRUCTURED_OUTPUT_DEGENERACY_COMPRESSION_RATIO_MAX = _parse_env_float(
+    "OASIS_STRUCTURED_DEGENERACY_RATIO_MAX",
+    0.115,
+    minimum=0.01,
+    maximum=0.99,
+)
+STRUCTURED_OUTPUT_DEGENERACY_ZLIB_LEVEL = _parse_env_int(
+    "OASIS_STRUCTURED_DEGENERACY_ZLIB_LEVEL",
+    6,
+    minimum=1,
+    maximum=9,
+)
+STRUCTURED_OUTPUT_DEGENERACY_REPEAT_UNIT_LEN = _parse_env_int(
+    "OASIS_STRUCTURED_DEGENERACY_REPEAT_UNIT_LEN",
+    14,
+    minimum=4,
+)
+STRUCTURED_OUTPUT_DEGENERACY_REPEAT_MIN_RUNS = _parse_env_int(
+    "OASIS_STRUCTURED_DEGENERACY_REPEAT_MIN_RUNS",
+    16,
+    minimum=2,
+)
+
+# =============================================================================
+# LangGraph context expansion — windows around suspicious spans (characters)
+# =============================================================================
+CONTEXT_EXPAND_PADDING_BEFORE = _parse_env_int("OASIS_CONTEXT_EXPAND_PADDING_BEFORE", 40, minimum=0)
+CONTEXT_EXPAND_PADDING_AFTER = _parse_env_int("OASIS_CONTEXT_EXPAND_PADDING_AFTER", 40, minimum=0)
+CONTEXT_EXPAND_MAX_CHARS = _parse_env_int("OASIS_CONTEXT_EXPAND_MAX_CHARS", 12000, minimum=500)
+
+# =============================================================================
+# PoC pipeline — digest JSON, hints markdown, stage DEBUG logs (not SARIF/HTML reports)
+# =============================================================================
+POC_DIGEST_JSON_MAX_CHARS = _parse_env_int("OASIS_POC_DIGEST_JSON_MAX_CHARS", 14000, minimum=500)
+POC_STAGE_LOG_MAX_CHARS = _parse_env_int("OASIS_POC_STAGE_LOG_MAX_CHARS", 32000, minimum=500)
+POC_HINTS_MAX_CHARS = _parse_env_int("OASIS_POC_HINTS_MAX_CHARS", 20000, minimum=500)
+
+# =============================================================================
+# CLI debug — ``-d`` / llm_debug_log truncation (orthogonal to PoC/report payloads)
+# =============================================================================
+LLM_DEBUG_CONTENT_MAX_CHARS = _parse_env_int("OASIS_LLM_DEBUG_CONTENT_MAX_CHARS", 32000, minimum=500)
 EMBEDDING_THRESHOLDS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
 # Ollama API endpoint

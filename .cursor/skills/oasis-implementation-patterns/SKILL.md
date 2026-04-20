@@ -1,6 +1,6 @@
 ---
 name: oasis-implementation-patterns
-description: Implement OASIS features with patterns used in commit history. Use when modifying scanner flow, analysis, model integration, caching, CLI flags, or dashboard behavior.
+description: Implement OASIS features with patterns used in commit history. Use when modifying scanner flow, analysis, LangGraph agent (`oasis/agent/`), model integration, caching, CLI flags, or dashboard behavior.
 ---
 
 # OASIS Implementation Patterns
@@ -14,7 +14,8 @@ Apply the code organization and delivery style repeatedly used in OASIS commits.
 1. Classify the change as `feat`, `fix`, or `refactor`.
 2. Identify the bounded module(s) to touch instead of editing a single large file:
    - `oasis/oasis.py`: CLI and orchestration
-   - `oasis/analyze.py`: analysis logic (Ollama structured outputs for scan / deep / adaptive)
+   - `oasis/analyze.py`: `SecurityAnalyzer` — structured outputs, embedding, cache, and **LangGraph hook methods** (`langgraph_discover_and_publish`, `langgraph_scan_and_publish`, etc.) invoked by the agent layer
+   - `oasis/agent/`: **LangGraph-only** — compile the DAG, state schema, node wrappers, and `invoke_oasis_langgraph` (canonical pipeline entry). Keep graph structure and stable node names in one place (see LangGraph layout below).
    - `oasis/schemas/`: Pydantic models for LLM JSON and canonical vulnerability reports
    - `oasis/report.py`: JSON-first vulnerability reports; Jinja under `oasis/templates/reports/`
    - `oasis/web.py`: dashboard indexing (`json/` stats), APIs (`/api/report-json`, `/api/progress`, Socket.IO `scan_progress`, legacy MD preview rules)
@@ -26,6 +27,25 @@ Apply the code organization and delivery style repeatedly used in OASIS commits.
 5. Prefer defensive handling around cache/model/network boundaries.
 6. For reporting changes, treat canonical JSON schema as the source of truth and keep Jinja templates synchronized.
 7. Before considering the task done: verify **no duplicated logic** remains (same rule in two places, mirrored constants, near-copy functions). Refactor into a single canonical implementation and import it everywhere it is needed.
+
+### LangGraph layout (canonical analysis pipeline)
+
+- **Product path**: `AnalysisType.GRAPH` in `oasis/enums.py` is the only orchestration mode; on-disk chunk caches live under `graph/deep` and `graph/scan` (see `oasis/cache.py`).
+- **Import discipline**: Import LangGraph entry points explicitly (e.g. `from oasis.agent.invoke import invoke_oasis_langgraph`). The `oasis.agent` package docstring explains avoiding a heavy import at interpreter startup when only the submodule is needed.
+- **`oasis/agent/graph_labels.py`**: Single source for node ids (`GRAPH_NODE_*`) and conditional route targets — use these strings in `graph.py`, routing, and tests instead of scattering literals.
+- **`oasis/agent/graph.py`**: Builds `StateGraph(OasisGraphState)` — edges: Discover → Scan → Expand → Deep → Verify → (conditional: Expand or Report) → (conditional: PoC or END when PoC disabled) → END.
+- **`oasis/agent/tools.py`**: Thin dispatch — each node calls the matching `SecurityAnalyzer.langgraph_*` method; console UX uses `oasis/helpers/langgraph_console.py` (`langgraph_emit`, `langgraph_emit_phase`, etc.).
+- **`oasis/agent/state.py`**: Typed state passed between nodes (`all_results`, `expand_iterations`, `max_expand_iterations` from CLI, PoC markdown accumulator, etc.).
+- **Helpers tied to the graph**:
+  - `oasis/helpers/graph_progress.py` — executive-summary `phases` rows aligned with LangGraph stages (`ProgressPhaseRowId.GRAPH_*`, `ProgressActivePhase.GRAPH_PIPELINE`).
+  - `oasis/helpers/langgraph_counts.py` — canonical vuln-type totals for LangGraph (`embedding_tasks_vuln_types_total`, `deep_payload_vuln_types_total`).
+  - `oasis/helpers/langgraph_console.py` — numbered phases, tqdm-safe logging, post-pipeline / report-delivery banners (also used from `report.py`).
+  - `oasis/helpers/scan_progress_md.py` — normalize scan progress JSON / markdown sections (keep in sync with report-side progress).
+  - `oasis/helpers/context_expand.py` — pure line-window expansion around suspicious spans; defaults from `oasis/config.py` (`CONTEXT_EXPAND_*`).
+  - `oasis/helpers/poc_digest.py` — compact findings digest JSON for `--poc-assist`.
+  - `oasis/helpers/poc_pipeline.py` — PoC budgets (re-export from config), hints markdown (`build_poc_hints_markdown`), chat options (`poc_assist_chat_options`), stage DEBUG logging (`maybe_debug_log_poc_stage_output`).
+- **CLI** (extend `README.md` when behavior changes): `--langgraph-max-expand` (`langgraph_max_expand_iterations`), `--poc-hints`, `--poc-assist`.
+- **Tests**: `tests/test_analyze_orchestration.py` for the LangGraph pipeline and PoC helpers; `tests/test_oasis_cli.py` for LangGraph-related flags.
 
 ## Design Guardrails
 
@@ -48,7 +68,7 @@ Details live in `.cursor/rules/oasis-python-architecture.mdc` (constants, sideca
 
 ## Done Criteria
 
-- Run the relevant **`tests/test_<area>.py`** module(s) (or `unittest discover -s tests`) for code you changed; add or extend tests in the file that matches the subsystem (same layout as in the project: report contract, CLI, cache, embedding, helpers, web, etc.).
+- Run the relevant **`tests/test_<area>.py`** module(s) (or `unittest discover -s tests`) for code you changed; add or extend tests in the file that matches the subsystem (same layout as in the project: report contract, CLI, cache, embedding, helpers, web, LangGraph orchestration in `tests/test_analyze_orchestration.py`, etc.).
 - **No new duplicated logic** (including near-duplicates); consolidation is part of the task, not optional follow-up.
 - No obvious module boundary violation; **no new helper-shaped logic** left outside `oasis/helpers/` without a strong, documented reason.
 - Any CLI option change is documented.

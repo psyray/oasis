@@ -89,5 +89,75 @@ class TestOllamaManagerThinkingOverrides(unittest.TestCase):
         self.assertIs(mgr._resolve_model_thinking("deep-b"), True)
 
 
+class TestNormalizeClientResponse(unittest.TestCase):
+    """ollama-python may return Pydantic ChatResponse instead of dict — normalize to dict."""
+
+    def test_passes_through_dict_and_none(self):
+        self.assertIsNone(OllamaManager._normalize_client_response(None))
+        d = {"message": {"content": "x"}}
+        self.assertEqual(OllamaManager._normalize_client_response(d), d)
+
+    def test_model_dump_converts_sdk_like_object(self):
+        class ChatResp:
+            def model_dump(self):
+                return {
+                    "model": "qwen",
+                    "message": {"role": "assistant", "content": '{"verdict":"CLEAN"}'},
+                }
+
+        out = OllamaManager._normalize_client_response(ChatResp())
+        self.assertEqual(out["message"]["content"], '{"verdict":"CLEAN"}')
+
+    def test_chat_returns_dict_when_client_returns_sdk_object(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr.client = MagicMock()
+
+        class ChatResp:
+            def model_dump(self):
+                return {"model": "m", "message": {"role": "assistant", "content": "hi"}}
+
+        mgr.client.chat.return_value = ChatResp()
+        out = mgr.chat("m", [{"role": "user", "content": "x"}])
+        self.assertEqual(out, {"model": "m", "message": {"role": "assistant", "content": "hi"}})
+
+
+class TestModelInfoNumCtx(unittest.TestCase):
+    """num_ctx extraction for chunk sizing and UI (embedding models may omit parameters)."""
+
+    def test_none_parameters_returns_none(self):
+        class MI:
+            parameters = None
+
+        self.assertIsNone(OllamaManager._model_info_num_ctx(MI()))
+
+    def test_dict_with_num_ctx(self):
+        self.assertEqual(
+            OllamaManager._model_info_num_ctx({"parameters": {"num_ctx": 8192}}),
+            8192,
+        )
+
+    def test_detect_optimal_chunk_size_uses_num_ctx(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr._get_model_info = MagicMock(
+            return_value={"parameters": {"num_ctx": 1000}}
+        )
+        self.assertEqual(mgr._detect_optimal_chunk_size("embed"), int(1000 * 0.9))
+
+
+class TestParameterCountNumeric(unittest.TestCase):
+    """Pure helpers used by lightweight filtering and formatted parameter display."""
+
+    def test_dict_details_parameter_size_b(self):
+        info = {"details": {"parameter_size": "8.0B"}}
+        self.assertEqual(OllamaManager._parameter_count_numeric(info), 8e9)
+
+    def test_dict_modelinfo_parameter_count_fallback(self):
+        info = {"modelinfo": {"general.parameter_count": 500_000_000}}
+        self.assertEqual(OllamaManager._parameter_count_numeric(info), 500_000_000.0)
+
+    def test_unknown_returns_zero(self):
+        self.assertEqual(OllamaManager._parameter_count_numeric({}), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

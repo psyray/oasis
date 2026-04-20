@@ -44,11 +44,15 @@ class EmojiFormatter(logging.Formatter):
         return any(start <= code <= end for start, end in emoji_ranges)  
 
     def determine_icon(self, record) -> str:  
-        # Early returns for non-string messages or messages with emoji prefixes
-        if not isinstance(record.msg, str) or self.has_emoji_prefix(record.msg.strip()):  
+        # Use merged message (args applied) so %-style logging works with console output.
+        try:
+            text = record.getMessage()
+        except Exception:
+            text = str(record.msg)
+        if not isinstance(text, str) or self.has_emoji_prefix(text.strip()):
             return ''
-            
-        msg_lower = record.msg.lower()
+
+        msg_lower = text.lower()
         
         # Level-based icons
         if record.levelno == logging.DEBUG:
@@ -73,7 +77,7 @@ class EmojiFormatter(logging.Formatter):
                 'START_WORDS': '🚀 ',
                 'FINISH_WORDS': '🏁 ',
                 'STOPPED_WORDS': '🛑 ',
-                'DELETE_WORDS': '🗑️ ',
+                'DELETE_WORDS': '🗑️  ',
                 'SUCCESS_WORDS': '✅ ',
                 'GENERATION_WORDS': '⚙️  ',
                 'REPORT_WORDS': '📄 ',
@@ -95,16 +99,18 @@ class EmojiFormatter(logging.Formatter):
         # Default: no icon
         return ''
 
-    def format(self, record):  
-        if hasattr(record, 'emoji') and not record.emoji:  
-            return record.msg  
-        if not hasattr(record, 'formatted_message'):  
-            icon = self.determine_icon(record)  
-            if record.msg.startswith('\n'):  
-                record.formatted_message = record.msg.replace('\n', f'\n{icon}', 1)  
-            else:  
-                record.formatted_message = f"{icon}{record.msg}"  
-        return record.formatted_message
+    def format(self, record):
+        if hasattr(record, "emoji") and not record.emoji:
+            return super().format(record)
+        base = super().format(record)
+        if icon := self.determine_icon(record):
+            return (
+                base.replace("\n", f"\n{icon}", 1)
+                if base.startswith("\n")
+                else f"{icon}{base}"
+            )
+        else:
+            return base
 
 def setup_logging(debug=False, silent=False, error_log_file=None):
     """
