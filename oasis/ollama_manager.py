@@ -132,6 +132,29 @@ class OllamaManager:
         return self._model_thinking_overrides.get(model)
 
     @staticmethod
+    def _normalize_model_reference(model: str) -> str:
+        """
+        Normalize model name for local-availability checks.
+
+        Examples:
+            "nomic-embed-text:latest" -> "nomic-embed-text"
+            "qwen3-embedding:4b" -> "qwen3-embedding:4b"
+        """
+        text = (model or "").strip().lower()
+        if not text:
+            return ""
+        if text.endswith(":latest"):
+            return text[: -len(":latest")]
+        return text
+
+    @classmethod
+    def _is_model_present_locally(cls, requested_model: str, available_models: List[str]) -> bool:
+        """Return True when requested model exists, accounting for Ollama's :latest alias."""
+        requested = cls._normalize_model_reference(requested_model)
+        available = {cls._normalize_model_reference(name) for name in available_models or []}
+        return bool(requested) and requested in available
+
+    @staticmethod
     def _normalize_client_response(result: Any) -> Any:
         """
         Convert ollama-python SDK response objects (e.g. ChatResponse, GenerateResponse)
@@ -778,8 +801,8 @@ class OllamaManager:
             client = self.get_client()
             available_models = self._get_models([])
             
-            # Check if model is already available
-            if model in available_models:
+            # Check if model is already available (:latest alias handled)
+            if self._is_model_present_locally(model, available_models):
                 logger.debug(f"Model {model} is already available")
                 return True
                 
