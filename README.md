@@ -221,7 +221,7 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 - `--scan-model` `-sm`: Model to use for quick scanning (default: same as main model)
 - `--model-thinking` `-mt`: Enable/disable thinking for deep analysis models [yes,no] (default: no)
 - `--small-model-thinking` `-smt`: Enable/disable thinking for the quick scan model [yes,no] (default: no)
-- `--embed-model` `-em`: Model to use for embeddings (default: qwen3-embedding:4b)
+- `--embed-model` `-em`: Embedding model(s); in audit mode, supports a comma-separated list (example: `-em qwen3-embedding:4b,bge-m3`) (default: qwen3-embedding:4b)
 - `--list-models` `-lm`: List available models and exit
 
 ### Cache Management
@@ -426,6 +426,8 @@ oasis -i ./critical-service -sm qwen2.5-coder:7b -m bugtraceai-apex-q4 -t 0.6 -s
 - Executive summary stays visible even when vulnerability filters are active, so scan-wide context is always available.
 - Language filtering is available in the dashboard (`🌐 Filter by language`) and uses the same emoji-flag format as report language badges.
 - Scan progress can be queried via `/api/progress` to retrieve the latest executive summary progress metadata (`completed_vulnerabilities`, `total_vulnerabilities`, `is_partial`).
+- Audit cards include an embedding-model comparison table based on parsed audit markdown metrics; selecting model tags can filter both date chips and comparison rows (multi-select supported).
+- Date-based filtering supports multiple `model` query params (`/api/dates?model=...&model=...&vulnerability=...`) and falls back to API fetch if local in-memory report data is stale.
 
 ## 💾 Cache Management
 
@@ -466,6 +468,9 @@ OASIS offers a specialized Audit Mode that performs an embedding distribution an
 ```bash
 # Run OASIS in audit mode
 oasis --input [path_to_analyze] --audit
+
+# Compare multiple embedding models in one audit run
+oasis --input [path_to_analyze] --audit -em qwen3-embedding:4b,bge-m3
 ```
 
 ### What Audit Mode Does
@@ -475,6 +480,7 @@ oasis --input [path_to_analyze] --audit
 - **Threshold Analysis**: Shows the distribution of similarity scores across different thresholds
 - **Statistical Overview**: Provides mean, median, and max similarity scores for each vulnerability type
 - **Top Matches**: Identifies the files or functions with the highest similarity to each vulnerability type
+- **Audit Metrics Summary**: Exports a stable `Metric | Value` markdown table (`Count`, `Average`, `Median`, `Max`, `Min`, high/medium/low tiers) that the dashboard parses for model-to-model comparisons
 
 ### Benefits of Audit Mode
 

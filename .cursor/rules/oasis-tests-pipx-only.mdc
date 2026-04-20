@@ -17,3 +17,8 @@ PYTHONPATH="$(pwd)" pipx run --spec . python -m unittest tests.<module_or_class>
 ```
 
 - For broader verification, run multiple test modules in one pipx invocation.
+- Example broader verification command:
+
+```bash
+PYTHONPATH="$(pwd)" pipx run --spec . python -m unittest tests.test_oasis_cli tests.test_embedding_pure tests.test_report_schema
+```

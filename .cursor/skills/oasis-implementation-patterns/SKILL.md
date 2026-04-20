@@ -21,6 +21,7 @@ Apply the code organization and delivery style repeatedly used in OASIS commits.
    - `oasis/web.py`: dashboard indexing (`json/` stats), APIs (`/api/report-json`, `/api/progress`, Socket.IO `scan_progress`, legacy MD preview rules)
    - `oasis/ollama_manager.py`: model and Ollama interactions
    - `oasis/helpers/`: **all** shared helpers (formatting, parsing, progress helpers, small pure utilities). Do not leave helper-shaped functions in feature modules—extract them here and group by category in dedicated modules (see Design Guardrails).
+   - `oasis/helpers/embed_models.py`: canonical embed-model normalization/parsing; reuse it for CLI parsing and embedding-manager primary model resolution.
    - `oasis/static/js/dashboard/*`: web dashboard behavior (JSON modal preview, `force=1` on reload for stats/reports/progress, `applyProgressPayload` / `progressState`)
 3. Keep interfaces compatible unless migration is explicit.
 4. Update docs (`README.md`) when user-facing flags or behavior change.
@@ -52,6 +53,12 @@ Apply the code organization and delivery style repeatedly used in OASIS commits.
 ### Incremental scan progress (see Cursor rules)
 
 Details live in `.cursor/rules/oasis-python-architecture.mdc` (constants, sidecar, helper modules) and `.cursor/rules/oasis-dashboard-js-patterns.mdc` (REST, Socket.IO, stale `updated_at` guard). Touch `oasis/helpers/progress_constants.py`, `report.py`, `web.py`, and dashboard JS together when the wire contract changes; extend `tests/test_report_schema.py` when behavior is contract-visible.
+
+### Audit metrics and dashboard comparison
+
+- `Report.generate_audit_report` must keep an `Audit Metrics Summary` markdown table with stable `Metric | Value` rows (count/similarity/high-medium-low tiers).
+- `WebServer` parses these markdown metrics into `audit_metrics` entries exposed by `/api/reports`.
+- Dashboard comparison UI (`utils.js` + `views.js` + `interactions.js`) depends on those keys; treat report/web/dashboard as one contract surface and update tests in `tests/test_report_schema.py` together.
 
 ### Duplication and centralization (strict)
 
