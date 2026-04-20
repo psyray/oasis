@@ -572,18 +572,21 @@ class OasisScanner:
             logger, "🔌", "Ollama & embed model", "context length, chunk size, model pull"
         )
 
-        # Auto-detect chunk size if not specified
-        if self.args.chunk_size is None:
-            self.args.chunk_size = self.ollama_manager.detect_optimal_chunk_size(self.args.embed_model)
-        else:
-            logger.info(f"Using manual chunk size: {self.args.chunk_size}")
-
         # Check Ollama connection
         if not self.ollama_manager.check_connection():
             return False
 
         # Check embedding model availability
-        return bool(self.ollama_manager.ensure_model_available(self.args.embed_model))
+        if not self.ollama_manager.ensure_model_available(self.args.embed_model):
+            return False
+
+        # Auto-detect chunk size only after the embedding model exists locally.
+        if self.args.chunk_size is None:
+            self.args.chunk_size = self.ollama_manager.detect_optimal_chunk_size(self.args.embed_model)
+        else:
+            logger.info(f"Using manual chunk size: {self.args.chunk_size}")
+
+        return True
 
     def _init_processing(self):
         """
