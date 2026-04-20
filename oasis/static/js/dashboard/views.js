@@ -29,6 +29,8 @@ DashboardApp.renderCurrentView = function() {
 
 DashboardApp.renderTreeView = function(groupBy) {
     DashboardApp.debug("Rendering tree view...");
+    const h = DashboardApp._escapeHtml;
+    const openReportOnclick = DashboardApp._buildOpenReportOnclick;
     const container = document.getElementById('reports-container');
     
     if (!container) {
@@ -52,31 +54,17 @@ DashboardApp.renderTreeView = function(groupBy) {
     });
     
     // Sort keys
-    const sortedKeys = Object.keys(grouped).sort((a, b) => {
-        // Put Executive Summary and Audit Report first for vulnerabilities
-        if (groupBy === 'vulnerability_type') {
-            if (a === 'Executive Summary') {
-              return -1;
-            }
-            if (b === 'Executive Summary') {
-              return 1;
-            }
-            if (a === 'Audit Report') {
-              return -1;
-            }
-            if (b === 'Audit Report') {
-              return 1;
-            }
-        }
-        return a.localeCompare(b);
-    });
+    const sortVulnNames = DashboardApp.sortVulnerabilityTypeNames;
+    const sortedKeys = groupBy === 'vulnerability_type'
+        ? sortVulnNames(Object.keys(grouped))
+        : Object.keys(grouped).sort((a, b) => a.localeCompare(b));
     
     let html = '<div class="tree-view">';
     
     // For each group (model or vulnerability type)
     sortedKeys.forEach(key => {
         const reportsInGroup = grouped[key];
-        const formattedKey = DashboardApp.formatDisplayName(key, groupBy === 'model' ? 'model' : 'vulnerability');
+        const formattedKey = h(DashboardApp.formatDisplayName(key, groupBy === 'model' ? 'model' : 'vulnerability'));
         
         html += `
             <div class="tree-section">
@@ -102,7 +90,7 @@ DashboardApp.renderTreeView = function(groupBy) {
             
             sortedModels.forEach(model => {
                 const reportsForModel = modelGroups[model];
-                const formattedModel = DashboardApp.formatDisplayName(model, 'model');
+                const formattedModel = h(DashboardApp.formatDisplayName(model, 'model'));
                 
                 html += `
                     <div class="tree-item">
@@ -117,15 +105,20 @@ DashboardApp.renderTreeView = function(groupBy) {
                 
                 // Add date entries
                 reportsForModel.forEach(report => {
+                    if (!report.date_visible) {
+                        return;
+                    }
                     const reportDate = report.date ? new Date(report.date) : null;
                     const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
                     const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+                    const languageMeta = DashboardApp.getLanguageMeta(report.language);
                     
                     html += `
                         <span class="date-tag clickable" 
-                            onclick="openReport('${report.path}', '${report.format}')" 
-                            data-model="${model}" 
-                            data-vulnerability="${report.vulnerability_type}">
+                            onclick="${openReportOnclick(report.path, report.format)}" 
+                            data-model="${h(model)}" 
+                            data-vulnerability="${h(report.vulnerability_type)}">
+                            <span class="language-flag" title="${h(languageMeta.name)}">${h(languageMeta.emoji)}</span>
                             <div class="date-main">${formattedDate}</div>
                             <div class="date-time">${formattedTime}</div>
                         </span>
@@ -149,26 +142,12 @@ DashboardApp.renderTreeView = function(groupBy) {
                 vulnGroups[report.vulnerability_type].push(report);
             });
             
-            // Sort vulnerabilities - put Executive Summary and Audit Report first
-            const sortedVulns = Object.keys(vulnGroups).sort((a, b) => {
-                if (a === 'Executive Summary') {
-                  return -1;
-                }
-                if (b === 'Executive Summary') {
-                  return 1;
-                }
-                if (a === 'Audit Report') {
-                  return -1;
-                }
-                if (b === 'Audit Report') {
-                  return 1;
-                }
-                return a.localeCompare(b);
-            });
+            // Sort vulnerabilities - put Audit Report first, then Executive Summary
+            const sortedVulns = sortVulnNames(Object.keys(vulnGroups));
             
             sortedVulns.forEach(vuln => {
                 const reportsForVuln = vulnGroups[vuln];
-                const formattedVuln = DashboardApp.formatDisplayName(vuln, 'vulnerability');
+                const formattedVuln = h(DashboardApp.formatDisplayName(vuln, 'vulnerability'));
                 
                 html += `
                     <div class="tree-item">
@@ -183,15 +162,20 @@ DashboardApp.renderTreeView = function(groupBy) {
                 
                 // Add date entries
                 reportsForVuln.forEach(report => {
+                    if (!report.date_visible) {
+                        return;
+                    }
                     const reportDate = report.date ? new Date(report.date) : null;
                     const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
                     const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+                    const languageMeta = DashboardApp.getLanguageMeta(report.language);
                     
                     html += `
                         <span class="date-tag clickable" 
-                            onclick="openReport('${report.path}', '${report.format}')" 
-                            data-model="${report.model}" 
-                            data-vulnerability="${vuln}">
+                            onclick="${openReportOnclick(report.path, report.format)}" 
+                            data-model="${h(report.model)}" 
+                            data-vulnerability="${h(vuln)}">
+                            <span class="language-flag" title="${h(languageMeta.name)}">${h(languageMeta.emoji)}</span>
                             <div class="date-main">${formattedDate}</div>
                             <div class="date-time">${formattedTime}</div>
                         </span>
@@ -229,25 +213,24 @@ DashboardApp.renderListView = function() {
         return;
     }
     
-    // Load the template if it's not already loaded
-    if (!DashboardApp.cardTemplate) {
-        fetch('/static/templates/dashboard_card.html')
-            .then(response => response.text())
-            .then(template => {
-                DashboardApp.cardTemplate = template;
-                DashboardApp.renderListViewWithTemplate();
-            })
-            .catch(error => {
-                console.error('Error loading template:', error);
-                container.innerHTML = '<div class="error-message">Error loading template. Please refresh the page.</div>';
-            });
-    } else {
-        DashboardApp.renderListViewWithTemplate();
-    }
+    DashboardApp.renderListViewWithTemplate();
 };
 
 DashboardApp.renderListViewWithTemplate = function() {
     DashboardApp.debug("Rendering list view with template...");
+    const h = DashboardApp._escapeHtml;
+    const jsq = DashboardApp._escapeJsSingleQuote;
+    const openReportOnclick = DashboardApp._buildOpenReportOnclick;
+    const sortVulnNames = DashboardApp.sortVulnerabilityTypeNames;
+    const {modelDataAttrValue} = DashboardApp;
+    const buildAuditComparisonTableHtml = function(reports, vulnerabilityType) {
+        return DashboardApp.auditComparison.buildTableHtml(reports, vulnerabilityType, {
+            h: h,
+            formatDisplayName: DashboardApp.formatDisplayName,
+            normalizeModelKey: DashboardApp.normalizeModelKey,
+            modelDataAttrValue: modelDataAttrValue,
+        });
+    };
     const container = document.getElementById('reports-container');
     
     // Group by vulnerability type
@@ -259,72 +242,44 @@ DashboardApp.renderListViewWithTemplate = function() {
         vulnGroups[report.vulnerability_type].push(report);
     });
     
-    // Sort vulnerability types - Ensure Executive Summary and Audit Report come first
-    const sortedVulns = Object.keys(vulnGroups).sort((a, b) => {
-        if (a === 'Executive Summary') {
-            return -1;
-        }
-        if (b === 'Executive Summary') {
-            return 1;
-        }
-        if (a === 'Audit Report') {
-            return -1;
-        }
-        if (b === 'Audit Report') {
-            return 1;
-        }
-        return a.localeCompare(b);
-    });
+    // Sort vulnerability types - Audit Report first, then Executive Summary, then vulnerabilities
+    const sortedVulns = sortVulnNames(Object.keys(vulnGroups));
     
     let html = '<div class="report-grid">';
     
     sortedVulns.forEach(vuln => {
         const reportsForVuln = vulnGroups[vuln];
-        const formattedVulnEmoji = DashboardApp.formatDisplayName(vuln, 'vulnerability');
-        const formattedVuln = DashboardApp.formatDisplayName(vuln, 'vulnerability', false);
+        const formattedVulnEmoji = h(DashboardApp.formatDisplayName(vuln, 'vulnerability'));
+        const formattedVuln = h(DashboardApp.formatDisplayName(vuln, 'vulnerability', false));
         
         // Group models for this vulnerability
         const models = [...new Set(reportsForVuln.map(report => report.model))];
         
         // Get report statistics
-        const totalFindings = reportsForVuln.reduce((sum, r) => sum + (r.stats?.total || 0), 0);
+        const totalFindings = reportsForVuln.reduce(
+            (sum, r) => sum + (r.stats?.total_findings ?? r.stats?.total ?? 0),
+            0
+        );
         const highRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.high_risk || 0), 0);
         const mediumRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.medium_risk || 0), 0);
         const lowRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.low_risk || 0), 0);
         
-        // Determine format paths for buttons
-        let mdPath = '';
-        let htmlPath = '';
-        let pdfPath = '';
-        
-        // Get the latest report for each format
+        // Resolve download paths across all report rows (same stem may appear as json, md, sarif, …)
         reportsForVuln.sort((a, b) => new Date(b.date) - new Date(a.date));
-        const latestReport = reportsForVuln[0];
-        
-        if (latestReport) {
-            // Format paths
-            mdPath = latestReport.format === 'md' ? latestReport.path : 
-                    (latestReport.alternative_formats && latestReport.alternative_formats.md ? 
-                    latestReport.alternative_formats.md : '');
-            
-            htmlPath = latestReport.format === 'html' ? latestReport.path : 
-                    (latestReport.alternative_formats && latestReport.alternative_formats.html ? 
-                    latestReport.alternative_formats.html : '');
-            
-            pdfPath = latestReport.format === 'pdf' ? latestReport.path : 
-                    (latestReport.alternative_formats && latestReport.alternative_formats.pdf ? 
-                    latestReport.alternative_formats.pdf : '');
-        }
+        const fh = DashboardApp.formatHelpers;
+        const formatPaths = fh && fh.collectFormatPathsFromReports
+            ? fh.collectFormatPathsFromReports(reportsForVuln)
+            : {};
                 
         // Generate models HTML
         let modelsHTML = '';
         models.forEach(model => {
-            const formattedModel = DashboardApp.formatDisplayName(model, 'model');
+            const formattedModel = h(DashboardApp.formatDisplayName(model, 'model'));
             
             modelsHTML += `
                 <span class="model-tag clickable" 
                     onclick="filterDatesByModel(this)" 
-                    data-model="${model}">
+                    data-model="${h(model)}">
                     ${formattedModel}
                 </span>
             `;
@@ -338,11 +293,14 @@ DashboardApp.renderListViewWithTemplate = function() {
                 const reportDate = report.date ? new Date(report.date) : null;
                 const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
                 const formattedTime = reportDate ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+                const languageMeta = DashboardApp.getLanguageMeta(report.language);
                 
                 datesHTML += `
                     <span class="date-tag clickable" 
-                        onclick="openReport('${report.path}', '${report.format}')" 
-                        data-model="${report.model}">
+                        onclick="${openReportOnclick(report.path, report.format)}" 
+                        data-model="${h(modelDataAttrValue(report.model))}">
+                        <span class="language-flag" title="${h(languageMeta.name)}">${h(languageMeta.emoji)}</span>
+                        <span class="model-emoji" title="${h(report.model)}">${h((DashboardApp.getModelEmoji(report.model) || '🤖').trim())}</span>
                         <div class="date-main">${formattedDate}</div>
                         <div class="date-time">${formattedTime}</div>
                     </span>
@@ -350,20 +308,35 @@ DashboardApp.renderListViewWithTemplate = function() {
             }
         });
             
-        // Generate format buttons HTML
+        // Generate format buttons HTML (order from REPORT_DOWNLOAD_FORMATS: human-readable first)
         let formatButtons = '';
-        if (pdfPath) {
-          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${pdfPath}', 'pdf')">📄 PDF</button>`;
-        }
-        if (mdPath) {
-          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${mdPath}', 'md')">📝 MD</button>`;
-        }
-        if (htmlPath) {
-          formatButtons += `<button class="btn btn-format" onclick="downloadReportFile('${htmlPath}', 'html')">🌐 HTML</button>`;
-        }
+        const fmts = (fh && fh.REPORT_DOWNLOAD_FORMATS) || [];
+        fmts.forEach(fmt => {
+            const p = formatPaths[fmt];
+            if (!p) {
+                return;
+            }
+            const btnLabel = fh && fh.formatDownloadButtonLabel
+                ? fh.formatDownloadButtonLabel(fmt)
+                : String(fmt).toUpperCase();
+            const fmtLower = String(fmt).toLowerCase();
+            const titleUnknown = (DashboardApp.FORMAT_DOWNLOAD_LABELS || {})[fmtLower]
+                ? ''
+                : ` title="${h('Format: ' + fmt)}"`;
+            formatButtons += `<button class="btn btn-format"${titleUnknown} onclick="downloadReportFile('${jsq(p)}', '${jsq(fmt)}')">${btnLabel}</button>`;
+        });
             
+        const auditComparisonTableHTML = vuln === 'Audit Report'
+            ? buildAuditComparisonTableHtml(reportsForVuln, vuln)
+            : '';
+        const datesSelectionBadgeHTML = DashboardApp.modelSelectionBadgeHtml(0);
+        const cardClass = vuln === 'Audit Report'
+            ? 'report-card report-card--full-row'
+            : 'report-card';
+
         // Use the template and replace placeholders
-        let cardHTML = DashboardApp.cardTemplate
+        let cardHTML = DashboardApp.templates.dashboardCard
+            .replace('${cardClass}', cardClass)
             .replace('${formattedVulnTypeEmoji}', formattedVulnEmoji)
             .replace('${formattedVulnType}', formattedVuln)
             .replace('${modelsHTML}', modelsHTML)
@@ -372,6 +345,8 @@ DashboardApp.renderListViewWithTemplate = function() {
             .replace('${highRisk}', highRisk)
             .replace('${mediumRisk}', mediumRisk)
             .replace('${lowRisk}', lowRisk)
+            .replace('${datesSelectionBadgeHTML}', datesSelectionBadgeHTML)
+            .replace('${auditComparisonTableHTML}', auditComparisonTableHTML)
             .replace('${formatButtons}', formatButtons);
         
         html += cardHTML;
@@ -384,13 +359,14 @@ DashboardApp.renderListViewWithTemplate = function() {
 DashboardApp.renderStats = function() {
     DashboardApp.debug("Rendering stats...");
     const statsContainer = document.getElementById('stats-container');
+    const h = DashboardApp._escapeHtml;
     
     if (!statsContainer) {
         console.error("Stats container not found");
         return;
     }
     
-    if (!DashboardApp.stats || !DashboardApp.stats.risk_summary) {
+    if (!DashboardApp.hasRenderableStats()) {
         console.error("Stats data not available");
         return;
     }
@@ -400,6 +376,124 @@ DashboardApp.renderStats = function() {
     const highPct = (DashboardApp.stats.risk_summary.high / totalRisks * 100) || 0;
     const mediumPct = (DashboardApp.stats.risk_summary.medium / totalRisks * 100) || 0;
     const lowPct = (DashboardApp.stats.risk_summary.low / totalRisks * 100) || 0;
+    const progress = DashboardApp.progressState || {};
+    const hasRun = Boolean(progress.has_progress);
+    const totalVulns = Math.max(0, Number(progress.total_vulnerabilities || 0));
+    const hasProgress = totalVulns > 0;
+    const completedVulns = Math.max(0, Number(progress.completed_vulnerabilities || 0));
+    const progressPct = totalVulns > 0 ? Math.min(100, Math.round((completedVulns / totalVulns) * 100)) : 0;
+    const statusKey = String(progress.status || '').toLowerCase();
+    const isAborted = statusKey === 'aborted';
+    const isFailed = statusKey === 'failed';
+    const isSucceeded = statusKey === 'succeeded';
+    const isFinished = statusKey === 'finished' || statusKey === 'complete' || isSucceeded;
+
+    const progressStatus = (() => {
+        if (isAborted) {
+            return 'Aborted';
+        }
+        if (isFailed) {
+            return 'Failed';
+        }
+        if (!isFinished && progress.is_partial) {
+            return 'In progress';
+        }
+        if (isFinished) {
+            return 'Complete';
+        }
+        return progress.is_partial ? 'In progress' : 'Complete';
+    })();
+
+    const statusBadgeClass = (() => {
+        if (isAborted) {
+            return 'badge-status-aborted';
+        }
+        if (isFailed) {
+            return 'badge-status-failed';
+        }
+        if (!isFinished && progress.is_partial) {
+            return 'badge-status-in-progress';
+        }
+        return 'badge-status-complete';
+    })();
+    const testedVulnerabilities = Array.isArray(progress.tested_vulnerabilities)
+        ? progress.tested_vulnerabilities.filter(Boolean)
+        : [];
+    const testedVulnerabilitiesHtml = testedVulnerabilities.length > 0
+        ? testedVulnerabilities.map(vuln => {
+            const emoji = DashboardApp.getVulnerabilityEmoji(String(vuln).toLowerCase().replace(/ /g, '_')).trim() || '🔒';
+            return `<span class="progress-vuln-emoji" title="${h(vuln)}">${h(emoji)}</span>`;
+        }).join('')
+        : '<span class="progress-vuln-empty">No vulnerabilities completed yet</span>';
+    const currentVulnerabilityRaw = String(progress.current_vulnerability || '').trim();
+    const currentVulnerabilityEmoji = currentVulnerabilityRaw
+        ? (DashboardApp.getVulnerabilityEmoji(currentVulnerabilityRaw.toLowerCase().replace(/ /g, '_')).trim() || '🔒')
+        : (isAborted ? '🛑' : isFailed ? '⚠️' : (hasRun ? '⏳' : '📭'));
+    const currentVulnerabilityText = currentVulnerabilityRaw
+        || (isAborted ? 'Scan aborted by user' : isFailed ? 'Scan failed' : (hasRun ? 'Waiting for first vulnerability' : 'No active scan'));
+
+    const normalizePhaseNumber = DashboardApp.normalizeProgressNumber;
+
+    const phases = Array.isArray(progress.phases) ? progress.phases : [];
+    const phaseRowsHtml = phases
+        .map((p) => {
+            if (!p || typeof p !== 'object') {
+                return '';
+            }
+            const label = String(p.label || p.id || 'Phase');
+            const done = normalizePhaseNumber(p.completed);
+            const tot = normalizePhaseNumber(p.total);
+            if (
+                typeof DashboardApp.shouldHideCompletedProgressPhaseRow === 'function' &&
+                DashboardApp.shouldHideCompletedProgressPhaseRow(p, isFinished, progress.event_version)
+            ) {
+                return '';
+            }
+            const pct = tot > 0 ? Math.min(100, Math.round((done / tot) * 100)) : 0;
+            const st = String(p.status || '').trim();
+            const labelWithStatus =
+                typeof DashboardApp.htmlProgressPhaseLabelWithStatus === 'function'
+                    ? DashboardApp.htmlProgressPhaseLabelWithStatus(h, label, st)
+                    : h(label) + (st ? (' · ' + h(st)) : '');
+            return `<div class="progress-phase-row"><span class="progress-phase-label">${labelWithStatus}</span><span class="progress-phase-count">${done}/${tot} (${pct}%)</span></div>`;
+        })
+        .filter(Boolean)
+        .join('');
+
+    // Keep scan progress high-level only: detailed vuln/file sub-phases are intentionally hidden.
+    const adaptiveHtml = '';
+
+    const activePhaseRaw = String(progress.active_phase || '').trim();
+    const activePhaseHtml = activePhaseRaw
+        ? `<div class="progress-active-phase">Phase: <code>${h(activePhaseRaw)}</code>${progress.scan_mode ? ` · ${h(String(progress.scan_mode))}` : ''}</div>`
+        : '';
+
+    const phasesSection =
+        phaseRowsHtml || adaptiveHtml || activePhaseHtml
+            ? `<div class="progress-phases">${activePhaseHtml}${phaseRowsHtml}${adaptiveHtml ? `<div class="progress-adaptive-wrap">${adaptiveHtml}</div>` : ''}</div>`
+            : '';
+
+    const progressCard = hasProgress
+        ? `
+            <div class="card progress-card">
+                <div class="card-title">⏱️ Scan progress</div>
+                <div class="progress-meta">${completedVulns}/${totalVulns} vulnerabilities</div>
+                ${phasesSection}
+                <div class="progress-track">
+                    <div class="progress-fill" style="width: ${progressPct}%;"></div>
+                </div>
+                <div class="progress-current-vulnerability">
+                    <span class="progress-current-emoji">${h(currentVulnerabilityEmoji)}</span>
+                    <span class="progress-current-text">${h(currentVulnerabilityText)}</span>
+                </div>
+                <div class="progress-tested-vulnerabilities">${testedVulnerabilitiesHtml}</div>
+                <div class="progress-footer">
+                    <span class="badge ${statusBadgeClass}">${progressStatus}</span>
+                    <span class="progress-model">${h(String(progress.model || ''))}</span>
+                </div>
+            </div>
+        `
+        : '';
     
     statsContainer.innerHTML = `
         <div class="dashboard-cards">
@@ -418,8 +512,8 @@ DashboardApp.renderStats = function() {
                 <div class="card-value">${Object.keys(DashboardApp.stats.vulnerabilities || {}).length}</div>
                 <div class="card-label">Vulnerabilities analyzed</div>
             </div>
-            <div class="card">
-                <div class="card-title">📈 Risk summary</div>
+            <div class="card risk-summary-card">
+                <div class="card-title">📈 Findings by severity (LLM)</div>
                 <div class="risk-indicator">
                     <div class="risk-bar">
                         <div class="risk-high" style="width: ${highPct}%"></div>
@@ -427,12 +521,14 @@ DashboardApp.renderStats = function() {
                         <div class="risk-low" style="width: ${lowPct}%"></div>
                     </div>
                 </div>
-                <div style="display: flex; justify-content: space-between; margin-top: 5px;">
-                    <span class="badge badge-high">🚨 ${DashboardApp.stats.risk_summary.high || 0} High</span>
-                    <span class="badge badge-medium">⚠️ ${DashboardApp.stats.risk_summary.medium || 0} Medium</span>
-                    <span class="badge badge-low">📌 ${DashboardApp.stats.risk_summary.low || 0} Low</span>
+                <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; margin-top: 5px;">
+                    <span class="badge badge-high">🚨 ${DashboardApp.stats.risk_summary.high || 0} High severity</span>
+                    <span class="badge badge-medium">⚠️ ${DashboardApp.stats.risk_summary.medium || 0} Medium severity</span>
+                    <span class="badge badge-low">📌 ${DashboardApp.stats.risk_summary.low || 0} Low severity</span>
                 </div>
+                <div class="card-label">From structured findings, not embedding similarity tiers</div>
             </div>
+            ${progressCard}
         </div>
     `;
 };
@@ -454,4 +550,4 @@ DashboardApp.switchView = function(viewMode) {
     DashboardApp.renderCurrentView();
 };
 
-DashboardApp.debug("Views module loaded"); 
+DashboardApp.debug("Views module loaded");

@@ -9,6 +9,15 @@
     // Pre-loading model emojis from Python
     const modelEmojis = {{ model_emojis|tojson|safe }};
     const vulnEmojis = {{ vuln_emojis|tojson|safe }};
+    const languageConfig = {{ languages|tojson|safe }};
+    // Single source of truth for allowed formats and UI ordering (see REPORT in config.py)
+    window.__OASIS_DASHBOARD__ = window.__OASIS_DASHBOARD__ || {};
+    window.__OASIS_DASHBOARD__.outputFormats = {{ report_output_formats|tojson|safe }};
+    window.__OASIS_DASHBOARD__.formatDisplayOrder = {{ dashboard_format_display_order|tojson|safe }};
+    window.__OASIS_DASHBOARD__.languages = languageConfig;
+    window.__OASIS_DASHBOARD__.progressSummaryPhases = {{ progress_summary_phases|tojson|safe }};
+    window.__OASIS_DASHBOARD__.realtimeEnabled = {{ dashboard_realtime_enabled|tojson|safe }};
+    window.__OASIS_DASHBOARD__.socketioClientUrl = {{ dashboard_socketio_client_url|tojson|safe }};
 </script>
 {% endblock %}
 
@@ -30,6 +39,13 @@
             <div class="filter-section">
                 <h2 class="filter-title">🛡️ Filter by vulnerability</h2>
                 <div class="filter-options" id="vulnerability-filters">
+                    <div class="loading"><div class="loading-spinner"></div></div>
+                </div>
+            </div>
+
+            <div class="filter-section">
+                <h2 class="filter-title">🌐 Filter by language</h2>
+                <div class="filter-options" id="language-filters">
                     <div class="loading"><div class="loading-spinner"></div></div>
                 </div>
             </div>
@@ -74,10 +90,12 @@
         </main>
     </div>
     
-    <div id="report-modal" class="modal">
+    {# Full-screen backdrop: do not use generic `.modal` (centered transform) on this overlay #}
+    <div id="report-modal" class="report-modal-overlay" role="dialog" aria-modal="true">
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
+                    <button type="button" id="report-modal-back" class="btn btn-secondary report-modal-back" onclick="modalReportNavigateBack()" style="display:none;">← Back</button>
                     <h2 id="report-modal-title">Report</h2>
                     <button type="button" class="close" onclick="closeReportModal()">&times;</button>
                 </div>
@@ -94,6 +112,11 @@
 {% endblock %}
 
 {% block scripts %}
+    {% if dashboard_realtime_enabled %}
+    {% if dashboard_socketio_client_url %}
+    <script src="{{ dashboard_socketio_client_url }}"></script>
+    {% endif %}
+    {% endif %}
     <!-- Include only the main app file - it will load the other modules -->
     <script src="{{ url_for('static', filename='js/dashboard-app.js') }}"></script>
 {% endblock %} 

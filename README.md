@@ -39,11 +39,11 @@
 
 - 🔍 **Multi-Model Analysis**: Leverage multiple Ollama models for comprehensive security scanning
 - 🔄 **Two-Phase Scanning**: Use lightweight models for initial scanning and powerful models for deep analysis
-- 🧠 **Adaptive Analysis**: Smart multi-level scanning that adjusts depth based on risk assessment
+- 🧠 **LangGraph Orchestration**: Single pipeline (discover → scan → expand → deep → verify → report, optional PoC assist) with bounded context-expand retries
 - 🔄 **Interactive Model Selection**: Guided selection of scan and analysis models with parameter-based filtering
 - 💾 **Dual-Layer Caching**: Efficient caching for both embeddings and analysis results to dramatically speed up repeated scans
 - 🔧 **Scan Result Caching**: Store and reuse vulnerability analysis results with model-specific caching
-- 📊 **Rich Reporting**: Detailed reports in multiple formats (Markdown, PDF, HTML)
+- 📊 **Rich Reporting**: Canonical JSON reports plus derived HTML, PDF, and Markdown exports
 - 🔄 **Parallel Processing**: Optimized performance through parallel vulnerability analysis
 - 📝 **Executive Summaries**: Clear overview of all detected vulnerabilities
 - 🎯 **Customizable Scans**: Support for specific vulnerability types and file extensions
@@ -51,6 +51,8 @@
 - 🔄 **Content Chunking**: Intelligent content splitting for better analysis of large files
 - 🤖 **Interactive Model Installation**: Guided installation for required Ollama models
 - 🌐 **Web Interface**: Secure, password-protected web dashboard for exploring reports
+- ⚡ **Incremental Reporting**: Vulnerability reports are published as soon as each vulnerability analysis completes
+- 📈 **Live Scan Progress**: Executive summary is created early and updated progressively during long scans
 
 ## 🚀 Prerequisites
 
@@ -118,7 +120,7 @@ cd oasis
 2. Install with pipx:
 ```bash
 # First time installation
-pipx install --editable .
+pipx install -e .
 ```
 
 ## 🔄 Update
@@ -146,7 +148,7 @@ pipx uninstall oasis
 
 Basic usage:
 ```bash
-oasis --input-path [path_to_analyze]
+oasis --input [path_to_analyze]
 ```
 
 ## 🚀 Quick Test
@@ -159,7 +161,7 @@ cd oasis
 pipx install --editable .
 
 # Run analysis on test files
-oasis --input-path test_files/
+oasis --input test_files/
 ```
 
 This will analyze the provided test files and generate security reports in the parent directory of the folder to analyze, `security_reports`.
@@ -172,10 +174,10 @@ Standard two-phase analysis with separate models:
 oasis -i [path_to_analyze] -sm gemma3:4b -m gemma3:27b
 ```
 
-Adaptive multi-level analysis:
+LangGraph pipeline (default) with optional PoC hints and expand budget:
 ```bash
-# Use adaptive analysis mode with custom threshold
-oasis -i [path_to_analyze] --adaptive -t 0.6 -m llama3
+# Same two-model setup; optional: cap context-expand retries, PoC hint bullets, and/or LLM PoC text
+oasis -i [path_to_analyze] -t 0.6 -m llama3 --langgraph-max-expand 2 --poc-hints
 ```
 
 Targeted vulnerability scan with caching control:
@@ -187,23 +189,29 @@ oasis -i [path_to_analyze] -v sqli,xss --clear-cache-scan -sm gemma3:4b -m gemma
 Full production scan:
 ```bash
 # Comprehensive scan of a large codebase
-oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:lates -t 0.7 --vulns all
+oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.7 --vulns all
 ```
 
 ## 🎮 Command Line Arguments
 
 ### Input/Output Options
 - `--input` `-i`: Path to file, directory, or .txt file containing newline-separated paths to analyze
-- `--output-format` `-of`: Output format [pdf, html, md] (default: all)
+- `--output-format` `-of`: Comma-separated formats or `all` for json, sarif, pdf, html, md (default: all)
 - `--extensions` `-x`: Custom file extensions to analyze (e.g., "py,js,java")
+- `--language` `-l`: Language for reports (default: en)  
+  Supported: 🇬🇧 English (en), 🇫🇷 Français (fr), 🇪🇸 Español (es), 🇩🇪 Deutsch (de), 🇮🇹 Italiano (it), 🇵🇹 Português (pt), 🇷🇺 Русский (ru), 🇨🇳 中文 (zh), 🇯🇵 日本語 (ja)
 
 ### Analysis Configuration
-- `--analyze-type` `-at`: Analyze type [standard, deep] (default: standard)
+
+- **Removed flags:** `--adaptive`/`-ad` and `--analyze-type`/`-at` were dropped in favor of LangGraph-only orchestration; the CLI exits with guidance if they appear—use the options below and `-eat` for embedding segmentation instead.
+
 - `--embeddings-analyze-type` `-eat`: Analyze code by entire file or by individual functions [file, function] (default: file)
     - file: Performs the embedding on the entire file as a single unit, preserving overall context but potentially diluting details.  
     - function (**EXPERIMENTAL**): Splits the file into individual functions for analysis, allowing for more precise detection of issues within specific code blocks but with less contextual linkage across functions.  
 
-- `--adaptive` `-ad`: Use adaptive multi-level analysis that adjusts depth based on risk assessment
+- **`--langgraph-max-expand`** `N`: Maximum **context-expand** retries after verify detects structured-output problems (default: **2**).
+- **`--poc-hints`**: Log optional high-level PoC hint bullets from structured findings only (**no** extra LLM call; **does not** run code).
+- **`--poc-assist`**: Ask the deep model for a standalone executable PoC (script or commands) from findings; **logged only** — OASIS does not run generated code.
 - `--threshold` `-t`: Similarity threshold (default: 0.5)
 - `--vulns` `-v`: Vulnerability types to check (comma-separated or 'all')
 - `--chunk-size` `-ch`: Maximum size of text chunks for embedding (default: auto-detected)
@@ -211,7 +219,9 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:lates -t 0.7
 ### Model Selection
 - `--models` `-m`: Comma-separated list of models to use for deep analysis
 - `--scan-model` `-sm`: Model to use for quick scanning (default: same as main model)
-- `--embed-model` `-em`: Model to use for embeddings (default: nomic-embed-text:latest)
+- `--model-thinking` `-mt`: Enable/disable thinking for deep analysis models [yes,no] (default: no)
+- `--small-model-thinking` `-smt`: Enable/disable thinking for the quick scan model [yes,no] (default: no)
+- `--embed-model` `-em`: Embedding model(s); in audit mode, supports a comma-separated list (example: `-em nomic-embed-text,bge-m3`) (default: nomic-embed-text)
 - `--list-models` `-lm`: List available models and exit
 
 ### Cache Management
@@ -233,6 +243,18 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:lates -t 0.7
 - `--audit` `-a`: Run embedding distribution analysis
 - `--ollama-url` `-ol`: Ollama URL (default: http://localhost:11434)
 - `--version` `-V`: Show OASIS version and exit
+
+### Environment overrides (advanced)
+
+Optional **`OASIS_*`** variables tune timeouts and heuristic budgets without editing code (see `oasis/config.py` for the full list). Examples:
+
+- **`OASIS_CHUNK_ANALYZE_TIMEOUT_SEC`** — server-side deadline for one Ollama generate call (seconds).
+- **`OASIS_CHUNK_DEEP_NUM_PREDICT`** — cap on structured deep output tokens (`num_predict`).
+- **`OASIS_OLLAMA_HTTP_CLIENT_TIMEOUT_SEC`** — HTTP client timeout (must cover one full generate round-trip).
+- **`OASIS_POC_DIGEST_JSON_MAX_CHARS`** / **`OASIS_POC_STAGE_LOG_MAX_CHARS`** — PoC JSON prompt size and INFO log cap for PoC-stage output.
+- **`OASIS_STRUCTURED_DEGENERACY_*`** — thresholds for repetitive structured-output detection.
+
+Higher limits increase worst-case latency and memory use on the Ollama host.
 
 ## 💡 Getting the Most out of OASIS
 
@@ -269,50 +291,22 @@ oasis -i ./webapp -sm gemma3:4b -m codellama:34b -v xss,sqli,csrf
 oasis -i ./backend -sm phi3:mini -m deepseek-r1:32b,qwen2.5-coder:32b -v rce,input,data
 
 # For critical infrastructure security analysis (most thorough)
-oasis -i ./critical-service -sm gemma3:7b -m mixtral:instruct -v all --adaptive -t 0.6
+oasis -i ./critical-service -sm gemma3:7b -m mixtral:instruct -v all -t 0.6 --langgraph-max-expand 3
 ```
 
-### Scanning Workflows: Standard vs Adaptive
+### Scanning workflow (LangGraph)
 
-OASIS offers two different analysis approaches, each with distinct advantages:
+Analysis is orchestrated by a single **LangGraph** pipeline:
 
-#### Standard Two-Phase Workflow
+1. **Discover** — embedding-based candidate files per vulnerability type  
+2. **Scan** — structured chunk verdicts (`ScanVerdict`)  
+3. **Expand** — widen suspicious chunk context within budget (retries capped by **`--langgraph-max-expand`**)  
+4. **Deep** — `ChunkDeepAnalysis` for flagged chunks  
+5. **Verify** — schema consistency; may loop back to **Expand** when retries remain  
+6. **Report** — vulnerability reports + executive summary  
+7. **PoC stage (optional)** — **`--poc-hints`** (hint bullets from findings) and/or **`--poc-assist`** (LLM-produced executable PoC text, not run by OASIS)
 
-This workflow uses a sequential approach with two distinct phases:
-
-1. **Initial Scanning Phase**:
-   - Uses a lightweight model specified by `-sm`
-   - Scans entire codebase to identify potentially suspicious chunks
-   - Creates a map of suspicious sections for deep analysis
-
-2. **Deep Analysis Phase**:
-   - Uses more powerful model(s) specified by `-m`
-   - Analyzes only chunks flagged as suspicious in phase 1
-   - Generates comprehensive analysis reports
-
-**Best for**: Large codebases with uniform risk profiles, predictable resource planning
-
-#### Adaptive Multi-Level Workflow
-
-The adaptive workflow employs a dynamic approach that adjusts analysis depth based on risk assessment:
-
-1. **Level 1**: Static pattern-based analysis (fastest)
-2. **Level 2**: Lightweight model scan for initial screening
-3. **Level 3**: Medium-depth context analysis with risk scoring
-4. **Level 4**: Deep analysis only for high-risk chunks
-
-**Best for**: Critical systems with varied risk profiles, complex codebases requiring nuanced analysis
-
-#### Comparison Table
-
-| Aspect | Standard Two-Phase | Adaptive Multi-Level |
-|--------|-------------------|----------------------|
-| **Speed** | Faster for average cases | Faster for low-risk code, slower overall |
-| **Resource Usage** | Predictable, efficient | Variable, optimized for risk |
-| **Detection Accuracy** | Good for obvious vulnerabilities | Better for subtle, context-dependent issues |
-| **False Positives** | More common | Reduced through context analysis |
-| **Resource Allocation** | Fixed per phase | Dynamically adjusted by risk |
-| **Command Flag** | Default | Use `--adaptive` `-ad` |
+Within each run you still choose a **scan model** (`-sm`) and **deep model(s)** (`-m`) as before.
 
 ### Optimization Tips
 
@@ -353,25 +347,41 @@ For the best results with OASIS:
 | `rce` | Remote Code Execution |
 | `ssrf` | Server-Side Request Forgery |
 | `xxe` | XML External Entity |
-| `path` | Path Traversal |
+| `pathtra` | Path Traversal |
 | `idor` | Insecure Direct Object Reference |
 | `auth` | Authentication Issues |
 | `csrf` | Cross-Site Request Forgery |
+| `cmdi` | Command Injection |
+| `cors` | CORS Misconfiguration |
+| `debug` | Debug Information Exposure |
+| `deser` | Insecure Deserialization |
+| `jwt` | JWT Implementation Flaws |
+| `lfi` | Local File Inclusion |
+| `redirect` | Open Redirect |
+| `rfi` | Remote File Inclusion |
+| `secrets` | Hardcoded Secrets |
+| `upload` | File Upload Vulnerabilities |
 
 ## 📁 Output Structure
 
+Vulnerability runs are stored under a timestamped directory. For each model, per-format folders include a **canonical JSON** report (`json/*.json`) used by the web dashboard for statistics and previews. Chunk objects may include **`start_line` / `end_line`** (1-based inclusive bounds for the analyzed source segment, computed at split time, not inferred by the model). Each finding may include **`snippet_start_line` / `snippet_end_line`** when the tool can match `vulnerable_code` inside that chunk (otherwise SARIF falls back to the chunk span). **SARIF 2.1.0** (`sarif/*.sarif`) is generated from the same document for toolchains (DefectDojo, SonarQube, IDE SARIF viewers) and maps those spans to `region.startLine` / `region.endLine` when available. HTML and PDF are rendered from that JSON via Jinja2; Markdown is an additional human-readable export.
+
 ```
 security_reports/
-├── [model_name]/
-│   ├── markdown/
-│   │   ├── vulnerability_type.md
-│   │   └── executive_summary.md
-│   ├── pdf/
-│   │   ├── vulnerability_type.pdf
-│   │   └── executive_summary.pdf
-│   └── html/
-│       ├── vulnerability_type.html
-│       └── executive_summary.html
+└── [input_basename]_YYYYMMDD_HHMMSS/
+    ├── logs/
+    │   └── oasis_errors_[run_id].log
+    └── [sanitized_model_name]/
+        ├── json/
+        │   └── vulnerability_type.json
+        ├── sarif/
+        │   └── vulnerability_type.sarif
+        ├── md/
+        │   └── vulnerability_type.md
+        ├── html/
+        │   └── vulnerability_type.html
+        └── pdf/
+            └── vulnerability_type.pdf
 ```
 
 ## 🐋 Run with Docker
@@ -383,6 +393,52 @@ docker build --build-arg GIT_REPO=<repository_url> --build-arg MODEL_NB=<model_n
 ```sh
 docker run --rm -it -v $(pwd)/reports:/app/reports oasis-scanner
 ```
+
+### Ollama structured outputs
+
+Deep and scan analysis calls use Ollama **structured outputs** (`format` with a JSON schema). Use a recent Ollama server; model quality still varies by GGUF. If structured validation fails, the analyzer falls back to safe defaults or regex (function extraction only).
+
+### Structured output hardening
+
+Use this priority order to reduce invalid JSON responses (`Field required`, `json_invalid`, `EOF while parsing a string`):
+
+1. **Model selection first**
+   - Choose a scan model that is stable with strict JSON outputs.
+   - Keep a deep model only if it stays stable across repeated runs on the same corpus.
+   - Compare candidates with the same target files and track invalid JSON rate + average chunk latency.
+2. **Ollama generation settings**
+   - Keep conservative generation settings for structured scan/deep calls.
+   - Keep thinking disabled for strict JSON runs unless a model explicitly requires it.
+   - Ensure chunk size and model context window are compatible to avoid truncated outputs.
+3. **Targeted retry policy**
+   - Retry only known structured failures: missing required `verdict` (scan) and invalid/truncated JSON (`json_invalid`, `EOF while parsing`) for deep responses.
+   - Keep retries bounded (scan: up to 2 retries, deep: up to 1 retry) and append a strict JSON correction reminder on retries.
+   - Keep final fallback behavior deterministic when retries fail.
+4. **Operational safeguards**
+   - Track invalid JSON ratio per run and alert when it exceeds your acceptance threshold.
+   - Review `security_reports/<run_id>/logs/oasis_errors_<run_id>.log` after each scan to identify the failing model/phase/chunk quickly.
+
+Each structured-output error log line includes context fields such as run identifier, model, phase, vulnerability (if available), file path, chunk index, exception type, and a truncated raw preview.
+Retry-aware logs also include `retry_attempt` and `retry_max` so you can distinguish first failure from final fallback.
+
+Example hardened command:
+
+```bash
+oasis -i ./critical-service -sm qwen2.5-coder:7b -m bugtraceai-apex-q4 -t 0.6 -smt no -mt no --langgraph-max-expand 3
+```
+
+### Web dashboard and Reload
+
+- Statistics and risk summaries are read from **`json/*.json`**.
+- **Reload** refreshes both `/api/stats?force=1` and `/api/reports?force=1` so listings stay in sync with the filesystem.
+- Canonical JSON reports are previewed in the Web UI by rendering HTML from the JSON via the Jinja template, so the modal matches the HTML/PDF structure as closely as possible.
+- Markdown preview (`/api/report-content/...`) remains the fallback for legacy reports that do not have a sibling `json/<same-stem>.json`, or when canonical JSON HTML preview cannot be generated.
+- Executive summary stays visible even when vulnerability filters are active, so scan-wide context is always available.
+- Language filtering is available in the dashboard (`🌐 Filter by language`) and uses the same emoji-flag format as report language badges.
+- Scan progress can be queried via `/api/progress` to retrieve the latest executive summary progress metadata (`completed_vulnerabilities`, `total_vulnerabilities`, `is_partial`).
+- Executive summary now records all model roles used for the run: **Deep model**, **Small model** (Scan model), and **Embedding model**. These fields are rendered in markdown and therefore propagated to HTML/PDF outputs, and also included in the executive-summary progress sidecar JSON. For backward compatibility, sidecar `model` remains the legacy primary deep-model field.
+- Audit cards include an embedding-model comparison table based on parsed audit markdown metrics; selecting model tags can filter both date chips and comparison rows (multi-select supported).
+- Date-based filtering supports multiple `model` query params (`/api/dates?model=...&model=...&vulnerability=...`) and falls back to API fetch if local in-memory report data is stale.
 
 ## 💾 Cache Management
 
@@ -398,7 +454,7 @@ OASIS implements a sophisticated dual-layer caching system to optimize performan
 - Stores the results of LLM-based vulnerability scanning for each model and analysis mode
 - Separate caches for scan (lightweight) and deep analysis results
 - Model-specific caching ensures results are tied to the specific model used
-- Analysis type-aware (standard vs. adaptive)
+- Analysis mode-aware (scan vs deep artifacts; LangGraph orchestration uses graph-aligned cache layout where applicable)
 - Use `--clear-cache-scan` (`-ccs`) to force fresh vulnerability scanning
 
 This dual-layer approach dramatically improves performance:
@@ -422,16 +478,21 @@ OASIS offers a specialized Audit Mode that performs an embedding distribution an
 
 ```bash
 # Run OASIS in audit mode
-oasis --input-path [path_to_analyze] --audit
+oasis --input [path_to_analyze] --audit
+
+# Compare multiple embedding models in one audit run
+oasis --input [path_to_analyze] --audit -em qwen3-embedding:4b,bge-m3
 ```
 
 ### What Audit Mode Does
 
 - **Embedding Analysis**: Generates embeddings for your entire codebase and all vulnerability types
+- **Chunk-size strategy (auto mode)**: When `--chunk-size` is not set, audit mode auto-detects chunk size once from the first embedding model and reuses it across all audit embedding models for consistent run semantics
 - **Similarity Distribution**: Calculates similarity scores between your code and various vulnerability patterns
 - **Threshold Analysis**: Shows the distribution of similarity scores across different thresholds
 - **Statistical Overview**: Provides mean, median, and max similarity scores for each vulnerability type
 - **Top Matches**: Identifies the files or functions with the highest similarity to each vulnerability type
+- **Audit Metrics Summary**: Exports a stable `Metric | Value` markdown table (`Count`, `Average`, `Median`, `Max`, `Min`, high/medium/low tiers) that the dashboard parses for model-to-model comparisons
 
 ### Benefits of Audit Mode
 
@@ -465,13 +526,13 @@ OASIS includes a web interface to view and explore security reports:
 
 ```bash
 # Start the web interface with default settings (localhost:5000)
-oasis --input-path [path_to_analyze] --web
+oasis --input [path_to_analyze] --web
 
 # Start with custom port and expose to all network interfaces
-oasis --input-path [path_to_analyze] --web --web-port 8080 --web-expose all
+oasis --input [path_to_analyze] --web --web-port 8080 --web-expose all
 
 # Start with a specific password
-oasis --input-path [path_to_analyze] --web --web-password mysecretpassword
+oasis --input [path_to_analyze] --web --web-password mysecretpassword
 ```
 
 ### Security Features

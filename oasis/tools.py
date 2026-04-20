@@ -1,9 +1,11 @@
+import contextlib
 from datetime import datetime
 import logging
 from pathlib import Path
 import re
+import sys
 import numpy as np
-from typing import List, Dict
+from typing import Dict, List, Optional, Tuple
 from weasyprint.logger import LOGGER as weasyprint_logger
 
 # Import configuration
@@ -42,11 +44,15 @@ class EmojiFormatter(logging.Formatter):
         return any(start <= code <= end for start, end in emoji_ranges)  
 
     def determine_icon(self, record) -> str:  
-        # Early returns for non-string messages or messages with emoji prefixes
-        if not isinstance(record.msg, str) or self.has_emoji_prefix(record.msg.strip()):  
+        # Use merged message (args applied) so %-style logging works with console output.
+        try:
+            text = record.getMessage()
+        except Exception:
+            text = str(record.msg)
+        if not isinstance(text, str) or self.has_emoji_prefix(text.strip()):
             return ''
-            
-        msg_lower = record.msg.lower()
+
+        msg_lower = text.lower()
         
         # Level-based icons
         if record.levelno == logging.DEBUG:
@@ -71,7 +77,7 @@ class EmojiFormatter(logging.Formatter):
                 'START_WORDS': '🚀 ',
                 'FINISH_WORDS': '🏁 ',
                 'STOPPED_WORDS': '🛑 ',
-                'DELETE_WORDS': '🗑️ ',
+                'DELETE_WORDS': '🗑️  ',
                 'SUCCESS_WORDS': '✅ ',
                 'GENERATION_WORDS': '⚙️  ',
                 'REPORT_WORDS': '📄 ',
@@ -93,16 +99,18 @@ class EmojiFormatter(logging.Formatter):
         # Default: no icon
         return ''
 
-    def format(self, record):  
-        if hasattr(record, 'emoji') and not record.emoji:  
-            return record.msg  
-        if not hasattr(record, 'formatted_message'):  
-            icon = self.determine_icon(record)  
-            if record.msg.startswith('\n'):  
-                record.formatted_message = record.msg.replace('\n', f'\n{icon}', 1)  
-            else:  
-                record.formatted_message = f"{icon}{record.msg}"  
-        return record.formatted_message
+    def format(self, record):
+        if hasattr(record, "emoji") and not record.emoji:
+            return super().format(record)
+        base = super().format(record)
+        if icon := self.determine_icon(record):
+            return (
+                base.replace("\n", f"\n{icon}", 1)
+                if base.startswith("\n")
+                else f"{icon}{base}"
+            )
+        else:
+            return base
 
 def setup_logging(debug=False, silent=False, error_log_file=None):
     """
@@ -116,27 +124,40 @@ def setup_logging(debug=False, silent=False, error_log_file=None):
     # Set root logger level
     root_logger = logging.getLogger()
 
-    # Avoid adding duplicate handlers if they already exist.
-    if root_logger.handlers:
-        return
-
     if debug:
         root_logger.setLevel(logging.DEBUG)
     else:
         root_logger.setLevel(logging.INFO)
 
     # Configure handlers based on silent mode
-    if not silent:
+    has_console_handler = any(
+        isinstance(handler, logging.StreamHandler)
+        and getattr(handler, "stream", None) is sys.stderr
+        for handler in logger.handlers
+    )
+    if not silent and not has_console_handler:
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(EmojiFormatter())
         logger.addHandler(console_handler)
 
-    # Add file handler for errors in silent mode
-    if silent and error_log_file:
-        file_handler = logging.FileHandler(error_log_file)
+    # Replace existing error file handler when a new path is provided.
+    existing_error_file_handlers = [
+        handler
+        for handler in logger.handlers
+        if getattr(handler, "_oasis_handler_name", "") == "error_file"
+    ]
+    for handler in existing_error_file_handlers:
+        logger.removeHandler(handler)
+        with contextlib.suppress(Exception):
+            handler.close()
+    if error_log_file:
+        error_log_file = Path(error_log_file)
+        error_log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(error_log_file, encoding="utf-8")
         file_handler.setLevel(logging.ERROR)  # Only log errors and above
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
         file_handler.setFormatter(formatter)
+        file_handler._oasis_handler_name = "error_file"
         logger.addHandler(file_handler)
 
     logger.propagate = False  # Prevent duplicate logging
@@ -161,6 +182,72 @@ def setup_logging(debug=False, silent=False, error_log_file=None):
     logging.getLogger('PIL').setLevel(logging.WARNING)
     logging.getLogger('markdown').setLevel(logging.WARNING)
 
+def chunk_content_with_spans(content: str, max_length: int = 2048) -> List[Tuple[str, int, int]]:
+    """
+    Split content into chunks with 1-based inclusive (start_line, end_line) per chunk.
+
+    Line boundaries follow ``str.splitlines()`` (same as ``chunk_content``). Empty
+    content yields no chunks (empty list).
+
+    When a logical line cannot fit under the internal budget ``len(line) + 1`` (the
+    ``+1`` stands for a newline when joining lines), that line is split into
+    consecutive substrings of at most ``max_length`` characters each; every such
+    piece keeps the same ``(start_line, end_line)`` as the source line.
+    """
+    if max_length < 1:
+        max_length = 1
+
+    if not content:
+        return []
+
+    lines = content.splitlines()
+
+    def line_exceeds_join_budget(line: str) -> bool:
+        return len(line) + 1 > max_length
+
+    def append_split_line(line: str, line_no: int) -> None:
+        for i in range(0, len(line), max_length):
+            out.append((line[i : i + max_length], line_no, line_no))
+
+    out: List[Tuple[str, int, int]] = []
+    current_chunk: List[str] = []
+    current_length = 0
+    chunk_start_line: Optional[int] = None
+
+    for line_no, line in enumerate(lines, start=1):
+        line_length = len(line) + 1  # +1 for newline
+        if current_length + line_length > max_length:
+            if current_chunk:
+                assert chunk_start_line is not None
+                text = "\n".join(current_chunk)
+                end_ln = chunk_start_line + len(current_chunk) - 1
+                out.append((text, chunk_start_line, end_ln))
+                current_chunk = []
+                current_length = 0
+                chunk_start_line = None
+            if line_exceeds_join_budget(line):
+                append_split_line(line, line_no)
+            else:
+                chunk_start_line = line_no
+                current_chunk = [line]
+                current_length = line_length
+        else:
+            if not current_chunk:
+                chunk_start_line = line_no
+            current_chunk.append(line)
+            current_length += line_length
+
+    if current_chunk:
+        assert chunk_start_line is not None
+        text = "\n".join(current_chunk)
+        end_ln = chunk_start_line + len(current_chunk) - 1
+        out.append((text, chunk_start_line, end_ln))
+
+    logger.debug(f"Split content of {len(content)} chars into {len(out)} chunks (with line spans)")
+
+    return out
+
+
 def chunk_content(content: str, max_length: int = 2048) -> List[str]:
     """
     Split content into chunks of maximum length while preserving line integrity
@@ -171,31 +258,7 @@ def chunk_content(content: str, max_length: int = 2048) -> List[str]:
     Returns:
         List of content chunks
     """
-    if len(content) <= max_length:
-        return [content]
-
-    chunks = []
-    lines = content.splitlines()
-    current_chunk = []
-    current_length = 0
-
-    for line in lines:
-        line_length = len(line) + 1  # +1 for newline
-        if current_length + line_length > max_length:
-            if current_chunk:
-                chunks.append('\n'.join(current_chunk))
-            current_chunk = [line]
-            current_length = line_length
-        else:
-            current_chunk.append(line)
-            current_length += line_length
-
-    if current_chunk:
-        chunks.append('\n'.join(current_chunk))
-
-    logger.debug(f"Split content of {len(content)} chars into {len(chunks)} chunks")
-
-    return chunks
+    return [t[0] for t in chunk_content_with_spans(content, max_length)]
 
 def extract_clean_path(input_path: str | Path) -> Path:
     """
@@ -423,3 +486,17 @@ def parse_report_date(date_string):
         print(f"Error parsing report date '{date_string}': {e}")
         return None
 
+def create_cache_dir(input_path: str | Path) -> Path:
+    """
+    Create a cache directory for the input path
+    """
+    # Create base cache directory
+    input_path = Path(input_path).resolve()  # Get absolute path
+    base_cache_dir = input_path.parent / '.oasis_cache'
+    base_cache_dir.mkdir(exist_ok=True)
+    
+    # Create project-specific cache directory using the final folder name
+    project_name = sanitize_name(input_path.name)
+    cache_dir = base_cache_dir / project_name
+    cache_dir.mkdir(exist_ok=True)
+    return cache_dir

@@ -1,20 +1,65 @@
 from pathlib import Path
-from typing import Union, Dict
+from typing import Dict, Optional, Set, Union
 from datetime import datetime
 import hashlib
 import pickle
+import tempfile
 
-from .enums import AnalysisMode, AnalysisType
-from .tools import sanitize_name, logger
+from .enums import AnalysisMode
+from .schemas.analysis import ANALYSIS_SCHEMA_VERSION
+from .tools import create_cache_dir, sanitize_name, logger
+
+# In-memory stores: source file path -> stable chunk cache key -> cached analysis text.
+ChunkCacheEntries = Dict[str, str]
+ChunkCacheTable = Dict[str, ChunkCacheEntries]
+
+_legacy_adaptive_graph_dirs_warned: Set[Path] = set()
+
+
+def _maybe_warn_legacy_adaptive_graph_cache(model_cache_dir: Path, scan_model_cache_dir: Path) -> None:
+    """Log once per distinct path when an old ``graph/adaptive`` directory is still on disk."""
+    candidates = (
+        model_cache_dir / "graph" / "adaptive",
+        scan_model_cache_dir / "graph" / "adaptive",
+    )
+    for path in candidates:
+        if path in _legacy_adaptive_graph_dirs_warned:
+            continue
+        try:
+            if not path.is_dir():
+                continue
+        except OSError:
+            continue
+        _legacy_adaptive_graph_dirs_warned.add(path)
+        logger.info(
+            "Legacy adaptive-analysis cache directory is present and unused by the current LangGraph layout: %s. "
+            "Chunk caches are only read from graph/deep and graph/scan; remove this folder manually if you need disk space.",
+            path,
+        )
+
 
 class CacheManager:
-    """
-    Manages caching operations for security analysis results
-    """
+    """Pickle-backed chunk caches for LangGraph analysis (scan + deep lanes per model)."""
+
+    @staticmethod
+    def _atomic_pickle_write(target_path: Path, payload) -> None:
+        """Write pickle payload atomically to avoid partial file corruption."""
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target_path.parent,
+            delete=False,
+            prefix=f".{target_path.name}.",
+            suffix=".tmp",
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            pickle.dump(payload, tmp_file)
+        tmp_path.replace(target_path)
+
     def __init__(self, input_path: Union[str, Path], llm_model: str, scan_model: str, cache_days: int):
         """
-        Initialize the cache manager
-        
+        Initialize the cache manager.
+
         Args:
             input_path: Path to the input being analyzed
             llm_model: Main model name
@@ -22,301 +67,205 @@ class CacheManager:
             cache_days: Number of days to keep cache files
         """
         self.cache_days = cache_days
-        
-        # Create base cache directory
-        input_path = Path(input_path)
-        if input_path.is_dir():
-            self.cache_dir = input_path.parent / '.oasis_cache'
-        else:
-            self.cache_dir = input_path.parent / '.oasis_cache'
-            
-        self.cache_dir.mkdir(exist_ok=True)
-        
-        # Create model-specific cache directories
+
+        self.cache_dir = create_cache_dir(input_path)
+
         self.model_cache_dir = self.cache_dir / sanitize_name(llm_model)
         self.model_cache_dir.mkdir(exist_ok=True)
-        
-        # Create scan model cache directory if different from main model
+
         if scan_model != llm_model:
             self.scan_model_cache_dir = self.cache_dir / sanitize_name(scan_model)
             self.scan_model_cache_dir.mkdir(exist_ok=True)
         else:
             self.scan_model_cache_dir = self.model_cache_dir
-        
-        # Create analysis type subdirectories for both models
-        self.standard_cache_dir = {
-            AnalysisMode.DEEP: self.model_cache_dir / AnalysisType.STANDARD.value,
-            AnalysisMode.SCAN: self.scan_model_cache_dir / AnalysisType.STANDARD.value
-        }
-        
-        self.adaptive_cache_dir = {
-            AnalysisMode.DEEP: self.model_cache_dir / AnalysisType.ADAPTIVE.value,
-            AnalysisMode.SCAN: self.scan_model_cache_dir / AnalysisType.ADAPTIVE.value
-        }
-        
-        # Create all required directories
-        for directory in list(self.standard_cache_dir.values()) + list(self.adaptive_cache_dir.values()):
-            directory.mkdir(exist_ok=True)
-        
-        # Initialize cache dictionaries for current session
-        self.chunk_cache = {
-            AnalysisType.STANDARD: {},
-            AnalysisType.ADAPTIVE: {}
-        }
-        self.scan_chunk_cache = {
-            AnalysisType.STANDARD: {},
-            AnalysisType.ADAPTIVE: {}
-        }
-        
-        # Initialize adaptive cache for storing intermediate results
-        self.adaptive_analysis_cache = {}
-        
-        # Validate cache files and clean expired ones
-        self.validate_cache_expiration()
-    
-    def get_cache_path(self, file_path: str, mode: AnalysisMode, 
-                     analysis_type: AnalysisType) -> Path:
-        """
-        Get the path to the cache file for a specific analyzed file
-        
-        Args:
-            file_path: Path to the analyzed file
-            mode: Analysis mode (scan or deep)
-            analysis_type: Analysis type (standard or adaptive)
-            
-        Returns:
-            Path object to the cache file
-        """
-        sanitized_file_name = sanitize_name(file_path)
 
-        if analysis_type == AnalysisType.STANDARD:
-            return self.standard_cache_dir[mode] / f"{sanitized_file_name}.cache"
-        else:
-            return self.adaptive_cache_dir[mode] / f"{sanitized_file_name}.cache"
-    
-    def get_cache_dict(self, mode: AnalysisMode, analysis_type: AnalysisType) -> Dict:
-        """
-        Get the appropriate cache dictionary based on mode and type
-        
-        Args:
-            mode: Analysis mode (scan or deep)
-            analysis_type: Analysis type (standard or adaptive)
-            
-        Returns:
-            Cache dictionary
-        """
-        if analysis_type == AnalysisType.ADAPTIVE:
-            return self.adaptive_analysis_cache
-            
-        # Standard analysis cache selection
-        if mode == AnalysisMode.SCAN:
-            return self.scan_chunk_cache[analysis_type]
-        return self.chunk_cache[analysis_type]
-    
-    def process_cache(self, action: str, file_path: str, mode: AnalysisMode, 
-                     analysis_type: AnalysisType = AnalysisType.STANDARD):
-        """
-        Process cache operations (load or save)
-        
-        Args:
-            action: Action to perform ('load' or 'save')
-            file_path: Path to the file
-            mode: Analysis mode (scan or deep)
-            analysis_type: Analysis type (standard or adaptive)
-            
-        Returns:
-            For 'load' action, returns the loaded cache
-            For 'save' action, returns None
-        """
-        cache_path = self.get_cache_path(file_path, mode, analysis_type)
-        cache_dict = self.get_cache_dict(mode, analysis_type)
-        
-        if action == 'load':
+        # LangGraph-only layout: ``.../<model>/graph/deep`` and ``.../<scan_model>/graph/scan``
+        self.graph_cache_dir = {
+            AnalysisMode.DEEP: self.model_cache_dir / "graph" / "deep",
+            AnalysisMode.SCAN: self.scan_model_cache_dir / "graph" / "scan",
+        }
+
+        for directory in self.graph_cache_dir.values():
+            directory.mkdir(parents=True, exist_ok=True)
+
+        _maybe_warn_legacy_adaptive_graph_cache(self.model_cache_dir, self.scan_model_cache_dir)
+
+        self.chunk_cache: ChunkCacheTable = {}
+        self.scan_chunk_cache: ChunkCacheTable = {}
+
+        self._cleanup_marker_file = self.cache_dir / f".schema_cleanup_v{ANALYSIS_SCHEMA_VERSION}.done"
+        self._run_schema_cleanup_once()
+        self.validate_cache_expiration()
+
+    def _run_schema_cleanup_once(self) -> None:
+        """Run schema cleanup once per cache directory/version."""
+        if self._cleanup_marker_file.exists():
+            return
+        self.cleanup_stale_schema_entries()
+        try:
+            self._cleanup_marker_file.write_text(datetime.now().isoformat(), encoding="utf-8")
+        except OSError as exc:
+            logger.warning(f"Unable to persist schema cleanup marker {self._cleanup_marker_file}: {exc}")
+
+    def cleanup_stale_schema_entries(self) -> None:
+        """Remove stale schema-versioned keys from OASIS cache payloads only."""
+        version_prefix = f"v{ANALYSIS_SCHEMA_VERSION}_"
+        try:
+            removed_keys = 0
+            for cache_dir in self.graph_cache_dir.values():
+                if not cache_dir.exists():
+                    continue
+                for cache_file in cache_dir.glob("*.cache"):
+                    try:
+                        if (datetime.now().timestamp() - cache_file.stat().st_mtime) < 5:
+                            continue
+                    except OSError:
+                        continue
+                    try:
+                        with open(cache_file, "rb") as cache_handle:
+                            payload = pickle.load(cache_handle)
+                    except Exception:
+                        continue
+
+                    if not isinstance(payload, dict):
+                        continue
+
+                    stale_keys = [
+                        key
+                        for key in payload
+                        if isinstance(key, str) and key.startswith("v") and not key.startswith(version_prefix)
+                    ]
+                    if not stale_keys:
+                        continue
+
+                    for stale_key in stale_keys:
+                        payload.pop(stale_key, None)
+                    removed_keys += len(stale_keys)
+
+                    try:
+                        if payload:
+                            self._atomic_pickle_write(cache_file, payload)
+                        else:
+                            cache_file.unlink()
+                    except OSError as exc:
+                        logger.warning(f"Failed to update stale cache entry {cache_file}: {exc}")
+            if removed_keys:
+                logger.info(f"Removed {removed_keys} stale cache keys from previous schema versions")
+        except Exception as exc:
+            logger.warning(f"Error during stale cache cleanup: {exc}")
+
+    def get_cache_path(self, file_path: str, mode: AnalysisMode) -> Path:
+        """Path to the on-disk cache file for ``file_path`` and ``mode``."""
+        sanitized_file_name = sanitize_name(file_path)
+        return self.graph_cache_dir[mode] / f"{sanitized_file_name}.cache"
+
+    def get_cache_dict(self, mode: AnalysisMode) -> ChunkCacheTable:
+        """In-memory dict for the given mode (scan vs deep)."""
+        return self.scan_chunk_cache if mode == AnalysisMode.SCAN else self.chunk_cache
+
+    def process_cache(self, action: str, file_path: str, mode: AnalysisMode):
+        """Load or save the pickle cache for ``file_path``."""
+        cache_path = self.get_cache_path(file_path, mode)
+        cache_dict = self.get_cache_dict(mode)
+
+        if action == "load":
             if file_path in cache_dict:
                 return cache_dict[file_path]
-            
+
             if not cache_path.exists():
                 cache_dict[file_path] = {}
                 return {}
-            
+
             try:
-                with open(cache_path, 'rb') as f:
+                with open(cache_path, "rb") as f:
                     cache_dict[file_path] = pickle.load(f)
-                    logger.debug(f"Loaded {mode.value} {analysis_type.value} chunk cache for {file_path}: {len(cache_dict[file_path])} entries")
+                    logger.debug(
+                        "Loaded %s chunk cache for %s: %s entries",
+                        mode.value,
+                        file_path,
+                        len(cache_dict[file_path]),
+                    )
                     return cache_dict[file_path]
             except Exception as e:
-                logger.exception(f"Error loading {mode.value} {analysis_type.value} chunk cache: {str(e)}")
+                logger.exception("Error loading %s chunk cache: %s", mode.value, str(e))
                 cache_dict[file_path] = {}
                 return {}
-        
-        elif action == 'save':
+
+        elif action == "save":
             if file_path not in cache_dict:
                 return
-            
+
             try:
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(cache_path, 'wb') as f:
-                    pickle.dump(cache_dict[file_path], f)
-                    logger.debug(f"Saved {mode.value} {analysis_type.value} chunk cache for {file_path}: {len(cache_dict[file_path])} entries")
+                self._atomic_pickle_write(cache_path, cache_dict[file_path])
+                logger.debug(
+                    "Saved %s chunk cache for %s: %s entries",
+                    mode.value,
+                    file_path,
+                    len(cache_dict[file_path]),
+                )
             except Exception as e:
-                logger.exception(f"Error saving {mode.value} {analysis_type.value} chunk cache: {str(e)}")
-    
-    def load_chunk_cache(self, file_path: str, mode: AnalysisMode = AnalysisMode.DEEP,
-                       analysis_type: AnalysisType = AnalysisType.STANDARD) -> Dict:
-        """
-        Load appropriate chunk cache for a specific file based on mode and analysis type
-        
-        Args:
-            file_path: Path to the file
-            mode: Analysis mode (scan or deep)
-            analysis_type: Analysis type (standard or adaptive)
-            
-        Returns:
-            Dictionary with cached analysis results
-        """
-        return self.process_cache('load', file_path, mode, analysis_type)
-            
-    def save_chunk_cache(self, file_path: str, mode: AnalysisMode = AnalysisMode.DEEP,
-                       analysis_type: AnalysisType = AnalysisType.STANDARD):
-        """
-        Save appropriate chunk cache for a specific file based on mode and analysis type
-        
-        Args:
-            file_path: Path to the file
-            mode: Analysis mode (scan or deep)
-            analysis_type: Analysis type (standard or adaptive)
-        """
-        self.process_cache('save', file_path, mode, analysis_type)
-    
-    def has_caching_info(self, file_path: str, chunk: str, vuln_name: str, analysis_type: AnalysisType = AnalysisType.STANDARD) -> bool:
-        """
-        Check if we have enough info to cache this analysis
-        
-        Args:
-            file_path: Path to the file
-            chunk: Code chunk content
-            vuln_name: Vulnerability name
-            analysis_type: Type of analysis (standard or adaptive)
-            
-        Returns:
-            True if we have enough info to cache
-        """
-        # For adaptive analysis, we only need file_path and vuln_name
-        if analysis_type == AnalysisType.ADAPTIVE:
-            return bool(file_path and vuln_name)
-            
-        # For standard analysis, we need all three
+                logger.exception("Error saving %s chunk cache: %s", mode.value, str(e))
+
+    def load_chunk_cache(self, file_path: str, mode: AnalysisMode = AnalysisMode.DEEP) -> ChunkCacheEntries:
+        """Load chunk cache for a file."""
+        return self.process_cache("load", file_path, mode)
+
+    def save_chunk_cache(self, file_path: str, mode: AnalysisMode = AnalysisMode.DEEP):
+        """Persist chunk cache for a file."""
+        self.process_cache("save", file_path, mode)
+
+    def has_caching_info(self, file_path: str, chunk: str, vuln_name: str) -> bool:
+        """Whether we have enough inputs to key a cache entry."""
         return bool(file_path and chunk and vuln_name)
-    
-    def get_cached_analysis(self, file_path: str, chunk: str, vuln_name: str, prompt: str, 
-                          mode: AnalysisMode = AnalysisMode.DEEP,
-                          analysis_type: AnalysisType = AnalysisType.STANDARD) -> str:
-        """
-        Check if analysis for a chunk is already cached
-        
-        Args:
-            file_path: Path to the file
-            chunk: Code chunk content
-            vuln_name: Vulnerability name (for better organization)
-            prompt: Complete analysis prompt (to detect changes in prompt structure)
-            mode: Analysis mode (scan or deep)
-            analysis_type: Analysis type (standard or adaptive)
-            
-        Returns:
-            Cached analysis result or None if not found
-        """
-        # Load cache for this file if not already loaded
-        cache_dict = self.get_cache_dict(mode, analysis_type)
+
+    def get_cached_analysis(
+        self,
+        file_path: str,
+        chunk: str,
+        vuln_name: str,
+        prompt: str,
+        mode: AnalysisMode = AnalysisMode.DEEP,
+    ) -> Optional[str]:
+        """Return cached analysis string or None."""
+        cache_dict = self.get_cache_dict(mode)
         if file_path not in cache_dict:
-            self.load_chunk_cache(file_path, mode, analysis_type)
-        
-        chunk_key = self.generate_cache_key(chunk, prompt, vuln_name, file_path)
-        
-        # Check if analysis exists in cache
+            self.load_chunk_cache(file_path, mode)
+
+        chunk_key = self.generate_cache_key(chunk, prompt, vuln_name)
         return cache_dict[file_path].get(chunk_key)
-    
-    def store_analysis(self, file_path: str, chunk: str, vuln_name: str, prompt: str, result: str,
-                     mode: AnalysisMode, analysis_type: AnalysisType):
-        """
-        Store analysis result in cache
-        
-        Args:
-            file_path: Path to the file
-            chunk: Code chunk content
-            vuln_name: Vulnerability name
-            prompt: Analysis prompt
-            result: Analysis result
-            mode: Analysis mode
-            analysis_type: Analysis type
-        """
-        if not self.has_caching_info(file_path, chunk, vuln_name, analysis_type):
+
+    def store_analysis(
+        self,
+        file_path: str,
+        chunk: str,
+        vuln_name: str,
+        prompt: str,
+        result: str,
+        mode: AnalysisMode,
+    ):
+        """Store analysis result and flush to disk."""
+        if not self.has_caching_info(file_path, chunk, vuln_name):
             return
-            
-        cache_dict = self.get_cache_dict(mode, analysis_type)
+
+        cache_dict = self.get_cache_dict(mode)
         if file_path not in cache_dict:
             cache_dict[file_path] = {}
 
-        chunk_key = self.generate_cache_key(chunk, prompt, vuln_name, file_path)
+        chunk_key = self.generate_cache_key(chunk, prompt, vuln_name)
         cache_dict[file_path][chunk_key] = result
 
-        # Save cache after each analysis to allow resuming at any point
-        self.save_chunk_cache(file_path, mode, analysis_type)
-    
-    def generate_cache_key(self, chunk: str, prompt: str, vuln_name: str, file_path: str = None) -> str:
-        """
-        Generate a cache key for a chunk
-        
-        Args:
-            chunk: Code chunk content
-            prompt: Analysis prompt
-            vuln_name: Vulnerability name
-            file_path: Path to the file (for adaptive analysis)
-            
-        Returns:
-            Cache key
-        """
-        # For adaptive analysis (empty chunk)
-        if not chunk:
-            if file_path:
-                return f"{sanitize_name(file_path)}_{sanitize_name(vuln_name)}"
-            return sanitize_name(vuln_name)
-            
-        # For standard analysis
+        self.save_chunk_cache(file_path, mode)
+
+    def generate_cache_key(self, chunk: str, prompt: str, vuln_name: str) -> str:
+        """Stable key for chunk + prompt + vulnerability name."""
         chunk_hash = hashlib.md5(chunk.encode()).hexdigest()
         prompt_hash = hashlib.md5(prompt.encode()).hexdigest()
-        return f"{chunk_hash}_{prompt_hash}_{sanitize_name(vuln_name)}"
-    
-    def clear_scan_cache(self, analysis_type: AnalysisType = None) -> None:
-        """
-        Clear scan cache files
-        
-        Args:
-            analysis_type: Analysis type to clear (if None, clears all)
-        """
-        try:
-            # Determine which cache directories to clear
-            if analysis_type is None:
-                # Clear only the current analysis type directories
-                cache_dirs = [
-                    self.standard_cache_dir[AnalysisMode.SCAN] if AnalysisType.STANDARD in self.scan_chunk_cache else None,
-                    self.standard_cache_dir[AnalysisMode.DEEP] if AnalysisType.STANDARD in self.chunk_cache else None,
-                    self.adaptive_cache_dir[AnalysisMode.SCAN] if AnalysisType.ADAPTIVE in self.scan_chunk_cache else None,
-                    self.adaptive_cache_dir[AnalysisMode.DEEP] if AnalysisType.ADAPTIVE in self.chunk_cache else None
-                ]
-            else:
-                # Clear only the specified analysis type
-                cache_dirs = [
-                    self.standard_cache_dir[AnalysisMode.SCAN] if analysis_type == AnalysisType.STANDARD else None,
-                    self.standard_cache_dir[AnalysisMode.DEEP] if analysis_type == AnalysisType.STANDARD else None,
-                    self.adaptive_cache_dir[AnalysisMode.SCAN] if analysis_type == AnalysisType.ADAPTIVE else None,
-                    self.adaptive_cache_dir[AnalysisMode.DEEP] if analysis_type == AnalysisType.ADAPTIVE else None
-                ]
-            cache_dirs = [d for d in cache_dirs if d is not None]
-            if not cache_dirs:
-                logger.warning("No cache directories to clear")
-                return
+        return f"v{ANALYSIS_SCHEMA_VERSION}_{chunk_hash}_{prompt_hash}_{sanitize_name(vuln_name)}"
 
-            # Delete all cache files in these directories
+    def clear_scan_cache(self) -> None:
+        """Remove all ``*.cache`` files under graph scan/deep dirs and reset in-memory dicts."""
+        try:
+            cache_dirs = list(self.graph_cache_dir.values())
             files_count = 0
             for cache_dir in cache_dirs:
                 if cache_dir.exists():
@@ -324,53 +273,62 @@ class CacheManager:
                         cache_file.unlink()
                         files_count += 1
 
-            # Reset cache dictionaries for the current session
-            if analysis_type is None or analysis_type == AnalysisType.STANDARD:
-                self.chunk_cache[AnalysisType.STANDARD] = {}
-                self.scan_chunk_cache[AnalysisType.STANDARD] = {}
+            self.chunk_cache.clear()
+            self.scan_chunk_cache.clear()
 
-            if analysis_type is None or analysis_type == AnalysisType.ADAPTIVE:
-                self.chunk_cache[AnalysisType.ADAPTIVE] = {}
-                self.scan_chunk_cache[AnalysisType.ADAPTIVE] = {}
-                self.adaptive_analysis_cache = {}
+            # Drop schema cleanup markers so the next CacheManager run re-runs key pruning for
+            # ANALYSIS_SCHEMA_VERSION instead of trusting a stale marker after on-disk wipes.
+            for marker in self.cache_dir.glob(".schema_cleanup_v*.done"):
+                try:
+                    marker.unlink()
+                except OSError as exc:
+                    logger.warning(
+                        "Unable to remove schema cleanup marker %s after cache clear: %s",
+                        marker,
+                        exc,
+                    )
 
             logger.info(f"Cleared {files_count} scan cache files")
 
         except Exception as e:
             logger.exception(f"Error clearing scan cache: {str(e)}")
-    
+
     def validate_cache_expiration(self):
-        """
-        Check all cache files and remove expired ones based on cache_days setting
-        """
-        try:
-            # Get current time
-            now = datetime.now()
-            expired_count = 0
-            
-            # Check both standard and adaptive cache directories
-            all_cache_dirs = list(self.standard_cache_dir.values()) + list(self.adaptive_cache_dir.values())
-            
-            for cache_dir in all_cache_dirs:
+        """Remove expired ``*.cache`` files based on ``cache_days``."""
+        now = datetime.now()
+        expired_count = 0
+
+        for cache_dir in self.graph_cache_dir.values():
+            try:
                 if not cache_dir.exists():
                     continue
-                    
-                # Check each cache file in this directory
-                for cache_file in cache_dir.glob("*.cache"):
-                    # Get file modification time
+            except OSError as exc:
+                logger.warning("Could not access cache directory %s: %s", cache_dir, exc)
+                continue
+
+            try:
+                cache_files = list(cache_dir.glob("*.cache"))
+            except OSError as exc:
+                logger.warning("Could not list cache files in %s: %s", cache_dir, exc)
+                continue
+
+            for cache_file in cache_files:
+                try:
                     mod_time = datetime.fromtimestamp(cache_file.stat().st_mtime)
                     cache_age = now - mod_time
-                    
-                    # Check if file is older than cache_days
                     if cache_age.days > self.cache_days:
-                        try:
-                            cache_file.unlink()
-                            expired_count += 1
-                        except Exception as e:
-                            logger.warning(f"Could not delete expired cache file {cache_file}: {e}")
-            
-            if expired_count > 0:
-                logger.info(f"Removed {expired_count} expired cache files older than {self.cache_days} days")
-            
-        except Exception as e:
-            logger.exception(f"Error validating cache expiration: {str(e)}")
+                        cache_file.unlink()
+                        expired_count += 1
+                except (OSError, OverflowError) as exc:
+                    logger.warning(
+                        "Could not process or remove expired cache file %s: %s",
+                        cache_file,
+                        exc,
+                    )
+
+        if expired_count > 0:
+            logger.info(
+                "Removed %s expired cache files older than %s days",
+                expired_count,
+                self.cache_days,
+            )
