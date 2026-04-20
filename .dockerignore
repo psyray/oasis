@@ -1,0 +1,15 @@
+.git
+.gitignore
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/dist
+**/build
+**/*.egg-info
+security_reports
+.env
+.env.*
+.cursor
+*.md.bak
