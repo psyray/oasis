@@ -4,17 +4,61 @@ const DashboardApp = {
     currentViewMode: 'list',
     reportData: [],
     stats: {},
-    cardTemplate: null,
+    templates: {
+        dateTag: null,
+        dashboardCard: null
+    },
     activeFilters: {
         models: [],
         formats: [],
+        languages: [],
         vulnerabilities: [],
         dateRange: null
     },
     filtersPopulated: false,
-    currentReportPath: '',
-    currentReportFormat: '',
-    currentResizeObserver: null,
+    /**
+     * Single place for report-modal cross-cutting state: preview path/format, back stack,
+     * PDF embed URL token, scroll lock, resize observers. Modal code reads/writes via this object.
+     */
+    reportModalState: {
+        currentPath: '',
+        currentFormat: '',
+        stack: [],
+        pdfEmbedInfo: null,
+        savedWindowScrollY: 0,
+        resizeObserver: null,
+    },
+
+    /**
+     * Ensure ``reportModalState`` has every expected field (tests, partial merges, or future
+     * reload paths may omit keys). Safe to call multiple times.
+     */
+    ensureReportModalState: function () {
+        const defaults = {
+            currentPath: '',
+            currentFormat: '',
+            stack: [],
+            pdfEmbedInfo: null,
+            savedWindowScrollY: 0,
+            resizeObserver: null,
+        };
+        if (!DashboardApp.reportModalState || typeof DashboardApp.reportModalState !== 'object') {
+            DashboardApp.reportModalState = {};
+        }
+        const rms = DashboardApp.reportModalState;
+        Object.keys(defaults).forEach(function (key) {
+            if (rms[key] === undefined) {
+                rms[key] = defaults[key];
+            }
+        });
+        if (!Array.isArray(rms.stack)) {
+            rms.stack = [];
+        }
+        return rms;
+    },
+
+    socket: null,
+    progressState: null,
     debugMode: false, // Initialize debug flag
     
     // Debug logging function that only logs when debug mode is active
@@ -51,6 +95,12 @@ const DashboardApp = {
         this.loadModules()
             .then(() => {
                 this.debug("All modules loaded successfully");
+                if (typeof marked === 'undefined') {
+                    console.warn('[OASIS Dashboard] marked.js failed to load from CDN; markdown previews may be degraded.');
+                }
+                if (typeof Chart === 'undefined') {
+                    console.warn('[OASIS Dashboard] Chart.js failed to load from CDN; dashboard charts may not render.');
+                }
                 this.startApplication();
             })
             .catch(error => {
@@ -58,7 +108,31 @@ const DashboardApp = {
                 document.body.innerHTML = '<div class="error-message">Error loading application. Please refresh the page.</div>';
             });
     },
-    
+
+    initTemplates: function() {
+        DashboardApp.debug("Loading templates...");
+        return Promise.all([
+            // Load date tag template
+            fetch('/static/templates/date_tag.html')
+                .then(response => response.text())
+                .then(template => {
+                    DashboardApp.templates.dateTag = template;
+                    DashboardApp.debug("Date tag template loaded");
+                }),
+            
+            // Load card template
+            fetch('/static/templates/dashboard_card.html')
+                .then(response => response.text())
+                .then(template => {
+                    DashboardApp.templates.dashboardCard = template;
+                    DashboardApp.debug("Card template loaded");
+                })
+        ]).catch(error => {
+            console.error('Error loading templates:', error);
+            throw error;
+        });
+    },
+
     // Define global functions once to avoid duplication
     defineGlobalFunctions: function() {
         this.debug("Defining global functions");
@@ -88,6 +162,14 @@ const DashboardApp = {
                 console.error("closeReportModal not yet loaded");
             }
         };
+
+        window.modalReportNavigateBack = function() {
+            if (DashboardApp.modalReportNavigateBack) {
+                DashboardApp.modalReportNavigateBack();
+            } else {
+                console.error("modalReportNavigateBack not yet loaded");
+            }
+        };
         
         window.filterDatesByModel = function(modelElement) {
             if (DashboardApp.filterDatesByModel) {
@@ -104,11 +186,15 @@ const DashboardApp = {
         return new Promise((resolve, reject) => {
             // Define modules to load in order
             const modules = [
+                'bootstrap.js',
                 'utils.js',
                 'filters.js',
                 'views.js',
                 'api.js',
                 'modal.js',
+                'executive-preview.js',
+                'assistant-constants.js',
+                'assistant.js',
                 'interactions.js'
             ];
             
@@ -128,6 +214,9 @@ const DashboardApp = {
             // Load scripts sequentially
             const loadNextScript = (index) => {
                 if (index >= modules.length) {
+                    if (typeof DashboardApp.initFormatHelpers === 'function') {
+                        DashboardApp.initFormatHelpers();
+                    }
                     resolve();
                     return;
                 }
@@ -147,40 +236,46 @@ const DashboardApp = {
     
     // Start the application after modules are loaded
     startApplication: function() {
+        DashboardApp.ensureReportModalState();
         DashboardApp.debug("Starting application...");
         
-        // Load card template
-        this.loadCardTemplate();
-        
-        // Initialize the dashboard
-        this.fetchReports();
-        this.fetchStats();
-        this.initializeFilters();
-        
-        // Initialize modal events if available
-        if (this.initializeModalEvents) {
-            this.initializeModalEvents();
-        }
-        
-        // Setup mobile navigation
-        if (this.setupMobileNavigation) {
-            this.setupMobileNavigation();
-        }
-        
-        // Setup event listeners
-        this.setupEventListeners();
-    },
-    
-    // Load card template
-    loadCardTemplate: function() {
-        fetch('/static/templates/dashboard_card.html')
-            .then(response => response.text())
-            .then(template => {
-                this.cardTemplate = template;
-                DashboardApp.debug("Card template loaded");
+        // Load templates first
+        this.initTemplates()
+            .then(() => {
+                // Restore persisted vulnerability filters before first API calls.
+                if (typeof this.loadVulnerabilityFiltersFromStorage === 'function') {
+                    this.loadVulnerabilityFiltersFromStorage();
+                }
+                if (typeof this.loadLanguageFiltersFromStorage === 'function') {
+                    this.loadLanguageFiltersFromStorage();
+                }
+
+                // Initialize the dashboard only after templates are loaded
+                this.initializeFilters();
+                // Match previous startup: stats omit vulnerability in the query so filter options stay complete.
+                this.refreshDashboard({ statsIncludeVulnerability: false });
+                if (typeof this.ensureRealtimeProgress === 'function') {
+                    this.ensureRealtimeProgress();
+                } else {
+                    this.initRealtimeProgress();
+                }
+
+                // Initialize modal events if available
+                if (this.initializeModalEvents) {
+                    this.initializeModalEvents();
+                }
+
+                // Setup mobile navigation
+                if (this.setupMobileNavigation) {
+                    this.setupMobileNavigation();
+                }
+
+                // Setup event listeners
+                this.setupEventListeners();
             })
             .catch(error => {
-                console.error("Error loading card template:", error);
+                console.error("Error initializing application:", error);
+                document.body.innerHTML = '<div class="error-message">Error loading application templates. Please refresh the page.</div>';
             });
     },
     
@@ -197,9 +292,16 @@ const DashboardApp = {
                 self.activeFilters = {
                     models: [],
                     formats: [],
+                    languages: [],
                     vulnerabilities: [],
                     dateRange: null
                 };
+                if (typeof self.clearVulnerabilityFilterStorage === 'function') {
+                    self.clearVulnerabilityFilterStorage();
+                }
+                if (typeof self.clearLanguageFilterStorage === 'function') {
+                    self.clearLanguageFilterStorage();
+                }
                 
                 // Reset checkboxes
                 document.querySelectorAll('.filter-checkbox').forEach(checkbox => {

@@ -1,8 +1,89 @@
 // Filter management functions
+DashboardApp.VULNERABILITY_FILTER_STORAGE_KEY = 'oasis.dashboard.vulnerabilityFilters';
+DashboardApp.LANGUAGE_FILTER_STORAGE_KEY = 'oasis.dashboard.languageFilters';
+DashboardApp.FILTER_STORAGE_KEYS = {
+    vulnerabilities: DashboardApp.VULNERABILITY_FILTER_STORAGE_KEY,
+    languages: DashboardApp.LANGUAGE_FILTER_STORAGE_KEY,
+};
+
+DashboardApp.normalizeFilterList = function(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return Array.from(
+        new Set(value.filter(item => typeof item === 'string' && item.trim() !== ''))
+    );
+};
+
+DashboardApp.saveFilterListToStorage = function(filterName, values) {
+    const storageKey = DashboardApp.FILTER_STORAGE_KEYS[filterName];
+    if (!storageKey) {
+        return;
+    }
+    try {
+        localStorage.setItem(storageKey, JSON.stringify(DashboardApp.normalizeFilterList(values)));
+    } catch (error) {
+        DashboardApp.debug(`Unable to save ${filterName} filters to localStorage:`, error);
+    }
+};
+
+DashboardApp.saveVulnerabilityFiltersToStorage = function(vulnerabilityFilters) {
+    DashboardApp.saveFilterListToStorage('vulnerabilities', vulnerabilityFilters);
+};
+
+DashboardApp.loadVulnerabilityFiltersFromStorage = function() {
+    try {
+        const rawFilters = localStorage.getItem(DashboardApp.VULNERABILITY_FILTER_STORAGE_KEY);
+        if (!rawFilters) {
+            DashboardApp.activeFilters.vulnerabilities = [];
+            return;
+        }
+
+        const parsedFilters = JSON.parse(rawFilters);
+        DashboardApp.activeFilters.vulnerabilities = DashboardApp.normalizeFilterList(parsedFilters);
+    } catch (error) {
+        DashboardApp.activeFilters.vulnerabilities = [];
+        DashboardApp.debug('Unable to load vulnerability filters from localStorage:', error);
+    }
+};
+
+DashboardApp.loadLanguageFiltersFromStorage = function() {
+    try {
+        const rawFilters = localStorage.getItem(DashboardApp.LANGUAGE_FILTER_STORAGE_KEY);
+        if (!rawFilters) {
+            DashboardApp.activeFilters.languages = [];
+            return;
+        }
+
+        const parsedFilters = JSON.parse(rawFilters);
+        DashboardApp.activeFilters.languages = DashboardApp.normalizeFilterList(parsedFilters);
+    } catch (error) {
+        DashboardApp.activeFilters.languages = [];
+        DashboardApp.debug('Unable to load language filters from localStorage:', error);
+    }
+};
+
+DashboardApp.clearVulnerabilityFilterStorage = function() {
+    try {
+        localStorage.removeItem(DashboardApp.VULNERABILITY_FILTER_STORAGE_KEY);
+    } catch (error) {
+        DashboardApp.debug('Unable to clear vulnerability filters from localStorage:', error);
+    }
+};
+
+DashboardApp.clearLanguageFilterStorage = function() {
+    try {
+        localStorage.removeItem(DashboardApp.LANGUAGE_FILTER_STORAGE_KEY);
+    } catch (error) {
+        DashboardApp.debug('Unable to clear language filters from localStorage:', error);
+    }
+};
+
 DashboardApp.renderFilters = function() {
     DashboardApp.debug("Rendering filters...");
     const modelFiltersContainer = document.getElementById('model-filters-section');
     const vulnFiltersContainer = document.getElementById('vulnerability-filters-section');
+    const languageFiltersContainer = document.getElementById('language-filters-section');
     const formatFiltersContainer = document.getElementById('format-filters-section');
     const dateFiltersContainer = document.getElementById('date-filters-section');
     
@@ -18,6 +99,13 @@ DashboardApp.renderFilters = function() {
         vulnFiltersContainer.innerHTML = `
             <div class="filter-title">🛡️ Filter by vulnerability</div>
             <div class="filter-options" id="vulnerability-filters"></div>
+        `;
+    }
+
+    if (languageFiltersContainer) {
+        languageFiltersContainer.innerHTML = `
+            <div class="filter-title">🌐 Filter by language</div>
+            <div class="filter-options" id="language-filters"></div>
         `;
     }
     
@@ -56,13 +144,27 @@ DashboardApp.populateFilters = function() {
     const vulnFiltersContainer = document.getElementById('vulnerability-filters');
     let vulnFiltersHtml = '';
     
-    Object.keys(DashboardApp.stats.vulnerabilities || {}).sort().forEach(vuln => {
+    const availableVulnerabilities = Object.keys(DashboardApp.stats.vulnerabilities || {})
+        .sort((a, b) => a.localeCompare(b, 'fr', { sensitivity: 'base' }));
+    const availableVulnerabilitySet = new Set(availableVulnerabilities);
+    const currentVulnerabilityFilters = DashboardApp.normalizeFilterList(DashboardApp.activeFilters.vulnerabilities);
+    const reconciledVulnerabilityFilters = currentVulnerabilityFilters
+        .filter(vulnerability => availableVulnerabilitySet.has(vulnerability));
+    const previousVulnerabilityKey = currentVulnerabilityFilters.slice().sort().join('|');
+    const reconciledVulnerabilityKey = reconciledVulnerabilityFilters.slice().sort().join('|');
+    const hasReconciledVulnerabilityFilters = previousVulnerabilityKey !== reconciledVulnerabilityKey;
+    DashboardApp.activeFilters.vulnerabilities = reconciledVulnerabilityFilters;
+
+    DashboardApp.saveVulnerabilityFiltersToStorage(DashboardApp.activeFilters.vulnerabilities);
+
+    availableVulnerabilities.forEach(vuln => {
         const count = DashboardApp.stats.vulnerabilities[vuln];
         const formattedVuln = DashboardApp.formatDisplayName(vuln, 'vulnerability');
+        const isChecked = DashboardApp.activeFilters.vulnerabilities.includes(vuln) ? 'checked' : '';
         vulnFiltersHtml += `
             <div class="filter-option" data-type="vulnerability" data-value="${vuln}">
                 <label>
-                    <input type="checkbox" class="filter-checkbox" data-type="vulnerability" data-value="${vuln}">
+                    <input type="checkbox" class="filter-checkbox" data-type="vulnerability" data-value="${vuln}" ${isChecked}>
                     ${formattedVuln} <span class="filter-count">(${count})</span>
                 </label>
             </div>
@@ -71,6 +173,38 @@ DashboardApp.populateFilters = function() {
     
     if (vulnFiltersContainer) {
         vulnFiltersContainer.innerHTML = vulnFiltersHtml || '<div class="no-data">No vulnerability type available</div>';
+    }
+
+    // Populate language filters
+    const languageFiltersContainer = document.getElementById('language-filters');
+    let languageFiltersHtml = '';
+    const availableLanguages = Object.keys(DashboardApp.stats.languages || {}).sort();
+    const availableLanguageSet = new Set(availableLanguages);
+    const currentLanguageFilters = DashboardApp.normalizeFilterList(DashboardApp.activeFilters.languages);
+    const reconciledLanguageFilters = currentLanguageFilters
+        .filter(languageCode => availableLanguageSet.has(languageCode));
+    const previousLanguageKey = currentLanguageFilters.slice().sort().join('|');
+    const reconciledLanguageKey = reconciledLanguageFilters.slice().sort().join('|');
+    const hasReconciledLanguageFilters = previousLanguageKey !== reconciledLanguageKey;
+    DashboardApp.activeFilters.languages = reconciledLanguageFilters;
+    DashboardApp.saveFilterListToStorage('languages', DashboardApp.activeFilters.languages);
+
+    availableLanguages.forEach(languageCode => {
+        const count = DashboardApp.stats.languages[languageCode];
+        const languageMeta = DashboardApp.getLanguageMeta(languageCode);
+        const isChecked = DashboardApp.activeFilters.languages.includes(languageCode) ? 'checked' : '';
+        languageFiltersHtml += `
+            <div class="filter-option" data-type="language" data-value="${languageCode}">
+                <label>
+                    <input type="checkbox" class="filter-checkbox" data-type="language" data-value="${languageCode}" ${isChecked}>
+                    ${languageMeta.emoji} ${languageMeta.name} <span class="filter-count">(${count})</span>
+                </label>
+            </div>
+        `;
+    });
+
+    if (languageFiltersContainer) {
+        languageFiltersContainer.innerHTML = languageFiltersHtml || '<div class="no-data">No language available</div>';
     }
     
     // Populate format filters
@@ -104,7 +238,8 @@ DashboardApp.populateFilters = function() {
             const typeMapping = {
                 'model': 'models',
                 'vulnerability': 'vulnerabilities',
-                'format': 'formats'
+                'format': 'formats',
+                'language': 'languages',
             };
             
             const filterType = typeMapping[type];
@@ -123,6 +258,13 @@ DashboardApp.populateFilters = function() {
             } else {
                 // Remove value if it's present
                 DashboardApp.activeFilters[filterType] = DashboardApp.activeFilters[filterType].filter(item => item !== value);
+            }
+
+            if (type === 'vulnerability') {
+                DashboardApp.saveVulnerabilityFiltersToStorage(DashboardApp.activeFilters.vulnerabilities);
+            }
+            if (type === 'language') {
+                DashboardApp.saveFilterListToStorage('languages', DashboardApp.activeFilters.languages);
             }
             
             // Refresh reports and stats with new filters
@@ -164,6 +306,15 @@ DashboardApp.populateFilters = function() {
             DashboardApp.fetchStats();
         });
     }
+
+    if (hasReconciledVulnerabilityFilters) {
+        DashboardApp.fetchReports();
+        DashboardApp.fetchStats();
+    }
+    if (hasReconciledLanguageFilters) {
+        DashboardApp.fetchReports();
+        DashboardApp.fetchStats();
+    }
 };
 
 DashboardApp.updateFilterCounts = function() {
@@ -172,7 +323,8 @@ DashboardApp.updateFilterCounts = function() {
     const checkedFilters = {
         model: {},
         vulnerability: {},
-        format: {}
+        format: {},
+        language: {},
     };
     
     document.querySelectorAll('.filter-checkbox').forEach(checkbox => {
@@ -221,6 +373,16 @@ DashboardApp.updateFilterCounts = function() {
             countSpan.textContent = `(${DashboardApp.stats.formats[formatValue] || 0})`;
         }
     });
+
+    // Update language filters
+    const languageFilters = document.querySelectorAll('.filter-option[data-type="language"]');
+    languageFilters.forEach(option => {
+        const languageValue = option.dataset.value;
+        const countSpan = option.querySelector('.filter-count');
+        if (languageValue && countSpan && DashboardApp.stats.languages) {
+            countSpan.textContent = `(${DashboardApp.stats.languages[languageValue] || 0})`;
+        }
+    });
 };
 
 DashboardApp.initializeFilters = function() {
@@ -237,7 +399,8 @@ DashboardApp.initializeFilters = function() {
             const typeMapping = {
                 'model': 'models',
                 'vulnerability': 'vulnerabilities',
-                'format': 'formats'
+                'format': 'formats',
+                'language': 'languages',
             };
             
             const filterType = typeMapping[type];
@@ -274,8 +437,11 @@ DashboardApp.initializeFilters = function() {
             // Reset all filter arrays
             DashboardApp.activeFilters.models = [];
             DashboardApp.activeFilters.formats = [];
+            DashboardApp.activeFilters.languages = [];
             DashboardApp.activeFilters.vulnerabilities = [];
             DashboardApp.activeFilters.dateRange = null;
+            DashboardApp.clearVulnerabilityFilterStorage();
+            DashboardApp.clearLanguageFilterStorage();
             
             // Reset checkboxes
             document.querySelectorAll('.filter-checkbox').forEach(checkbox => {
@@ -304,9 +470,12 @@ DashboardApp.clearFilters = function() {
     DashboardApp.activeFilters = {
         models: [],
         formats: [],
+        languages: [],
         vulnerabilities: [],
         dateRange: null
     };
+    DashboardApp.clearVulnerabilityFilterStorage();
+    DashboardApp.clearLanguageFilterStorage();
     
     // Refresh reports only - stats will be calculated from reports
     DashboardApp.fetchReports();

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "oasis"
-version = "0.4.0"
+version = "0.5.0"
 description = "Ollama Automated Security Intelligence Scanner"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -13,6 +13,10 @@ authors = [
     { name = "psyray" }
 ]
 dependencies = [
+    "packaging>=24.0",
+    "pydantic>=2.10.0",
+    "langchain-core>=0.3.15",
+    "langgraph>=0.2.45",
     "ollama>=0.4.7",
     "weasyprint>=60.1",
     "markdown>=3.7",
@@ -23,6 +27,12 @@ dependencies = [
     "jinja2>=3.1.6",
     "beautifulsoup4>=4.13.3",
     "flask>=3.1.0",
+    "flask-socketio>=5.3.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "coverage>=7.0.0",
 ]
 
 [project.scripts]

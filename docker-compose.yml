@@ -1,0 +1,37 @@
+# OASIS CLI + optional bundled Ollama (profile "ollama").
+#
+# Typical usage (repo root on host -> /work in container; Ollama on host):
+#   docker compose run --rm oasis -i /work/test_files -ol http://host.docker.internal:11434
+#
+# With in-compose Ollama:
+#   docker compose --profile ollama up -d ollama
+#   docker compose run --rm oasis -i /work/test_files -ol http://ollama:11434
+#
+# Web dashboard from container (listen on all interfaces):
+#   docker compose run --rm -p 5000:5000 oasis -w -we lan -wp 5000 -i /work/test_files ...
+# Pull models first, e.g.: docker compose exec ollama ollama pull mistral
+
+services:
+  oasis:
+    build: .
+    entrypoint: ["oasis"]
+    command: ["--help"]
+    working_dir: /work
+    volumes:
+      - .:/work
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    stdin_open: true
+    tty: true
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles:
+      - ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+
+volumes:
+  ollama_data:

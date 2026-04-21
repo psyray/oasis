@@ -1,4 +1,4 @@
-<div class="report-card">
+<div class="${cardClass}">
     <div class="report-card-header">
         <h3 class="report-title" data-vuln-type="${formattedVulnType}">${formattedVulnTypeEmoji}</h3>
     </div>
@@ -11,7 +11,7 @@
         </div>
         
         <div class="report-dates">
-            <div class="data-label">Dates:</div>
+            <div class="data-label">Dates: <span class="model-filter-badge">${datesSelectionBadgeHTML}</span></div>
             <div class="dates-list">
                 ${datesHTML}
             </div>
@@ -35,6 +35,8 @@
                 <span class="stat-label">📌 Low</span>
             </div>
         </div>
+
+        ${auditComparisonTableHTML}
         
         <div class="format-options">
             ${formatButtons}

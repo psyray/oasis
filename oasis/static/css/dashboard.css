@@ -41,7 +41,7 @@ body {
     color: var(--white);
     text-decoration: none;
     font-weight: bold;
-    font-size: 0.9rem;
+    font-size: 1.1rem;
     padding: 6px 12px;
     border-radius: 4px;
     transition: background-color 0.2s ease;
@@ -57,8 +57,8 @@ body {
 }
 
 .logo-circle {
-    width: 80px;
-    height: 80px;
+    width: 50px;
+    height: 50px;
     border-radius: 50%;
     background-color: #e1dcc8;
     display: flex;
@@ -70,8 +70,8 @@ body {
 } 
 
 .oasis-logo-img {
-    width: 60px;
-    height: 60px;
+    width: 40px;
+    height: 40px;
     object-fit: contain;
     margin-top: 0px;
 }
@@ -87,7 +87,7 @@ body {
 
 .title {
     color: white;
-    font-size: 24px;
+    font-size: 35px;
     font-weight: bold;
     margin: 0;
 }
@@ -95,6 +95,7 @@ body {
 .main-container {
     display: flex;
     flex: 1;
+    min-width: 0;
 }
 
 .sidebar {
@@ -109,6 +110,7 @@ body {
     flex: 1;
     padding: 20px;
     overflow-y: auto;
+    min-width: 0;
 }
 
 .filter-section {
@@ -147,9 +149,21 @@ body {
 
 .dashboard-cards {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    grid-template-columns: repeat(1, minmax(0, 1fr));
     gap: 20px;
     margin-bottom: 30px;
+}
+
+@media (min-width: 780px) {
+    .dashboard-cards {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (min-width: 1200px) {
+    .dashboard-cards {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
 }
 
 .card {
@@ -177,6 +191,173 @@ body {
 .card-label {
     font-size: 14px;
     color: var(--medium-gray);
+}
+
+.progress-card .progress-meta {
+    font-size: 14px;
+    margin-bottom: 8px;
+    color: var(--dark-blue);
+}
+
+.progress-phases {
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    background: rgba(64, 180, 196, 0.08);
+    border-radius: 6px;
+    border: 1px solid rgba(26, 58, 95, 0.12);
+    font-size: 13px;
+}
+
+.progress-active-phase {
+    margin-bottom: 6px;
+    font-size: 12px;
+    color: var(--medium-gray);
+}
+
+.progress-active-phase code {
+    font-size: 12px;
+    background: var(--light-gray);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.progress-phase-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 4px;
+    color: var(--dark-blue);
+}
+
+.progress-phase-label {
+    flex: 1;
+}
+
+.progress-phase-count {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--medium-gray);
+}
+
+.progress-adaptive-wrap {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--border-color);
+}
+
+.progress-phase-sub {
+    font-size: 12px;
+    margin-bottom: 3px;
+    color: var(--dark-blue);
+    opacity: 0.92;
+}
+
+.progress-track {
+    width: 100%;
+    height: 10px;
+    background-color: var(--light-gray);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background-color: var(--turquoise);
+    transition: width 0.25s ease;
+}
+
+.progress-footer {
+    margin-top: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+
+.progress-model {
+    font-size: 12px;
+    color: var(--medium-gray);
+    text-align: right;
+}
+
+.progress-current-vulnerability {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--dark-blue);
+}
+
+.progress-current-emoji {
+    font-size: 16px;
+}
+
+.progress-tested-vulnerabilities {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: 22px;
+}
+
+.progress-vuln-emoji {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--light-gray);
+    font-size: 14px;
+    cursor: help;
+}
+
+.progress-vuln-empty {
+    font-size: 12px;
+    color: var(--medium-gray);
+}
+
+.dashboard-cards .progress-card {
+    grid-column: 1 / -1;
+    width: 100%;
+    max-width: none;
+    justify-self: stretch;
+    box-sizing: border-box;
+    min-width: 0;
+}
+
+@media (min-width: 1200px) {
+    .dashboard-cards .progress-card {
+        grid-column: span 2;
+        width: 100%;
+        max-width: 100%;
+        justify-self: stretch;
+    }
+}
+
+@media (min-width: 1710px) {
+    .dashboard-cards {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    /* Keep metric cards as single-column blocks. */
+    .dashboard-cards > .card:not(.progress-card) {
+        grid-column: span 1;
+    }
+
+    /* Keep "Findings by severity" on the same row as "Scan progress". */
+    .dashboard-cards .risk-summary-card {
+        grid-column: 1;
+        grid-row: 2;
+    }
+
+    .dashboard-cards .progress-card {
+        grid-column: 2 / span 2;
+        grid-row: 2;
+    }
 }
 
 .card-icon {
@@ -242,6 +423,50 @@ body {
     color: #2cbe4e;
 }
 
+.badge-critical {
+    background-color: #f3e5f5;
+    color: #7b1fa2;
+}
+
+.stats-severity-chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 168px;
+    margin-top: 8px;
+}
+
+.stats-severity-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+/* Scan progress chip (distinct from vulnerability severity badges above) */
+.badge-status-aborted {
+    background-color: #fde8e8;
+    color: #8b1538;
+    border: 1px solid #f5c2c7;
+}
+
+.badge-status-failed {
+    background-color: #ffe8e8;
+    color: #cf222e;
+    border: 1px solid #ee9999;
+}
+
+.badge-status-in-progress {
+    background-color: #e8f4fc;
+    color: #0969da;
+    border: 1px solid #b6daff;
+}
+
+.badge-status-complete {
+    background-color: #eefbf0;
+    color: #1a7f37;
+    border: 1px solid #aceebb;
+}
+
 .risk-indicator {
     display: flex;
     align-items: center;
@@ -293,6 +518,15 @@ body {
     padding: 15px;
     font-size: 14px;
     margin-top: auto;
+    position: relative;
+    z-index: 0;
+}
+
+/* Dashboard report modal is above the page footer; hide footer while modal is open so it cannot sit visually over the Assistant panel. */
+html.report-modal-scroll-locked .footer,
+body.report-modal-scroll-locked .footer {
+    visibility: hidden;
+    pointer-events: none;
 }
 
 .footer-links {
@@ -592,35 +826,35 @@ body {
 }
 
 /* Style for small screens (mobile) */
-@media (min-width: 540px) {
+@media (min-width: 780px) {
     .report-grid {
         grid-template-columns: repeat(2, 1fr);
     }
 }
 
 /* Style for large screens (desktop) */
-@media (min-width: 1080px) {
+@media (min-width: 1200px) {
     .report-grid {
         grid-template-columns: repeat(3, 1fr);
     }
 }
 
 /* Style for x large screens (desktop) */
-@media (min-width: 1600px) {
+@media (min-width: 1710px) {
     .report-grid {
-        grid-template-columns: repeat(4, 1fr);
+        grid-template-columns: repeat(4, minmax(0, 1fr));
     }
 }
 
 /* Style for x large screens (desktop) */
-@media (min-width: 2000px) {
+@media (min-width: 2200px) {
     .report-grid {
         grid-template-columns: repeat(5, 1fr);
     }
 }
 
 /* Style for xx large screens (desktop) */
-@media (min-width: 2500px) {
+@media (min-width: 2600px) {
     .report-grid {
         grid-template-columns: repeat(6, 1fr);
     }
@@ -637,6 +871,10 @@ body {
     padding: 0px;
     margin-bottom: 20px;
     transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.report-card--full-row {
+    grid-column: 1 / -1;
 }
 
 .report-card:hover {
@@ -686,6 +924,8 @@ body {
     flex-wrap: wrap;
     gap: 5px;
     margin-bottom: 8px;
+    max-height: 250px;
+    overflow-y: auto;
 }
 
 .model-tag {
@@ -738,6 +978,40 @@ body {
     border-radius: 6px;
     padding: 8px;
     margin-top: auto;
+}
+
+.audit-comparison-block {
+    margin-top: 14px;
+}
+
+.audit-comparison-table-wrap {
+    margin-top: 6px;
+    overflow-x: auto;
+}
+
+.audit-comparison-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    background: var(--white);
+}
+
+.audit-comparison-table th,
+.audit-comparison-table td {
+    border: 1px solid var(--border-color);
+    padding: 6px 8px;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.audit-comparison-table th:first-child,
+.audit-comparison-table td:first-child {
+    text-align: left;
+}
+
+.audit-comparison-table th {
+    background: var(--light-gray);
+    color: var(--dark-blue);
 }
 
 .stat {
@@ -1114,7 +1388,7 @@ body {
     flex-wrap: wrap;
     gap: 5px;
     margin-top: 5px;
-    max-height: 130px;
+    max-height: 315px;
     overflow-y: auto;
     padding-right: 5px;
     align-content: flex-start;
@@ -1125,6 +1399,11 @@ body {
     line-height: 1.6;
     color: var(--dark-blue);
     padding: 0 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    align-items: stretch;
+    min-height: 0;
 }
 
 #report-modal-content h1 {
@@ -1152,6 +1431,21 @@ body {
     margin-bottom: 10px;
 }
 
+#report-modal-content h4 {
+    color: var(--dark-blue);
+    font-size: 16px;
+    margin-top: 14px;
+    margin-bottom: 8px;
+}
+
+#report-modal-content h5 {
+    color: var(--dark-blue);
+    font-size: 14px;
+    margin-top: 12px;
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+
 #report-modal-content p {
     margin: 12px 0;
 }
@@ -1170,6 +1464,99 @@ body {
     border-radius: 5px;
     overflow-x: auto;
     border-left: 3px solid var(--turquoise);
+}
+
+.json-report-preview {
+    max-height: 400px;
+    overflow: auto;
+}
+
+.json-report-detail-heading {
+    margin-top: 1rem;
+    margin-bottom: 0.5rem;
+    color: var(--dark-blue-2);
+}
+
+.oasis-json-file-section {
+    margin: 1rem 0 1.25rem;
+    padding-top: 0.25rem;
+}
+
+.oasis-json-file-heading {
+    margin: 0.5rem 0 0.35rem;
+    font-size: 1.05rem;
+    color: var(--dark-blue-2);
+}
+
+.oasis-json-file-heading code {
+    font-size: 0.95em;
+}
+
+.oasis-json-meta {
+    margin: 0.2rem 0;
+    font-size: 0.92rem;
+    color: var(--dark-blue-2);
+}
+
+.oasis-json-chunk-notes {
+    margin: 0.35rem 0 0.5rem;
+    font-size: 0.92rem;
+}
+
+.oasis-json-error {
+    color: #b00020;
+}
+
+.oasis-json-finding-details {
+    margin: 0.45rem 0;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.35rem 0.5rem;
+    background: var(--white);
+    box-shadow: 0 1px 3px rgba(14, 31, 43, 0.06);
+}
+
+.oasis-json-finding-summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--dark-blue-2);
+    list-style: none;
+}
+
+.oasis-json-finding-summary::-webkit-details-marker {
+    display: none;
+}
+
+.oasis-json-finding-details .oasis-json-finding-summary::before {
+    content: '▸ ';
+    display: inline-block;
+    margin-right: 0.25rem;
+    transition: transform 0.15s ease;
+}
+
+.oasis-json-finding-details[open] .oasis-json-finding-summary::before {
+    transform: rotate(90deg);
+}
+
+.oasis-json-finding-body {
+    margin-top: 0.5rem;
+    padding: 0.35rem 0 0.25rem 0.5rem;
+    border-left: 3px solid var(--turquoise);
+}
+
+.oasis-json-finding-body p:first-child {
+    margin-top: 0;
+}
+
+.json-preview {
+    margin: 0;
+    white-space: pre;
+}
+
+.json-preview-notice {
+    font-size: 0.9em;
+    color: #666;
+    margin-bottom: 0.5rem;
 }
 
 #report-modal-content a {
@@ -1228,7 +1615,26 @@ body {
     margin: 20px 0;
 }
 
-.html-content-container,
+#report-modal-content .report-file-block {
+    background-color: var(--white);
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--turquoise);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 14px 0 18px 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* Report HTML/PDF companions: do not fix height — modal-body scrolls as one column.
+   A fixed height here made overflowing report text paint under the Assistant panel sibling. */
+.html-content-container {
+    width: 100%;
+    box-sizing: border-box;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+}
+
 .pdf-container {
     width: 100%;
     height: calc(100vh - 200px);
@@ -1511,10 +1917,8 @@ h1 {
     display: flex;
 }
 
-.modal-body {
-    max-height: 70vh;
-    overflow-y: auto;
-}
+/* Note: do not cap .modal-body globally with vh — report modal uses a flex column
+   (.modal-content) and needs only the body to scroll between header and footer. */
 
 /* Modal for report preview */
 .modal-overlay {
@@ -1571,6 +1975,18 @@ h1 {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 12px;
+}
+
+#report-modal .modal-header #report-modal-title {
+    flex: 1;
+    margin: 0;
+    text-align: center;
+    font-size: 1.25rem;
+}
+
+#report-modal .modal-header .report-modal-back {
+    flex-shrink: 0;
 }
 
 .modal-title {
@@ -1657,18 +2073,32 @@ h1 {
     overflow: auto;
 } */
 
+/* Full-screen overlay only — must NOT inherit `.modal` translate(-50%,-50%) (would clip off-screen). */
+#report-modal.report-modal-overlay,
 #report-modal {
     display: none;
     position: fixed;
+    top: 0;
+    left: 0;
     z-index: 1000;
     width: 100%;
     height: 100%;
     background-color: rgba(0, 0, 0, 0.7);
-    overflow: auto;
+    transform: none;
+    box-shadow: none;
+    /* Do not scroll the overlay — only .modal-body scrolls — avoids chaining scroll to the page */
+    overflow: hidden;
+    overscroll-behavior: contain;
 }
 
 #report-modal.visible {
-    display: block;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding-top: min(5vh, 48px);
+    padding-bottom: min(5vh, 48px);
+    box-sizing: border-box;
 }
 
 .modal-dialog {
@@ -1676,16 +2106,26 @@ h1 {
     background: white;
     border-radius: 5px;
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
-    width: 80%;
-    height: 80%;
-    margin: 0px auto;
-    margin-top: 5%;
+    width: min(96vw, clamp(560px, 85vw, 1520px));
+    max-width: min(96vw, 1520px);
+    max-height: calc(100vh - min(10vh, 96px));
+    height: auto;
+    min-height: 0;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 .modal-content {
     display: flex;
     flex-direction: column;
-    height: 80vh;
+    flex: 1;
+    min-height: 0;
+    height: auto;
+    max-height: 100%;
+    background: #fff;
+    border-radius: 5px;
 }
 
 .modal-header {
@@ -1694,18 +2134,34 @@ h1 {
     align-items: center;
     padding: 15px;
     border-bottom: 1px solid #e5e5e5;
+    flex-shrink: 0;
 }
 
 .modal-body {
     flex: 1;
+    min-height: 0;
     padding: 15px;
     overflow-y: auto;
+    overscroll-behavior-y: contain;
+}
+
+#report-modal .modal-dialog {
+    margin: 0 auto;
+    flex-shrink: 0;
+    overscroll-behavior: contain;
+}
+
+html.report-modal-scroll-locked,
+body.report-modal-scroll-locked {
+    overflow: hidden !important;
 }
 
 .modal-footer {
     padding: 15px;
     border-top: 1px solid #e5e5e5;
     text-align: right;
+    flex-shrink: 0;
+    background: #fff;
 }
 
 .close {
@@ -1718,4 +2174,414 @@ h1 {
 
 body.modal-open {
     overflow: hidden;
+}
+
+/* Style pour les drapeaux de langue */
+.language-flag {
+    display: inline-block;
+    margin-right: 5px;
+    font-size: 14px;
+}
+
+.model-emoji {
+    display: inline-block;
+    margin-right: 4px;
+    font-size: 14px;
+}
+
+.model-filter-badge {
+    display: none;
+    margin-left: 6px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background-color: var(--light-gray);
+    color: var(--dark-blue);
+    font-size: 11px;
+    font-weight: 600;
+    vertical-align: middle;
+}
+
+.model-filter-badge.active {
+    display: inline-block;
+}
+
+.date-tag {
+    box-sizing: border-box;
+    max-width: 100%;
+}
+
+/* Report modal assistant — embedded in #oasis-assistant-mount (JSON preview) or appended at modal end */
+.oasis-assistant-meta-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.88rem;
+    color: var(--dark-blue-2);
+}
+.oasis-assistant-context-badge {
+    font-weight: 600;
+    max-width: 100%;
+}
+.oasis-assistant-model-field {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 0.5rem;
+    font-weight: 600;
+    min-width: 0;
+}
+.oasis-assistant-model-field select {
+    min-width: 10rem;
+    max-width: min(24rem, 100%);
+    padding: 0.25rem 0.4rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+    box-sizing: border-box;
+}
+.oasis-assistant-budget-hint {
+    font-size: 0.82rem;
+    color: var(--text-secondary, #5a6a75);
+    font-style: italic;
+    min-width: 0;
+}
+.oasis-assistant-finding-ref--hidden {
+    display: none !important;
+}
+.oasis-assistant-panel {
+    flex-shrink: 0;
+    margin-top: 1rem;
+    border-top: 1px solid var(--border-color);
+    padding-top: 0.75rem;
+    position: relative;
+    z-index: 1;
+    background: var(--white);
+    box-shadow: 0 -4px 12px rgba(14, 31, 43, 0.06);
+}
+#report-modal-content .oasis-assistant-mount > .oasis-assistant-panel {
+    margin-top: 0.75rem;
+    border-top: none;
+    padding: 14px 16px;
+    box-shadow: none;
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--turquoise);
+    border-radius: 6px;
+}
+.oasis-assistant-controls {
+    margin-top: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    position: relative;
+}
+.oasis-assistant-controls label {
+    font-size: 0.9rem;
+}
+.oasis-assistant-finding-ref-intro {
+    display: block;
+    margin-bottom: 0.35rem;
+    font-size: 0.9rem;
+}
+.oasis-assistant-finding-selects {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.5rem 0.75rem;
+}
+.oasis-assistant-finding-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.85rem;
+    min-width: 0;
+}
+.oasis-assistant-finding-key {
+    font-weight: 600;
+    color: var(--dark-blue-2);
+}
+.oasis-assistant-finding-field select {
+    min-width: 9rem;
+    max-width: min(18rem, 100%);
+    padding: 0.25rem 0.35rem;
+    font-size: 0.85rem;
+    box-sizing: border-box;
+}
+.oasis-assistant-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+.oasis-assistant-input {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: inherit;
+}
+.oasis-assistant-convo-row {
+    display: grid;
+    grid-template-columns: minmax(168px, 240px) minmax(0, 1fr);
+    gap: 0.75rem 1rem;
+    align-items: start;
+    margin-top: 0.5rem;
+}
+.oasis-assistant-log-column {
+    min-width: 0;
+}
+.oasis-assistant-log-column .oasis-assistant-log {
+    margin-top: 0;
+}
+.oasis-assistant-index-column {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    max-height: min(840px, 62vh);
+    overflow-y: auto;
+    padding: 0.4rem 0.5rem;
+    border-radius: 6px;
+    background: var(--white);
+    border: 1px solid var(--border-color, #dee2e6);
+    box-sizing: border-box;
+}
+.oasis-assistant-index-heading {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary, #5a6a75);
+    margin: 0 0 0.45rem;
+}
+.oasis-assistant-q-index-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+.oasis-assistant-index-btn {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.35rem;
+    width: 100%;
+    margin: 0;
+    padding: 0.35rem 0.45rem;
+    text-align: left;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    font-family: inherit;
+    color: var(--dark-blue-2);
+    background: var(--light-gray);
+    border: 1px solid var(--border-color, #dee2e6);
+    border-radius: 5px;
+    cursor: pointer;
+    box-sizing: border-box;
+    word-break: break-word;
+}
+.oasis-assistant-index-num {
+    flex-shrink: 0;
+    font-weight: 700;
+    color: var(--text-secondary, #5a6a75);
+    margin-top: 0.05rem;
+}
+.oasis-assistant-index-btn .oasis-assistant-md--index {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.78rem;
+    line-height: 1.35;
+}
+.oasis-assistant-md--index h1,
+.oasis-assistant-md--index h2,
+.oasis-assistant-md--index h3,
+.oasis-assistant-md--index h4,
+.oasis-assistant-md--index h5,
+.oasis-assistant-md--index h6 {
+    font-size: 0.85em;
+    font-weight: 600;
+    margin: 0.15em 0;
+    line-height: 1.3;
+}
+.oasis-assistant-md--index p {
+    margin: 0;
+}
+.oasis-assistant-md--index p + p {
+    margin-top: 0.35em;
+}
+.oasis-assistant-md--index ul,
+.oasis-assistant-md--index ol {
+    margin: 0.2em 0;
+    padding-left: 1.15em;
+}
+.oasis-assistant-md--index pre {
+    max-height: 4.5rem;
+    margin: 0.25em 0;
+    font-size: 0.72rem;
+}
+.oasis-assistant-index-btn a {
+    pointer-events: none;
+    color: inherit;
+    text-decoration: underline;
+}
+.oasis-assistant-index-btn:hover {
+    border-color: rgba(56, 178, 172, 0.55);
+    background: rgba(56, 178, 172, 0.08);
+}
+.oasis-assistant-index-btn:focus-visible {
+    outline: 2px solid var(--turquoise);
+    outline-offset: 2px;
+}
+@media (max-width: 768px) {
+    .oasis-assistant-convo-row {
+        grid-template-columns: 1fr;
+    }
+    .oasis-assistant-index-column {
+        position: relative;
+        max-height: min(11rem, 28vh);
+        order: -1;
+    }
+}
+.oasis-assistant-log {
+    max-height: 640px;
+    overflow-y: auto;
+    background: var(--light-gray);
+    padding: 0.65rem 0.5rem;
+    border-radius: 6px;
+    margin-top: 0.5rem;
+    font-size: 0.9rem;
+    white-space: normal;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+.oasis-assistant-msg {
+    box-sizing: border-box;
+    max-width: min(100%, 44rem);
+    padding: 0.55rem 0.65rem 0.65rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color, #dee2e6);
+    box-shadow: 0 1px 2px rgba(14, 31, 43, 0.06);
+}
+.oasis-assistant-msg-hd {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary, #5a6a75);
+    margin: 0 0 0.4rem;
+    line-height: 1.2;
+}
+.oasis-assistant-msg-body {
+    margin: 0;
+    color: var(--dark-blue-2);
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.45;
+}
+.oasis-assistant-msg-body--rich {
+    white-space: normal;
+}
+.oasis-assistant-msg--user {
+    align-self: flex-end;
+    margin-left: 1.25rem;
+    background: rgba(56, 178, 172, 0.12);
+    border-color: rgba(56, 178, 172, 0.35);
+    scroll-margin-top: 5px;
+}
+.oasis-assistant-msg--user .oasis-assistant-msg-hd {
+    color: rgba(14, 31, 43, 0.65);
+    text-align: right;
+}
+.oasis-assistant-msg--user .oasis-assistant-msg-body--rich .oasis-assistant-md {
+    text-align: left;
+}
+.oasis-assistant-msg--assistant {
+    align-self: flex-start;
+    margin-right: 1.25rem;
+    background: var(--white);
+    border-left: 4px solid var(--turquoise);
+    padding-left: 0.7rem;
+}
+.oasis-assistant-msg--highlight {
+    box-shadow: 0 0 0 2px var(--turquoise);
+    transition: box-shadow 0.2s ease;
+}
+.oasis-assistant-log-column .oasis-assistant-msg {
+    max-width: min(100%, 56rem);
+}
+.oasis-assistant-session-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0 0.5rem;
+    font-size: 0.88rem;
+}
+.oasis-assistant-session-bar .btn {
+    padding: 0.25rem 0.5rem;
+}
+.oasis-assistant-session-label select {
+    margin-left: 0.35rem;
+    max-width: min(100%, 14rem);
+}
+.oasis-assistant-md {
+    white-space: normal;
+    word-break: break-word;
+}
+.oasis-assistant-md pre,
+.oasis-assistant-md code {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.oasis-md-code-wrap {
+    margin: 0.35rem 0;
+    min-width: 0;
+}
+.oasis-md-code-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    margin-bottom: 0.2rem;
+}
+.oasis-md-code-copy {
+    padding: 0.15rem 0.5rem;
+    font-size: 0.72rem;
+    line-height: 1.25;
+    font-weight: 600;
+}
+.oasis-assistant-md pre {
+    background: rgba(14, 31, 43, 0.06);
+    padding: 0.35rem 0.5rem;
+    border-radius: 4px;
+    overflow-x: auto;
+}
+.oasis-md-code-wrap > pre {
+    margin: 0;
+}
+.oasis-assistant-md p:first-child {
+    margin-top: 0;
+}
+.oasis-assistant-md p:last-child {
+    margin-bottom: 0;
+}
+.oasis-assistant-think {
+    margin: 0.35rem 0;
+    font-size: 0.82rem;
+    color: var(--dark-blue-2);
+}
+.oasis-assistant-think summary {
+    cursor: pointer;
+    font-weight: 500;
+}
+.oasis-assistant-think-pre {
+    margin: 0.35rem 0 0;
+    padding: 0.35rem;
+    background: rgba(14, 31, 43, 0.05);
+    border-radius: 4px;
+    max-height: 8rem;
+    overflow: auto;
+    white-space: pre-wrap;
+}
+.oasis-assistant-log .oasis-assistant-md {
+    white-space: normal;
+}
+pre.http-raw {
+    background: #f8f8f8;
+    padding: 0.35rem;
+    overflow-x: auto;
 }

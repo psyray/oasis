@@ -170,6 +170,21 @@ h3 {
     margin-top: 1em;
 }
 
+h4 {
+    color: var(--dark-blue);
+    font-size: 12pt;
+    margin-top: 0.9em;
+    margin-bottom: 0.4em;
+}
+
+h5 {
+    color: var(--dark-blue);
+    font-size: 11pt;
+    margin-top: 0.8em;
+    margin-bottom: 0.3em;
+    font-weight: 600;
+}
+
 p {
     margin: 0.7em 0;
 }
@@ -226,4 +241,195 @@ tr:nth-child(even) {
     padding: 15px;
     margin: 1em 0;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.report-file-block {
+    background-color: white;
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--turquoise);
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin: 14px 0 18px 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* Horizontal table of contents (compact column layout on narrow viewports) */
+.report-toc {
+    margin: 1em 0 1.4em;
+    padding: 12px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: linear-gradient(to bottom, white, var(--light-gray));
+}
+
+h2.report-toc-title {
+    margin: 0 0 10px;
+    padding: 0;
+    border: none;
+    border-left: none;
+    font-size: 13pt;
+}
+
+.report-toc-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+@media (min-width: 720px) {
+    .report-toc-list {
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: stretch;
+        gap: 10px;
+    }
+}
+
+.report-toc-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background-color: white;
+    color: var(--dark-blue);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 10pt;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.report-toc-btn:hover {
+    border-color: var(--turquoise);
+    background-color: var(--light-sand);
+}
+
+.report-toc-icon {
+    font-style: normal;
+}
+
+.report-stats-summary-list {
+    margin: 0.6em 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.75rem 1.5rem;
+    list-style: none;
+    padding-left: 0;
+}
+
+.report-stats-chart {
+    margin: 14px 0;
+    padding: 12px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: white;
+}
+
+.report-stats-chart-row {
+    display: grid;
+    grid-template-columns: 72px 1fr 36px;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.report-stats-chart-row:last-child {
+    margin-bottom: 0;
+}
+
+.report-stats-chart-label {
+    font-size: 9pt;
+    font-weight: 600;
+}
+
+.report-stats-chart-track {
+    height: 14px;
+    border-radius: 7px;
+    background: var(--light-gray);
+    overflow: hidden;
+}
+
+.report-stats-chart-fill {
+    display: block;
+    height: 100%;
+    border-radius: 7px;
+    min-width: 2px;
+}
+
+.report-stats-chart-row--critical .report-stats-chart-fill {
+    background: linear-gradient(90deg, #7b1fa2, #ba68c8);
+}
+
+.report-stats-chart-row--high .report-stats-chart-fill {
+    background: linear-gradient(90deg, #c62828, #ef5350);
+}
+
+.report-stats-chart-row--medium .report-stats-chart-fill {
+    background: linear-gradient(90deg, #ef6c00, #ffb74d);
+}
+
+.report-stats-chart-row--low .report-stats-chart-fill {
+    background: linear-gradient(90deg, #2e7d32, #81c784);
+}
+
+.report-stats-chart-val {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-weight: bold;
+}
+
+.report-finding-details {
+    margin: 0.55rem 0;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0.35rem 0.5rem;
+    background-color: white;
+}
+
+.report-finding-summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--dark-blue);
+    list-style: none;
+}
+
+.report-finding-summary::-webkit-details-marker {
+    display: none;
+}
+
+.report-finding-details .report-finding-summary::before {
+    content: '\25B8 ';
+    display: inline-block;
+    margin-right: 0.25rem;
+}
+
+.report-finding-details[open] .report-finding-summary::before {
+    transform: rotate(90deg);
+}
+
+.report-finding-body {
+    margin-top: 0.5rem;
+    padding-left: 0.5rem;
+    border-left: 3px solid var(--turquoise);
+}
+
+.report-return-top {
+    margin: 1em 0 0;
+    font-size: 9pt;
+    text-align: right;
+}
+
+.report-return-top-link {
+    color: var(--turquoise);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.report-return-top-link:hover {
+    text-decoration: underline;
 }

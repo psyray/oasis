@@ -1,20 +1,37 @@
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 import time
 import traceback
-from typing import Union
+from typing import List, Optional, Union
+from copy import deepcopy
 
 
 # Import from configuration
-from .config import MODEL_EMOJIS, REPORT, DEFAULT_ARGS
+from .config import (
+    DEFAULT_ARGS,
+    EMBEDDING_DETECTED_CHUNK_SIZE_MAX,
+    EMBEDDING_DETECTED_CHUNK_SIZE_MIN,
+    LANGUAGES,
+    MAX_CHUNK_SIZE,
+    MODEL_EMOJIS,
+    REPORT,
+    validate_report_dashboard_formats,
+)
 
 # Import from other modules
 from .tools import generate_timestamp, setup_logging, logger, display_logo, get_vulnerability_mapping
 from .ollama_manager import OllamaManager
 from .embedding import EmbeddingManager
 from .analyze import SecurityAnalyzer, EmbeddingAnalyzer
+from .helpers.embedding import (
+    EmbedModelValueError,
+    parse_embed_models_csv,
+    resolve_embed_models,
+)
+from .helpers.langgraph_cli import LG_PIPELINE_INFO, cli_bold, cli_emit_section_banner
 from .report import Report
 from .web import WebServer
 
@@ -27,6 +44,200 @@ class OasisScanner:
         self.ollama_manager = None
         self.embedding_manager = None
         self.output_dir = None
+        self.valid_input_files = None
+        self.embed_models = [DEFAULT_ARGS["EMBED_MODEL"]]
+        self.primary_embed_model = DEFAULT_ARGS["EMBED_MODEL"]
+        self.chunk_size_is_manual = False
+        self._pending_exit_code = None
+
+    @staticmethod
+    def _parse_embed_models_csv(value: str) -> list[str]:
+        """
+        Parse comma-separated embedding model values into a normalized list.
+        """
+        return parse_embed_models_csv(value)
+
+    @staticmethod
+    def _embed_model_cli_type(value: str) -> list[str]:
+        """
+        argparse ``type`` for ``--embed-model``.
+        """
+        try:
+            return OasisScanner._parse_embed_models_csv(value)
+        except EmbedModelValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from exc
+
+    @staticmethod
+    def _parse_yes_no_flag(value: str) -> bool:
+        """
+        Parse yes/no CLI values into booleans.
+
+        Args:
+            value: String value provided by user
+
+        Returns:
+            True for yes, False for no
+        """
+        normalized_value = value.strip().lower()
+        if normalized_value == "yes":
+            return True
+        if normalized_value == "no":
+            return False
+        raise argparse.ArgumentTypeError("Expected 'yes' or 'no'")
+
+    @staticmethod
+    def _language_help_text() -> str:
+        """
+        Build help text for language flag, including supported codes.
+        """
+        supported = ", ".join(
+            f"{meta.get('name', code)} ({code})"
+            for code, meta in LANGUAGES.items()
+        )
+        return (
+            "Language for reports (default: en).\n"
+            f"Supported: {supported}"
+        )
+
+    # Chunk size strategy (embedding text window):
+    # - ``chunk_size_is_manual`` is set in ``_init_arguments`` when the user passes ``--chunk-size``.
+    # - ``_resolve_effective_chunk_size_for_model`` chooses: manual path → configured positive size
+    #   (via ``_resolve_chunk_size_fallback``), else auto path → ``_detect_chunk_size_for_model``
+    #   (Ollama probe, clamped to ``EMBEDDING_DETECTED_CHUNK_SIZE_*``, with safe fallbacks).
+    # - Audit mode resolves once from the first embed model and reuses that size for every model in the run.
+
+    @staticmethod
+    def _resolve_chunk_size_fallback(configured_chunk_size: Optional[int]) -> int:
+        if isinstance(configured_chunk_size, int) and configured_chunk_size > 0:
+            return configured_chunk_size
+        return MAX_CHUNK_SIZE
+
+    @staticmethod
+    def _log_chunk_size_fallback(
+        embed_model: str,
+        configured_chunk_size: Optional[int],
+        fallback_chunk_size: int,
+        reason: str,
+        *,
+        detected_chunk_size: Optional[int] = None,
+    ) -> None:
+        logger.warning(
+            "Chunk size detection fallback for %s: configured=%r detected=%r reason=%s using=%s",
+            embed_model,
+            configured_chunk_size,
+            detected_chunk_size,
+            reason,
+            fallback_chunk_size,
+        )
+
+    def _detect_chunk_size_for_model(
+        self,
+        embed_model: str,
+        configured_chunk_size: Optional[int] = None,
+    ) -> int:
+        effective_fallback_chunk_size = self._resolve_chunk_size_fallback(configured_chunk_size)
+        try:
+            detected_chunk_size = self.ollama_manager.detect_optimal_chunk_size(embed_model)
+        except Exception as exc:
+            self._log_chunk_size_fallback(
+                embed_model,
+                configured_chunk_size,
+                effective_fallback_chunk_size,
+                f"exception: {str(exc)}",
+            )
+            return effective_fallback_chunk_size
+
+        if not isinstance(detected_chunk_size, int) or detected_chunk_size <= 0:
+            self._log_chunk_size_fallback(
+                embed_model,
+                configured_chunk_size,
+                effective_fallback_chunk_size,
+                "invalid non-positive integer",
+                detected_chunk_size=detected_chunk_size,
+            )
+            return effective_fallback_chunk_size
+
+        if not (
+            EMBEDDING_DETECTED_CHUNK_SIZE_MIN
+            <= detected_chunk_size
+            <= EMBEDDING_DETECTED_CHUNK_SIZE_MAX
+        ):
+            self._log_chunk_size_fallback(
+                embed_model,
+                configured_chunk_size,
+                effective_fallback_chunk_size,
+                f"outside range [{EMBEDDING_DETECTED_CHUNK_SIZE_MIN}, {EMBEDDING_DETECTED_CHUNK_SIZE_MAX}]",
+                detected_chunk_size=detected_chunk_size,
+            )
+            return effective_fallback_chunk_size
+
+        return detected_chunk_size
+
+    def _resolve_effective_chunk_size_for_model(
+        self,
+        embed_model: str,
+        *,
+        configured_chunk_size: Optional[int],
+        chunk_size_is_manual: bool,
+    ) -> int:
+        if chunk_size_is_manual:
+            return self._resolve_chunk_size_fallback(configured_chunk_size)
+        return self._detect_chunk_size_for_model(
+            embed_model,
+            configured_chunk_size=configured_chunk_size,
+        )
+
+    @staticmethod
+    def _parse_output_formats_list(raw: str) -> list:
+        """
+        Normalize comma-separated ``--output-format`` values to canonical ``REPORT['OUTPUT_FORMATS']`` strings.
+
+        Tokens are stripped and matched case-insensitively. Unknown tokens raise ValueError.
+        """
+        allowed = REPORT["OUTPUT_FORMATS"]
+        canon = {}
+        for f in allowed:
+            key = str(f).lower()
+            if key not in canon:
+                canon[key] = f
+        tokens = [t.strip() for t in raw.split(",") if t.strip()]
+        if not tokens:
+            return list(allowed)
+        out = []
+        seen: set[str] = set()
+        unknown = []
+        for t in tokens:
+            key = t.lower()
+            if key not in canon:
+                unknown.append(t)
+                continue
+            c = canon[key]
+            if c in seen:
+                continue
+            seen.add(c)
+            out.append(c)
+        if unknown:
+            allowed_s = ", ".join(allowed)
+            unk_s = ", ".join(unknown)
+            raise ValueError(
+                f"Unknown output format(s): {unk_s}. Use 'all' or one or more of: {allowed_s}"
+            )
+        return out
+
+    @staticmethod
+    def _output_format_cli_type(value: str) -> list:
+        """
+        argparse ``type`` for ``--output-format``: returns a canonical list of format strings.
+        """
+        if not isinstance(value, str):
+            raise argparse.ArgumentTypeError("--output-format must be a string")
+        s = value.strip()
+        if s.lower() == "all":
+            return list(REPORT["OUTPUT_FORMATS"])
+        try:
+            return OasisScanner._parse_output_formats_list(s)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from exc
 
     def setup_argument_parser(self):
         """
@@ -39,6 +250,14 @@ class OasisScanner:
             def _split_lines(self, text, width):
                 if text.startswith('Vulnerability types'):
                     return text.splitlines()
+                if '\n' in text:
+                    lines = []
+                    for part in text.splitlines():
+                        if not part.strip():
+                            lines.append('')
+                            continue
+                        lines.extend(super()._split_lines(part, width))
+                    return lines
                 return super()._split_lines(text, width)
 
         parser = argparse.ArgumentParser(
@@ -50,19 +269,79 @@ class OasisScanner:
         io_group = parser.add_argument_group('Input/Output Options')
         io_group.add_argument('-i', '--input', dest='input_path', type=str, 
                             help='Path to file, directory, or .txt file containing paths to analyze')
-        io_group.add_argument('-of', '--output-format', type=str, default=DEFAULT_ARGS['OUTPUT_FORMAT'],
-                            help=f'Output format [pdf, html, md] (default: {DEFAULT_ARGS["OUTPUT_FORMAT"]})')
+        io_group.add_argument(
+            '-of',
+            '--output-format',
+            type=OasisScanner._output_format_cli_type,
+            default=DEFAULT_ARGS['OUTPUT_FORMAT'],
+            help=(
+                f'Output format(s): comma-separated or "all" for '
+                f'{", ".join(REPORT["OUTPUT_FORMATS"])} (default: {DEFAULT_ARGS["OUTPUT_FORMAT"]}). '
+                f'Tokens are case-insensitive; spaces around commas are ignored.'
+            ),
+        )
         io_group.add_argument('-x', '--extensions', type=str,
                             help='Comma-separated list of file extensions to analyze (e.g., "py,js,java")')
+        io_group.add_argument(
+            '-l', '--language',
+            dest='language',
+            type=str,
+            default='en',
+            help=self._language_help_text(),
+        )
         
         # Analysis Configuration
         analysis_group = parser.add_argument_group('Analysis Configuration')
-        analysis_group.add_argument('-at', '--analyze-type', choices=['standard', 'deep'], default=DEFAULT_ARGS['ANALYSIS_TYPE'],
-                                    help=f'Analyze type (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
-        analysis_group.add_argument('-eat', '--embeddings-analyze-type', choices=['file', 'function'], default=DEFAULT_ARGS['ANALYSIS_TYPE'],
-                                    help=f'Analyze code by entire file or by individual functions [EXPERIMENTAL] (default: {DEFAULT_ARGS["ANALYSIS_TYPE"]})')
-        analysis_group.add_argument('-ad', '--adaptive', action='store_true', 
-                                    help='Use adaptive multi-level analysis that adjusts depth based on risk assessment')
+        analysis_group.add_argument(
+            '-eat',
+            '--embeddings-analyze-type',
+            choices=['file', 'function'],
+            default=DEFAULT_ARGS['EMBEDDING_ANALYSIS_TYPE'],
+            help=(
+                'Analyze code by entire file or by individual functions [EXPERIMENTAL] '
+                f'(default: {DEFAULT_ARGS["EMBEDDING_ANALYSIS_TYPE"]})'
+            ),
+        )
+        analysis_group.add_argument(
+            '--langgraph-max-expand',
+            dest='langgraph_max_expand_iterations',
+            type=int,
+            default=2,
+            metavar='N',
+            help='Maximum context-expand retries after verify detects structured-output issues (default: 2)',
+        )
+        analysis_group.add_argument(
+            '--poc-hints',
+            dest='poc_hints',
+            action='store_true',
+            help=(
+                'Log optional high-level PoC hint bullets derived from structured findings only; '
+                'does not call the LLM for new exploit code'
+            ),
+        )
+        analysis_group.add_argument(
+            '--poc-assist',
+            dest='poc_assist',
+            action='store_true',
+            help=(
+                'Ask the deep model for a standalone executable PoC script or commands from findings; '
+                'output is logged only — OASIS does not run generated code'
+            ),
+        )
+        analysis_group.add_argument(
+            '--custom-instructions',
+            dest='custom_instructions',
+            default=None,
+            metavar='TEXT',
+            help='Additional instructions appended to deep-analysis and PoC-assist prompts (defensive review context)',
+        )
+        analysis_group.add_argument(
+            '--custom-instructions-file',
+            dest='custom_instructions_file',
+            default=None,
+            metavar='PATH',
+            help='UTF-8 file with extra instructions for deep analysis and PoC assist (combined with --custom-instructions)',
+        )
         analysis_group.add_argument('-t', '--threshold', type=float, default=DEFAULT_ARGS['THRESHOLD'], 
                                     help=f'Similarity threshold (default: {DEFAULT_ARGS["THRESHOLD"]})')
         analysis_group.add_argument('-v', '--vulns', type=str, default=DEFAULT_ARGS['VULNS'], 
@@ -76,8 +355,22 @@ class OasisScanner:
                                 help='Comma-separated list of models to use (bypasses interactive selection - use `all` to use all models)')
         model_group.add_argument('-sm', '--scan-model', dest='scan_model', type=str,
                                 help='Model to use for quick scanning (default: same as main model)')
-        model_group.add_argument('-em', '--embed-model', type=str, default=DEFAULT_ARGS['EMBED_MODEL'],
-                                help=f'Model to use for embeddings (default: {DEFAULT_ARGS["EMBED_MODEL"]})')
+        model_group.add_argument('-mt', '--model-thinking', dest='model_thinking', type=self._parse_yes_no_flag, default=False, metavar='yes|no',
+                                help='Enable/disable thinking for deep analysis models [yes,no] (default: no)')
+        model_group.add_argument('-smt', '--small-model-thinking', dest='small_model_thinking', type=self._parse_yes_no_flag, default=False, metavar='yes|no',
+                                help='Enable/disable thinking for the quick scan model [yes,no] (default: no)')
+        model_group.add_argument(
+            '-em',
+            '--embed-model',
+            type=OasisScanner._embed_model_cli_type,
+            default=[DEFAULT_ARGS['EMBED_MODEL']],
+            help=(
+                'Embedding model to use. In audit mode, accepts a CSV list of models '
+                '(e.g., "modelA,modelB") which are evaluated independently; in all other '
+                'modes, only the first model in the list is used. '
+                f'Default: {DEFAULT_ARGS["EMBED_MODEL"]}'
+            ),
+        )
         model_group.add_argument('-lm', '--list-models', action='store_true',
                                 help='List available models and exit')
         
@@ -100,6 +393,36 @@ class OasisScanner:
                             help='Web interface password (if not specified, a random password will be generated)')
         web_group.add_argument('-wp', '--web-port', dest='web_port', type=int, default=5000,
                             help='Web interface port (default: 5000)')
+        web_group.add_argument(
+            '--web-ollama-url',
+            dest='web_ollama_url',
+            default=None,
+            metavar='URL',
+            help=(
+                'Ollama API URL for dashboard assistant chat (default: same as --ollama-url when unset in env OASIS_WEB_OLLAMA_URL)'
+            ),
+        )
+        web_group.add_argument(
+            '--web-embed-model',
+            dest='web_embed_model',
+            default=None,
+            metavar='MODEL',
+            help='Embedding model name for assistant RAG (defaults to report embed_model or nomic-embed-text)',
+        )
+        _rag = parser.add_mutually_exclusive_group()
+        _rag.add_argument(
+            '--web-assistant-rag',
+            dest='web_assistant_rag',
+            action='store_true',
+            help='Enable embedding-cache RAG for dashboard assistant when cache is available',
+        )
+        _rag.add_argument(
+            '--no-web-assistant-rag',
+            dest='web_assistant_rag',
+            action='store_false',
+            help='Disable embedding-cache RAG for the dashboard assistant',
+        )
+        parser.set_defaults(web_assistant_rag=True)
         
         # Logging and Debug
         logging_group = parser.add_argument_group('Logging and Debug')
@@ -116,8 +439,46 @@ class OasisScanner:
                                 help='Ollama URL (default: http://localhost:11434)')
         special_group.add_argument('-V', '--version', action='store_true',
                                 help='Show OASIS version and exit')
-        
+        update_group = special_group.add_mutually_exclusive_group()
+        update_group.add_argument(
+            '--check-update',
+            dest='check_update',
+            action='store_true',
+            help='Compare this install to the latest stable GitHub release and exit',
+        )
+        update_group.add_argument(
+            '--self-update',
+            dest='self_update',
+            action='store_true',
+            help='Upgrade from the latest stable GitHub release (requires pipx on PATH)',
+        )
+
         return parser
+
+    _REMOVED_LEGACY_ANALYSIS_FLAGS = frozenset({"--adaptive", "-ad", "--analyze-type", "-at"})
+
+    @staticmethod
+    def removed_cli_flag_error(argv: Optional[List[str]] = None) -> Optional[str]:
+        """
+        Return an error message if argv uses removed adaptive / standard-vs-deep flags, else None.
+
+        These options were removed in favor of LangGraph-only orchestration; callers should drop
+        them and use ``--langgraph-max-expand``, PoC flags, and ``--embeddings-analyze-type``.
+        """
+        tokens = argv if argv is not None else sys.argv[1:]
+        body = (
+            "OASIS uses LangGraph-only orchestration. Remove this flag from scripts or CI.\n"
+            "See README (LangGraph pipeline). Related CLI: --langgraph-max-expand, "
+            "--poc-hints, --poc-assist; embedding segmentation: --embeddings-analyze-type / -eat "
+            "(file or function)."
+        )
+        for tok in tokens:
+            if tok in OasisScanner._REMOVED_LEGACY_ANALYSIS_FLAGS:
+                return f"error: {tok} was removed.\n{body}"
+            if tok.startswith("--analyze-type=") or tok.startswith("-at="):
+                return f"error: --analyze-type was removed ({tok!r}).\n{body}"
+        return None
+
     def get_vulnerability_help(self) -> str:
         """
         Generate help text for vulnerability arguments
@@ -154,20 +515,20 @@ class OasisScanner:
         if invalid_tags:
             return False
 
-        logger.info(f"\nStarting security analysis at {generate_timestamp()}\n")
+        cli_emit_section_banner(
+            logger, "🚀", "Security analysis", f"starting at {generate_timestamp()}"
+        )
         start_time = time.time()
-        
-        # Determine analysis type (adaptive or standard)
-        adaptive = hasattr(self.args, 'adaptive') and self.args.adaptive
-        analysis_type = "🧠 adaptive" if adaptive else "📋 standard"
-        logger.info(f"Using {analysis_type} analysis mode")
+        logger.info(LG_PIPELINE_INFO)
 
         # Process all main models one by one
         for i, main_model in enumerate(main_models):
-            msg = f"Running analysis with model {i+1}/{len(main_models)}: {main_model}"
-            logger.info(f"\n{'='*len(msg)}")
-            logger.info(msg)
-            logger.info(f"{'='*len(msg)}")
+            cli_emit_section_banner(
+                logger,
+                "⚙️",
+                "Analysis pass",
+                f"{i + 1}/{len(main_models)} · {cli_bold(main_model)}",
+            )
             
             # Create analyzer with current main model and scan model
             security_analyzer = SecurityAnalyzer(
@@ -175,11 +536,15 @@ class OasisScanner:
                 llm_model=main_model,
                 embedding_manager=self.embedding_manager,
                 ollama_manager=self.ollama_manager,
-                scan_model=scan_model
+                scan_model=scan_model[0]
             )
             
             # Set the current model for report generation
             self.report.current_model = main_model
+            self.report.set_executive_summary_models(
+                scan_model=scan_model[0] if scan_model else None,
+                embedding_model=getattr(self.embedding_manager, "embedding_model", None),
+            )
 
             # Process analysis with selected model
             try:
@@ -212,22 +577,76 @@ class OasisScanner:
         vulnerabilities, invalid_tags = SecurityAnalyzer.get_vulnerabilities_to_check(self.args, vuln_mapping)
         if invalid_tags:
             return False
+        if not vulnerabilities:
+            logger.warning("No vulnerabilities selected for audit mode; nothing to analyze.")
+            return True
 
-        # Create analyzer
-        embedding_manager = EmbeddingAnalyzer(self.embedding_manager, self.ollama_manager)
-
-        # Analyze all vulnerabilities
-        analyzer_results = embedding_manager.analyze_all_vulnerabilities(vulnerabilities)
-
-        # Set the current model for report generation
-        self.report.current_model = embedding_manager.embedding_model
-
-        # Generate audit report
-        self.report.create_report_directories(self.args.input_path, models=[self.report.current_model])
-        self.report.generate_audit_report(
-            analyzer_results,
-            self.embedding_manager
+        embed_models = list(self.embed_models or [DEFAULT_ARGS["EMBED_MODEL"]])
+        self.report.models = list(embed_models)
+        self.report.create_report_directories(self.args.input_path, models=embed_models)
+        base_embedding_manager = EmbeddingManager(self.args, self.ollama_manager)
+        prepared_input_files = base_embedding_manager.prepare_input_files(
+            self.args,
+            files_to_analyze=self.valid_input_files,
         )
+        if not prepared_input_files:
+            logger.error("No valid files available for audit mode")
+            return False
+
+        configured_chunk_size = getattr(self.args, "chunk_size", None)
+        chunk_size_is_manual = bool(getattr(self, "chunk_size_is_manual", False))
+        # Manual chunk-size path shares fallback behavior with _resolve_chunk_size_fallback:
+        # non-int or non-positive values fall back to MAX_CHUNK_SIZE.
+        if chunk_size_is_manual and not (
+            isinstance(configured_chunk_size, int) and configured_chunk_size > 0
+        ):
+            logger.warning(
+                "Invalid manual --chunk-size (%r) provided in audit mode; "
+                "falling back to MAX_CHUNK_SIZE. Audit windows may be larger "
+                "than requested.",
+                configured_chunk_size,
+            )
+        use_detected_chunk_size = not chunk_size_is_manual
+        if use_detected_chunk_size and len(embed_models) > 1:
+            logger.info(
+                "Audit mode uses one detected chunk size from the first embedding model (%s) "
+                "for all audit embedding models to keep run semantics consistent.",
+                embed_models[0],
+            )
+        # Keep audit semantics aligned with non-audit mode: one resolved chunk size reused for run.
+        audit_chunk_size = (
+            self._resolve_effective_chunk_size_for_model(
+                embed_models[0],
+                configured_chunk_size=configured_chunk_size,
+                chunk_size_is_manual=chunk_size_is_manual,
+            )
+        )
+        total_embed_models = len(embed_models)
+        for index, embed_model in enumerate(embed_models):
+            cli_emit_section_banner(
+                logger,
+                "🧪",
+                "Audit embedding model",
+                f"{index + 1}/{total_embed_models} · {cli_bold(embed_model)}",
+            )
+            model_args = deepcopy(self.args)
+            model_args.embed_model = embed_model
+            model_args.chunk_size = audit_chunk_size
+            model_embedding_manager = EmbeddingManager(model_args, self.ollama_manager)
+            model_embedding_manager.process_input_files(
+                model_args,
+                files_to_analyze=prepared_input_files,
+                pre_parsed=True,
+            )
+
+            embedding_analyzer = EmbeddingAnalyzer(model_embedding_manager, self.ollama_manager)
+            analyzer_results = embedding_analyzer.analyze_all_vulnerabilities(vulnerabilities)
+            analyzer_results["vulnerability_statistics"] = embedding_analyzer.generate_vulnerability_statistics(
+                analyzer_results
+            )
+
+            self.report.current_model = embed_model
+            self.report.generate_audit_report(analyzer_results, model_embedding_manager)
 
         # Report generation
         self.report.report_generated(report_type='Audit', report_structure=True)
@@ -246,6 +665,11 @@ class OasisScanner:
         try:
             return self._init_oasis(args)
         except KeyboardInterrupt:
+            try:
+                if hasattr(self, "report") and self.report and hasattr(self.report, "mark_progress_aborted"):
+                    self.report.mark_progress_aborted()
+            except Exception:
+                logger.debug("Failed to publish aborted progress state", exc_info=True)
             logger.info(f"\nProcess interrupted by user at {generate_timestamp()}. Exiting...")
             self._save_cache_on_exit()
             return 1
@@ -259,31 +683,73 @@ class OasisScanner:
         # Parse and validate arguments
         init_result = self._init_arguments(args)
 
+        if self._pending_exit_code is not None:
+            return int(self._pending_exit_code)
+
         # Handle special early termination cases
         if init_result is None:
             return 0  # Success exit code for commands like --list-models
         elif init_result is False:
             return 1  # Error exit code for validation failures
 
-        # Initialize report
-        self.report = Report(self.args.input_path, self.args.output_format)
+        # Initialize report with language settings
+        self.report = Report(
+            self.args.input_path, 
+            self.args.output_format,
+            language=getattr(self.args, 'language', 'en')
+        )
+
+        web_server = None
+        if self.args.web:
+            self._warn_web_mode_ignores_scan_flags()
+            web_server = WebServer(
+                self.report,
+                debug=self.args.debug,
+                web_expose=self.args.web_expose,
+                web_password=self.args.web_password,
+                web_port=self.args.web_port,
+                web_ollama_url=getattr(self.args, "web_ollama_url", None) or os.environ.get("OASIS_WEB_OLLAMA_URL"),
+                web_embed_model=getattr(self.args, "web_embed_model", None),
+                web_assistant_rag=bool(getattr(self.args, "web_assistant_rag", True)),
+                default_ollama_url=getattr(self.args, "ollama_url", None),
+            )
+            self.report.set_progress_notifier(web_server.emit_scan_progress)
+
+            # In web mode, only serve the UI (no scan execution).
+            web_server.run()
+            return 0
 
         # Initialize Ollama and check connection
-        if not self.args.web:
-            if not self._init_ollama(self.args.ollama_url):
-                return 1
-            # Initialize embedding manager and process input files
-            return self._execute_requested_mode() if self._init_processing() else 1
+        if not self._init_ollama(self.args.ollama_url):
+            return 1
 
-        # Serve reports via web interface
-        WebServer(
-            self.report, 
-            debug=self.args.debug,
-            web_expose=self.args.web_expose,
-            web_password=self.args.web_password,
-            web_port=self.args.web_port
-        ).run()
-        return 0  # Exit after serving the web interface
+        # Audit mode builds embeddings per embedding model inside handle_audit_mode.
+        # Skip the generic pre-indexing pass to avoid duplicate startup embedding.
+        if getattr(self.args, "audit", False):
+            return self._execute_requested_mode()
+
+        return self._execute_requested_mode() if self._init_processing() else 1
+
+    def _warn_web_mode_ignores_scan_flags(self) -> None:
+        """Warn when scan-oriented flags are passed with --web UI-only mode."""
+        ignored_flags: list[str] = []
+        if getattr(self.args, "audit", False):
+            ignored_flags.append("--audit")
+        if getattr(self.args, "models", None):
+            ignored_flags.append("--models")
+        if getattr(self.args, "scan_model", None):
+            ignored_flags.append("--scan-model")
+        if float(getattr(self.args, "threshold", DEFAULT_ARGS["THRESHOLD"])) != float(DEFAULT_ARGS["THRESHOLD"]):
+            ignored_flags.append("--threshold")
+        if str(getattr(self.args, "vulns", DEFAULT_ARGS["VULNS"])) != str(DEFAULT_ARGS["VULNS"]):
+            ignored_flags.append("--vulns")
+        if getattr(self.args, "extensions", None):
+            ignored_flags.append("--extensions")
+        if ignored_flags:
+            logger.warning(
+                "Web mode serves the dashboard only; scan-related options are ignored: %s",
+                ", ".join(ignored_flags),
+            )
             
     def _init_arguments(self, args) -> Union[bool, None]:
         """
@@ -296,6 +762,9 @@ class OasisScanner:
         """
         # Parse command line arguments if not provided
         if args is None:
+            if legacy_err := OasisScanner.removed_cli_flag_error():
+                print(legacy_err, file=sys.stderr)
+                sys.exit(2)
             parser = self.setup_argument_parser()
             self.args = parser.parse_args()
         else:
@@ -307,13 +776,29 @@ class OasisScanner:
             from .__init__ import __version__
             print(f"OASIS - Ollama Automated Security Intelligence Scanner v{__version__}")
             return None
-        
+
+        if getattr(self.args, "check_update", False):
+            from .helpers.cli_update import print_check_update
+
+            self._pending_exit_code = print_check_update()
+            return None
+
+        if getattr(self.args, "self_update", False):
+            from .helpers.cli_update import run_self_update
+
+            self._pending_exit_code = run_self_update()
+            return None
+
+        from .helpers.cli_update import maybe_emit_update_banner
+
+        maybe_emit_update_banner(silent=bool(self.args.silent))
+
         if self.args.list_models:
             # Setup minimal logging without file creation
             setup_logging(debug=self.args.debug, silent=False, error_log_file=None)
             display_logo()
             return self._handle_list_models_and_exit()
-        
+
         # Validate required argument combinations
         if self.args.silent and not self.args.models and not self.args.audit:
             return self._handle_argument_errors(
@@ -325,12 +810,32 @@ class OasisScanner:
         # Now setup full logging with appropriate paths
         self._setup_logging()
 
-        # Process output format
-        if self.args.output_format == 'all':
-            self.args.output_format = REPORT['OUTPUT_FORMATS']
-        else:
-            self.args.output_format = self.args.output_format.split(',')
+        validate_report_dashboard_formats()
 
+        # Process output format (argparse usually supplies list via type=; support injected str)
+        of_raw = self.args.output_format
+        if isinstance(of_raw, list):
+            self.args.output_format = of_raw
+        elif isinstance(of_raw, str):
+            try:
+                self.args.output_format = OasisScanner._output_format_cli_type(of_raw)
+            except argparse.ArgumentTypeError as exc:
+                return self._handle_argument_errors(str(exc))
+        else:
+            return self._handle_argument_errors("Invalid --output-format / -of value")
+
+        # Normalize embed-model input (argparse usually supplies list via type=; support injected str)
+        em_raw = getattr(self.args, "embed_model", None)
+        if not isinstance(em_raw, (list, tuple, str)) and em_raw is not None:
+            return self._handle_argument_errors("Invalid --embed-model / -em value")
+
+        try:
+            self.args.embed_model, primary_embed_model = resolve_embed_models(em_raw)
+            self.embed_models = list(self.args.embed_model)
+            self.primary_embed_model = primary_embed_model
+        except EmbedModelValueError as exc:
+            return self._handle_argument_errors(str(exc))
+        self.chunk_size_is_manual = getattr(self.args, "chunk_size", None) is not None
         display_logo()
         return True
 
@@ -355,18 +860,35 @@ class OasisScanner:
         if not check_embeddings:
             return True
 
-        # Auto-detect chunk size if not specified
-        if self.args.chunk_size is None:
-            self.args.chunk_size = self.ollama_manager.detect_optimal_chunk_size(self.args.embed_model)
-        else:
-            logger.info(f"Using manual chunk size: {self.args.chunk_size}")
+        cli_emit_section_banner(
+            logger, "🔌", "Ollama & embed model", "context length, chunk size, model pull"
+        )
 
         # Check Ollama connection
         if not self.ollama_manager.check_connection():
             return False
 
         # Check embedding model availability
-        return bool(self.ollama_manager.ensure_model_available(self.args.embed_model))
+        embed_models = list(self.embed_models or [])
+        primary_embed_model = self.primary_embed_model
+        if not embed_models:
+            embed_models, primary_embed_model = resolve_embed_models(getattr(self.args, "embed_model", None))
+            self.embed_models = list(embed_models)
+            self.primary_embed_model = primary_embed_model
+        for embed_model in embed_models:
+            if not self.ollama_manager.ensure_model_available(embed_model):
+                return False
+
+        # Apply the class chunk-size strategy (documented above ``_resolve_chunk_size_fallback``).
+        self.args.chunk_size = self._resolve_effective_chunk_size_for_model(
+            primary_embed_model,
+            configured_chunk_size=getattr(self.args, "chunk_size", None),
+            chunk_size_is_manual=bool(getattr(self, "chunk_size_is_manual", False)),
+        )
+        if self.chunk_size_is_manual:
+            logger.info(f"Using manual chunk size: {self.args.chunk_size}")
+
+        return True
 
     def _init_processing(self):
         """
@@ -375,11 +897,18 @@ class OasisScanner:
         Returns:
             True if processing is successful, False otherwise
         """
+        cli_emit_section_banner(
+            logger, "📂", "Source index & embeddings", "parse tree, cache, vectorize new files"
+        )
 
         # Initialize embedding manager
         self.embedding_manager = EmbeddingManager(self.args, self.ollama_manager)
-
-        return self.embedding_manager.process_input_files(self.args)
+        self.report.embed_model = getattr(self.embedding_manager, "embedding_model", None)
+        self.report.set_executive_summary_models(
+            embedding_model=getattr(self.embedding_manager, "embedding_model", None)
+        )
+        self.valid_input_files = self.embedding_manager.process_input_files(self.args)
+        return self.valid_input_files
 
     def _execute_requested_mode(self):
         """
@@ -406,11 +935,6 @@ class OasisScanner:
         Args:
             vuln_mapping: Vulnerability mapping
         """
-        # Get analysis type
-        analysis_type = self.ollama_manager.select_analysis_type(self.args)
-        if not analysis_type:
-            return 1
-
         # Get available models
         available_models = self.ollama_manager.get_available_models()
         if not available_models:
@@ -430,27 +954,61 @@ class OasisScanner:
             logger.error("No scan model was selected.")
             return 1
             
+        if isinstance(scan_model, list):
+            scan_model_name = scan_model[0] if scan_model else None
+        else:
+            scan_model_name = scan_model
+
+        if not scan_model_name:
+            logger.error("No scan model was selected.")
+            return 1
+
         if not main_models:
             logger.warning("No main models were selected, using scan model for deep analysis as well")
-            main_models = [scan_model]
+            main_models = [scan_model_name]
         
         # Store the scan model in the arguments
-        self.args.scan_model = scan_model
-        
+        self.args.scan_model = scan_model_name
+
+        cli_emit_section_banner(
+            logger, "🤖", "LLM selection", "scan model, deep model(s), thinking flags"
+        )
+
         # Log model selection information
-        display_scan_model = self.ollama_manager.get_model_display_name(scan_model)
+        display_scan_model = self.ollama_manager.get_model_display_name(scan_model_name)
         display_main_models = ", ".join([self.ollama_manager.get_model_display_name(m) for m in main_models])
-        if len(main_models) == 1 and scan_model == main_models[0]:
-            logger.info(f"{MODEL_EMOJIS['default']}Using '{display_scan_model}' for both scanning and deep analysis")
+        if len(main_models) == 1 and scan_model_name == main_models[0]:
+            logger.info(
+                f"{MODEL_EMOJIS['default']}Using '{cli_bold(display_scan_model)}' for both scanning and deep analysis"
+            )
         else:
-            logger.info(f"{MODEL_EMOJIS['default']}Using '{display_scan_model}' for scanning and {display_main_models} for deep analysis")
-        
+            logger.info(
+                f"{MODEL_EMOJIS['default']}Using '{cli_bold(display_scan_model)}' for scanning and "
+                f"{cli_bold(display_main_models)} for deep analysis"
+            )
+
+        self.ollama_manager.configure_analysis_model_thinking(
+            scan_model=scan_model_name,
+            main_models=main_models,
+            scan_model_thinking=self.args.small_model_thinking,
+            main_model_thinking=self.args.model_thinking
+        )
+        if scan_model_name in main_models and self.args.small_model_thinking != self.args.model_thinking:
+            logger.warning(
+                "Scan and deep analysis share the same model; applying deep analysis thinking setting for that model."
+            )
+        logger.info(
+            f"{MODEL_EMOJIS['default']}Model thinking: scan={self.args.small_model_thinking}, deep={self.args.model_thinking}"
+        )
+
         # Create the report directories for all main models
         self.report.models = main_models
         self.report.create_report_directories(self.args.input_path, models=main_models)
+        self.args.run_id = getattr(self.report, "output_dir_name", None)
+        self._configure_run_error_logging()
 
         # Run analysis with all main models
-        result = self.run_analysis_mode(main_models, scan_model, vuln_mapping)
+        result = self.run_analysis_mode(main_models, [scan_model_name], vuln_mapping)
         if not result:
             return 1
 
@@ -479,13 +1037,21 @@ class OasisScanner:
         Args:
             None
         """
-        if self.args.silent:
-            logs_dir = Path(self.args.input_path).resolve().parent / REPORT['OUTPUT_DIR'] / "logs" if self.args.input_path else Path(REPORT['OUTPUT_DIR']) / "logs"
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            log_file = logs_dir / f"oasis_errors_{generate_timestamp(for_file=True)}.log"
-        else:
-            log_file = None
-            
+        # Base logging initialization (console behavior, levels).
+        # Run-specific error file logging is configured once report output_dir is known.
+        setup_logging(debug=self.args.debug, silent=self.args.silent, error_log_file=None)
+
+    def _configure_run_error_logging(self):
+        """
+        Configure run-specific error log file in security_reports/<run>/logs.
+        """
+        if not hasattr(self, "report") or not getattr(self.report, "output_dir", None):
+            return
+
+        logs_dir = self.report.output_dir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        run_id = getattr(self.report, "output_dir_name", generate_timestamp(for_file=True))
+        log_file = logs_dir / f"oasis_errors_{run_id}.log"
         setup_logging(debug=self.args.debug, silent=self.args.silent, error_log_file=log_file)
 
     def _handle_argument_errors(self, arg0):

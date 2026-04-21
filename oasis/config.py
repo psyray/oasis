@@ -1,7 +1,151 @@
 """
-Configuration constants for OASIS
+Configuration constants for OASIS.
+
+Environment-driven tunables are grouped below under explicit section headers.
+
+Developer guide — **safe to tweak together** vs **orthogonal knobs**:
+
+1. **Structured-output degeneracy (deep JSON quality)** — tune together when models collapse or
+   spam repeated tokens in structured output. Env vars: ``OASIS_STRUCTURED_DEGENERACY_*``
+   (see ``STRUCTURED_OUTPUT_DEGENERACY_*`` below). Implemented in
+   ``oasis/helpers/misc.py`` (``structured_deep_raw_looks_degenerate``). Related LLM budgets: ``OASIS_CHUNK_*``
+   (timeouts / ``num_predict``) in the Ollama section above.
+
+2. **PoC budgeting (prompts + logs, not SARIF/HTML report bodies)** — tune together when PoC
+   assist/hints truncate or dominate context. Env vars: ``OASIS_POC_*`` / ``POC_*`` constants
+   below; helpers in ``oasis/helpers/poc.py``.
+   Keep aligned with structured-output caps if both feed the same LLM turn.
+
+3. **Context expansion (LangGraph)** — ``OASIS_CONTEXT_EXPAND_*`` / ``CONTEXT_EXPAND_*``;
+   separate from PoC digest size but shares overall token pressure with chunk analysis.
+
+4. **CLI debug transcripts** — ``OASIS_LLM_DEBUG_CONTENT_MAX_CHARS`` only affects ``-d`` logging,
+   not report payloads.
+
+Section overview:
+
+- **Ollama / HTTP client** — chunk LLM timeouts, structured ``num_predict`` ceiling, HTTP client
+  timeout, slow-call warning (model I/O and transport).
+- **Structured-output degeneracy** — heuristics when validating deep structured JSON from models.
+- **LangGraph context expansion** — padding and max chars around suspicious spans.
+- **Heuristic tuning (grouped)** — ties structured-output degeneracy and ``POC_*`` caps; read
+  before changing one threshold in isolation.
+- **PoC pipeline** — digest size, hints markdown cap, PoC stage log cap for DEBUG.
+- **CLI debug** — truncation for ``-d`` / ``llm_debug_log`` transcripts (not report payloads).
+
+**Reference — ``OASIS_*`` env vars for structured-output tuning vs PoC (single source for docs/tests):**
+
+Keep this list in sync when adding new ``_parse_env_int`` / ``_parse_env_float`` calls below.
+
+Structured-output degeneracy (maps to ``STRUCTURED_OUTPUT_DEGENERACY_*``):
+
+- ``OASIS_STRUCTURED_DEGENERACY_MIN_CHARS``
+- ``OASIS_STRUCTURED_DEGENERACY_RATIO_MAX``
+- ``OASIS_STRUCTURED_DEGENERACY_ZLIB_LEVEL``
+- ``OASIS_STRUCTURED_DEGENERACY_REPEAT_UNIT_LEN``
+- ``OASIS_STRUCTURED_DEGENERACY_REPEAT_MIN_RUNS``
+
+LangGraph context expansion:
+
+- ``OASIS_CONTEXT_EXPAND_PADDING_BEFORE``
+- ``OASIS_CONTEXT_EXPAND_PADDING_AFTER``
+- ``OASIS_CONTEXT_EXPAND_MAX_CHARS``
+
+PoC pipeline (digest / hints / DEBUG logs):
+
+- ``OASIS_POC_DIGEST_JSON_MAX_CHARS``
+- ``OASIS_POC_STAGE_LOG_MAX_CHARS``
+- ``OASIS_POC_HINTS_MAX_CHARS``
+
+Related chunk LLM budgets (often tuned with degeneracy thresholds):
+
+- ``OASIS_CHUNK_ANALYZE_TIMEOUT_SEC``
+- ``OASIS_CHUNK_DEEP_NUM_PREDICT``
+
+CLI debug only (orthogonal to reports):
+
+- ``OASIS_LLM_DEBUG_CONTENT_MAX_CHARS``
+
+Transport / diagnostics (same file, separate concern):
+
+- ``OASIS_OLLAMA_HTTP_CLIENT_TIMEOUT_SEC``, ``OASIS_OLLAMA_SLOW_CALL_WARNING_SEC``
+
+Static lists (extensions, models, languages, …) follow those sections.
 """
-from typing import Set
+import copy
+import logging
+import json
+import os
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
+
+from .legacy_vulnerability_mapping import LEGACY_VULNERABILITY_MAPPING
+
+logger = logging.getLogger("oasis")
+
+
+def _log_warning_main_process(msg: str, *args: Any, **kwargs: Any) -> None:
+    """
+    Emit a warning only from the main process.
+
+    Pool workers re-import this module; repeating env clamp warnings there duplicates
+    console output and interleaves with tqdm on stderr, corrupting the progress line.
+    """
+    try:
+        from multiprocessing import current_process
+
+        if current_process().name != "MainProcess":
+            return
+    except Exception:
+        pass
+    logger.warning(msg, *args, **kwargs)
+
+
+def _parse_env_int(
+    name: str,
+    default: int,
+    *,
+    minimum: Optional[int] = None,
+    maximum: Optional[int] = None,
+    warn_clamps: bool = True,
+) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        v = default
+    else:
+        try:
+            v = int(str(raw).strip(), 10)
+        except ValueError:
+            _log_warning_main_process("Invalid integer for %s=%r; using default %s", name, raw, default)
+            v = default
+    if minimum is not None and v < minimum:
+        if warn_clamps:
+            _log_warning_main_process("%s=%s below minimum %s; clamping", name, v, minimum)
+        v = minimum
+    if maximum is not None and v > maximum:
+        if warn_clamps:
+            _log_warning_main_process("%s=%s above maximum %s; clamping", name, v, maximum)
+        v = maximum
+    return v
+
+
+def _parse_env_float(name: str, default: float, *, minimum: Optional[float] = None, maximum: Optional[float] = None) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        v = default
+    else:
+        try:
+            v = float(str(raw).strip())
+        except ValueError:
+            _log_warning_main_process("Invalid float for %s=%r; using default %s", name, raw, default)
+            v = default
+    if minimum is not None and v < minimum:
+        _log_warning_main_process("%s=%s below minimum %s; clamping", name, v, minimum)
+        v = minimum
+    if maximum is not None and v > maximum:
+        _log_warning_main_process("%s=%s above maximum %s; clamping", name, v, maximum)
+        v = maximum
+    return v
 
 # Analysis version (used for cache compatibility)
 # This constant must be incremented manually ONLY when the analysis behavior changes in a way that would make cached results obsolete.
@@ -11,7 +155,7 @@ from typing import Set
 # The result interpretation logic
 # The chunking logic
 # The prompt extensions (VULNERABILITY_PROMPT_EXTENSION)
-ANALYSIS_VERSION = "1.0"
+ANALYSIS_VERSION = "2.0"
 
 # Default args values
 DEFAULT_ARGS = {
@@ -19,10 +163,9 @@ DEFAULT_ARGS = {
     'CHUNK_SIZE': 'auto-detected',
     'VULNS': 'all',
     'OUTPUT_FORMAT': 'all',
-    'ANALYSIS_TYPE': 'standard',
     'EMBEDDING_ANALYSIS_TYPE': 'file',
     'CACHE_DAYS': 7,
-    'EMBED_MODEL': 'nomic-embed-text:latest',
+    'EMBED_MODEL': 'nomic-embed-text',
     'SCAN_MODEL': None,  # If None, same as main model
 }
 
@@ -100,9 +243,123 @@ SUPPORTED_EXTENSIONS: Set[str] = {
     'gitignore', 'gitattributes', 'gitmodules'
 } 
 
-# Chunk configuration
+# Chunk configuration (static)
 MAX_CHUNK_SIZE = 2048
-CHUNK_ANALYZE_TIMEOUT = 120
+EMBEDDING_FALLBACK_MIN_CHUNK_SIZE = _parse_env_int(
+    "OASIS_EMBEDDING_FALLBACK_MIN_CHUNK_SIZE",
+    256,
+    minimum=64,
+)
+EMBEDDING_DETECTED_CHUNK_SIZE_MIN = _parse_env_int(
+    "OASIS_EMBEDDING_DETECTED_CHUNK_SIZE_MIN",
+    64,
+    minimum=1,
+)
+_DETECTED_CHUNK_SIZE_MAX_RECOMMENDED = MAX_CHUNK_SIZE * 4
+# Large env values are clamped silently; no CLI warning (no user action required).
+EMBEDDING_DETECTED_CHUNK_SIZE_MAX = _parse_env_int(
+    "OASIS_EMBEDDING_DETECTED_CHUNK_SIZE_MAX",
+    262144,
+    minimum=EMBEDDING_DETECTED_CHUNK_SIZE_MIN,
+    maximum=_DETECTED_CHUNK_SIZE_MAX_RECOMMENDED,
+    warn_clamps=False,
+)
+
+# =============================================================================
+# Ollama & HTTP client — chunk LLM timeouts, generation budget, transport
+# =============================================================================
+# Larger ``num_predict`` and longer server timeouts increase VRAM pressure and worst-case latency.
+CHUNK_ANALYZE_TIMEOUT = _parse_env_int(
+    "OASIS_CHUNK_ANALYZE_TIMEOUT_SEC",
+    120,
+    minimum=30,
+)
+# Upper bound for structured deep-generation tokens (VRAM / latency guardrail for misconfigured env).
+CHUNK_DEEP_NUM_PREDICT_CEILING = 32768
+
+CHUNK_DEEP_NUM_PREDICT = _parse_env_int(
+    "OASIS_CHUNK_DEEP_NUM_PREDICT",
+    8192,
+    minimum=256,
+    maximum=CHUNK_DEEP_NUM_PREDICT_CEILING,
+)
+
+_default_ollama_http_timeout = max(CHUNK_ANALYZE_TIMEOUT + 120, 240)
+OLLAMA_HTTP_CLIENT_TIMEOUT_SEC = _parse_env_int(
+    "OASIS_OLLAMA_HTTP_CLIENT_TIMEOUT_SEC",
+    _default_ollama_http_timeout,
+    minimum=max(60, CHUNK_ANALYZE_TIMEOUT),
+)
+
+OLLAMA_SLOW_CALL_WARNING_SEC = _parse_env_float(
+    "OASIS_OLLAMA_SLOW_CALL_WARNING_SEC",
+    45.0,
+    minimum=1.0,
+)
+
+# =============================================================================
+# Heuristic tuning — structured-output degeneracy + PoC pipeline (read before changing one knob)
+# =============================================================================
+# These interact through prompt size, VRAM, and latency. Prefer adjusting related constants
+# together and re-checking behavior under ``-d`` / DEBUG when tuning:
+# - STRUCTURED_OUTPUT_DEGENERACY_* — ``oasis/helpers/misc.py`` (zlib ratio +
+#   repeated-pattern probe on raw deep JSON before schema validation).
+# - POC_DIGEST_JSON_MAX_CHARS, POC_HINTS_MAX_CHARS, POC_STAGE_LOG_MAX_CHARS —
+#   ``oasis/helpers/poc.py`` (digest into LLM prompts,
+#   optional hints markdown, DEBUG truncation for stage logs).
+# Context expansion windows (CONTEXT_EXPAND_*) are separate but share the same token budget;
+# see ``oasis/helpers/context_expand.py`` (``expand_suspicious_chunk_records``).
+# Defaults target consumer GPUs; env var names are on each constant below.
+
+# =============================================================================
+# Structured-output degeneracy — deep JSON quality probe (zlib + repeat patterns)
+# =============================================================================
+STRUCTURED_OUTPUT_DEGENERACY_MIN_RAW_CHARS = _parse_env_int(
+    "OASIS_STRUCTURED_DEGENERACY_MIN_CHARS",
+    1600,
+    minimum=100,
+)
+STRUCTURED_OUTPUT_DEGENERACY_COMPRESSION_RATIO_MAX = _parse_env_float(
+    "OASIS_STRUCTURED_DEGENERACY_RATIO_MAX",
+    0.115,
+    minimum=0.01,
+    maximum=0.99,
+)
+STRUCTURED_OUTPUT_DEGENERACY_ZLIB_LEVEL = _parse_env_int(
+    "OASIS_STRUCTURED_DEGENERACY_ZLIB_LEVEL",
+    6,
+    minimum=1,
+    maximum=9,
+)
+STRUCTURED_OUTPUT_DEGENERACY_REPEAT_UNIT_LEN = _parse_env_int(
+    "OASIS_STRUCTURED_DEGENERACY_REPEAT_UNIT_LEN",
+    14,
+    minimum=4,
+)
+STRUCTURED_OUTPUT_DEGENERACY_REPEAT_MIN_RUNS = _parse_env_int(
+    "OASIS_STRUCTURED_DEGENERACY_REPEAT_MIN_RUNS",
+    16,
+    minimum=2,
+)
+
+# =============================================================================
+# LangGraph context expansion — windows around suspicious spans (characters)
+# =============================================================================
+CONTEXT_EXPAND_PADDING_BEFORE = _parse_env_int("OASIS_CONTEXT_EXPAND_PADDING_BEFORE", 40, minimum=0)
+CONTEXT_EXPAND_PADDING_AFTER = _parse_env_int("OASIS_CONTEXT_EXPAND_PADDING_AFTER", 40, minimum=0)
+CONTEXT_EXPAND_MAX_CHARS = _parse_env_int("OASIS_CONTEXT_EXPAND_MAX_CHARS", 12000, minimum=500)
+
+# =============================================================================
+# PoC pipeline — digest JSON, hints markdown, stage DEBUG logs (not SARIF/HTML reports)
+# =============================================================================
+POC_DIGEST_JSON_MAX_CHARS = _parse_env_int("OASIS_POC_DIGEST_JSON_MAX_CHARS", 14000, minimum=500)
+POC_STAGE_LOG_MAX_CHARS = _parse_env_int("OASIS_POC_STAGE_LOG_MAX_CHARS", 32000, minimum=500)
+POC_HINTS_MAX_CHARS = _parse_env_int("OASIS_POC_HINTS_MAX_CHARS", 20000, minimum=500)
+
+# =============================================================================
+# CLI debug — ``-d`` / llm_debug_log truncation (orthogonal to PoC/report payloads)
+# =============================================================================
+LLM_DEBUG_CONTENT_MAX_CHARS = _parse_env_int("OASIS_LLM_DEBUG_CONTENT_MAX_CHARS", 32000, minimum=500)
 EMBEDDING_THRESHOLDS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
 # Ollama API endpoint
@@ -148,6 +405,55 @@ KEYWORD_LISTS = {
     'STATISTICS_WORDS': ['statistics'],
     'TOP_WORDS': ['top', 'highest', 'most', 'better'],
     'VULNERABILITY_WORDS': ['vulnerability', 'vulnerabilities']
+}
+
+
+LANGUAGES = {
+    'en': {
+        'name': 'English',
+        'english_name': 'English',
+        'emoji': '🇬🇧'
+        },
+    'fr': {
+        'name': 'Français',
+        'english_name': 'French',
+        'emoji': '🇫🇷'
+    },
+    'es': {
+        'name': 'Español',
+        'english_name': 'Spanish',
+        'emoji': '🇪🇸'
+    },
+    'de': {
+        'name': 'Deutsch',
+        'english_name': 'German',
+        'emoji': '🇩🇪'
+    },
+    'it': {
+        'name': 'Italiano',
+        'english_name': 'Italian',
+        'emoji': '🇮🇹'
+    },
+    'pt': {
+        'name': 'Português',
+        'english_name': 'Portuguese',
+        'emoji': '🇵🇹'
+    },
+    'ru': {
+        'name': 'Русский',
+        'english_name': 'Russian',
+        'emoji': '🇷🇺'
+    },
+    'zh': {
+        'name': '中文',
+        'english_name': 'Chinese',
+        'emoji': '🇨🇳'
+    },
+    'ja': {
+        'name': '日本語',
+        'english_name': 'Japanese',
+        'emoji': '🇯🇵'
+    }
 }
 
 # Model emojis mapping
@@ -254,547 +560,153 @@ VULN_EMOJIS = {
     "unclassified": "❓ "
 }
 
-# Vulnerability mappings
-VULNERABILITY_MAPPING = {
-    'sqli': {
-        'name': 'SQL Injection',
-        'description': 'Code that might allow an attacker to inject SQL statements',
-        'patterns': [
-            'string concatenation in SQL query',
-            'user input directly in query',
-            'lack of parameterized queries',
-            'dynamic SQL generation',
-            'raw input in database operations',
-            'query parameters from request',
-            'execute raw SQL',
-            'format string in SQL',
-            'SQL query string interpolation',
-            'unsafe database.execute',
-            'LIKE operator with user input',
-            'ORDER BY with unsanitized input',
-            'MySQL query concatenation',
-            'PostgreSQL dynamic query',
-            'SQLite direct parameter',
-            'UNION injection vulnerability',
-            'database.query with variable',
-            'SQL WHERE clause with input',
-            'executeQuery with variable',
-            'createStatement().execute',
-            'executeSql with template'
-        ],
-        'impact': 'Can lead to data theft, data loss, authentication bypass, or complete system compromise',
-        'mitigation': 'Use parameterized queries or prepared statements, apply input validation, and use ORMs correctly'
-    },
-    'xss': {
-        'name': 'Cross-Site Scripting (XSS)',
-        'description': 'Vulnerabilities that allow attackers to inject client-side scripts',
-        'patterns': [
-            'unescaped output to HTML',
-            'innerHTML with user input',
-            'document.write with variables',
-            'eval with user content',
-            'rendering content without sanitization',
-            'dangerous DOM operations',
-            'raw user data in templates',
-            'bypass content sanitization',
-            'script injection vulnerability',
-            'missing HTML encoding',
-            'dangerouslySetInnerHTML',
-            'template literals with user data',
-            'attribute injection vulnerability',
-            'data-* attribute with user input',
-            'event handler assignment',
-            'href with javascript: protocol',
-            'DOM manipulation with createElement',
-            'React props sanitization missing',
-            'Vue v-html directive with data',
-            'Angular [innerHTML] binding',
-            'svg onload attribute',
-            'CSS expression with user input',
-            'postMessage without origin check'
-        ],
-        'impact': 'Can lead to session hijacking, credential theft, or delivery of malware to users',
-        'mitigation': 'Apply context-aware output encoding, use Content-Security-Policy, validate and sanitize all inputs'
-    },
-    'input': {
-        'name': "Insufficient Input Validation",
-        'description': 'Vulnerabilities due to inadequate validation of user inputs',
-        'patterns': [
-            "input validation missing",
-            "unvalidated user input",
-            "unsafe type casting",
-            "buffer overflow risk",
-            "command injection risk",
-            "path traversal vulnerability",
-            "unsafe deserialization",
-            "user-controlled parameter",
-            "direct use of request parameters",
-            "no input sanitization",
-            "raw form data processing",
-            "missing input boundary checks",
-            "format string vulnerability",
-            "input whitelist missing",
-            "untrusted data handling",
-            "user input without validation",
-            "integer overflow vulnerability",
-            "type confusion vulnerability",
-            "unchecked array bounds",
-            "memory corruption risk",
-            "lack of input length checks",
-            "improper input canonicalization",
-            "regex without timeout",
-            "client-side validation only",
-            "header injection vulnerability",
-            "content-type validation missing",
-            "file upload filtering bypass",
-            "numeric input without bounds check"
-        ],
-        'impact': 'Can lead to various attacks including injections, buffer overflows, and logical flaws',
-        'mitigation': 'Implement strict input validation, use type checking, and sanitize all user inputs'
-    },
-    'data': {
-        'name': "Sensitive Data Exposure",
-        'description': 'Instances where sensitive information is not properly protected',
-        'patterns': [
-            "sensitive data exposure",
-            "plaintext credentials",
-            "hardcoded secrets",
-            "API keys in code",
-            "unencrypted sensitive data",
-            "information disclosure",
-            "data leakage",
-            "sensitive data in client-side code",
-            "personal data mishandling",
-            "insufficient data protection",
-            "cleartext transmission of data",
-            "missing data encryption",
-            "PII exposure risk",
-            "credentials in config files",
-            "insufficient access controls",
-            "sensitive data caching",
-            "insecure data storage",
-            "PCI data mishandling",
-            "health information exposure",
-            "social security numbers unprotected",
-            "email addresses unsecured",
-            "financial data in plaintext",
-            "credentials in URL parameters",
-            "debug information disclosure",
-            "internal IP disclosure",
-            "server version exposure",
-            "technology stack disclosure",
-            "database connection string exposure",
-            "sensitive data in error messages",
-            "sensitive data in HTML comments"
-        ],
-        'impact': 'Exposure of confidential information, credentials, or personal data leading to unauthorized access',
-        'mitigation': 'Encrypt sensitive data, use secure storage solutions, and avoid hardcoding secrets'
-    },
-    'session': {
-        'name': "Session Management Issues",
-        'description': 'Problems with how user sessions are created, maintained, and terminated',
-        'patterns': [
-            "session fixation",
-            "insecure session handling",
-            "session hijacking risk",
-            "missing session timeout",
-            "weak session ID generation",
-            "session token exposure",
-            "cookie security missing",
-            "insufficient session expiration",
-            "missing secure flag",
-            "missing httpOnly flag",
-            "session data in URL",
-            "no session validation",
-            "predictable session tokens",
-            "persistent session without verification",
-            "client-side session storage",
-            "missing SameSite attribute",
-            "cross-domain cookie sharing",
-            "CSRF token missing",
-            "insecure JWT handling",
-            "JWT without expiration",
-            "JWT signature validation missing",
-            "session reuse vulnerability",
-            "lack of session regeneration",
-            "concurrent session control missing",
-            "session token in logs",
-            "insecure cookie attributes",
-            "cookie without path restriction",
-            "OAuth state parameter missing",
-            "cookie prefixing missing",
-            "session token in referrer header"
-        ],
-        'impact': 'Account takeover, session hijacking, and unauthorized access to user accounts',
-        'mitigation': 'Implement secure session handling, use proper timeout settings, and protect session tokens'
-    },
-    'config': {
-        'name': "Security Misconfiguration",
-        'description': 'Insecure configuration settings that can expose vulnerabilities',
-        'patterns': [
-            "security misconfiguration",
-            "default credentials",
-            "debug mode enabled",
-            "insecure permissions",
-            "unnecessary features enabled",
-            "missing security headers",
-            "verbose error messages",
-            "directory listing enabled",
-            "default accounts enabled",
-            "unnecessary services running",
-            "insecure HTTP methods allowed",
-            "default configuration unchanged",
-            "development settings in production",
-            "outdated software components",
-            "missing CORS protections",
-            "insecure TLS configuration",
-            "dangerous HTTP headers",
-            "default error pages",
-            "information disclosure in responses",
-            "HTTP header misconfiguration",
-            "X-Frame-Options missing",
-            "Content-Security-Policy missing",
-            "missing X-Content-Type-Options",
-            "insecure deserialization settings",
-            "missing rate limiting",
-            "HSTS not implemented",
-            "unnecessary HTTP methods enabled",
-            "open cloud storage buckets",
-            "insecure file permissions",
-            "database exposed to internet",
-            "unauthenticated API endpoints",
-            "CORS wildcard origin",
-            "weak password policy configuration"
-        ],
-        'impact': 'Information disclosure, unauthorized access, or system compromise through exposed functionality',
-        'mitigation': 'Use secure configuration templates, disable unnecessary features, and implement proper security headers'
-    },
-    'logging': {
-        'name': "Sensitive Data Logging",
-        'description': 'Exposure of sensitive information through application logs',
-        'patterns': [
-            "sensitive data in logs",
-            "password logging",
-            "PII in logs",
-            "credit card logging",
-            "token logging",
-            "unsafe error logging",
-            "debug logging in production",
-            "authentication data in logs",
-            "session identifiers logged",
-            "biometric data logging",
-            "health information logged",
-            "authorization tokens in logs",
-            "secret keys in log output",
-            "API keys in debug logs",
-            "query parameters logged",
-            "financial data in logs",
-            "unmasked credentials in traces",
-            "personal addresses logged",
-            "log files with excessive permissions",
-            "log data without anonymization"
-        ],
-        'impact': 'Disclosure of sensitive user data, credentials, or security tokens via log files',
-        'mitigation': 'Filter sensitive data from logs, use proper log levels, and implement secure logging practices'
-    },
-    'crypto': {
-        'name': "Insecure Cryptographic Usage",
-        'description': 'Use of weak or deprecated cryptographic algorithms or practices',
-        'patterns': [
-            "weak encryption",
-            "insecure random number generation",
-            "weak hash algorithm",
-            "MD5 usage",
-            "SHA1 usage",
-            "ECB mode encryption",
-            "static initialization vector",
-            "hardcoded encryption key",
-            "insufficient key size",
-            "broken cipher implementation",
-            "predictable random generator",
-            "insufficient entropy",
-            "math.random for cryptography",
-            "cryptographic key reuse",
-            "non-cryptographic PRNG",
-            "CBC without MAC",
-            "missing key rotation",
-            "RC4 cipher usage",
-            "DES or 3DES usage",
-            "RSA with weak padding",
-            "incorrect certificate validation",
-            "custom cryptographic algorithms",
-            "use of broken cryptographic libraries",
-            "hardcoded salt values"
-        ],
-        'impact': 'Data compromise through cryptographic attacks, leading to confidentiality breaches',
-        'mitigation': 'Use modern encryption standards, secure key management, and proper cryptographic implementations'
-    },
-    'rce': {
-        'name': 'Remote Code Execution',
-        'description': 'Vulnerabilities allowing execution of arbitrary code',
-        'patterns': [
-            'eval with user input',
-            'exec function with variables',
-            'system call with parameters',
-            'deserialization of untrusted data',
-            'child_process.exec',
-            'os.system with variables',
-            'subprocess module with user input',
-            'template rendering with code execution',
-            'shell command injection',
-            'dynamic code evaluation',
-            'unsafe reflection',
-            'unsafe use of Runtime.exec',
-            'popen in python',
-            'ProcessBuilder in Java',
-            'unsafe pickle loading',
-            'yaml.load without safe flag',
-            'json.loads with custom decoder',
-            'unserialize in PHP',
-            'eval in JavaScript',
-            'Function constructor with input',
-            'new Function with variable',
-            'Groovy script execution',
-            'template expression evaluation',
-            'JSP expression injection',
-            'code interpolation in string',
-            'RCE through SSTI'
-        ],
-        'impact': 'Complete system compromise, data theft, or service disruption',
-        'mitigation': 'Avoid dangerous functions, use allowlists for commands, validate and sanitize all inputs'
-    },
-    'ssrf': {
-        'name': 'Server-Side Request Forgery',
-        'description': 'Vulnerabilities that allow attackers to induce the server to make requests',
-        'patterns': [
-            'URL fetching from user input',
-            'request module with variable URL',
-            'http client with dynamic endpoint',
-            'webhook implementation',
-            'remote file inclusion',
-            'dynamic API requests',
-            'URL parsing without validation',
-            'fetch with user-provided URL',
-            'unsafe URL redirection',
-            'axios.get with variable',
-            'curl functions with parameters',
-            'http.get with user input',
-            'urllib request with variable',
-            'requests.post with dynamic URL',
-            'guzzle client with user URL',
-            'java URL connection with variable',
-            'open redirect to internal hosts',
-            'no URL schema validation',
-            'IP address filtering bypass',
-            'DNS rebinding vulnerability',
-            'localhost access through SSRF',
-            'cloud metadata API access',
-            'internal service discovery',
-            'webhook callback without validation',
-            'file:// protocol allowed'
-        ],
-        'impact': 'Access to internal services, data theft, or system compromise via internal network',
-        'mitigation': 'Validate and sanitize URLs, use allowlists, block private IPs and local hostnames'
-    },
-    'xxe': {
-        'name': 'XML External Entity Injection',
-        'description': 'Attacks against applications that parse XML input',
-        'patterns': [
-            'XML parser without entity restrictions',
-            'XML processing without disabling DTD',
-            'DocumentBuilder without secure settings',
-            'SAX parser with default configuration',
-            'XmlReader without proper settings',
-            'SOAP message parsing',
-            'external entity resolution enabled',
-            'XXE vulnerability',
-            'unsafe DOM parser',
-            'XML libraries with dangerous defaults',
-            'libxml2 without noent',
-            'XMLReader with external entities',
-            'XmlDocument with DTD processing',
-            'insecure XML deserialization',
-            'XML with custom entity handling',
-            'JAXP without secure processing',
-            'untrusted DOCX/XLSX processing',
-            'SVG with embedded XXE',
-            'RSS/Atom feed parsing vulnerability',
-            'XML without schema validation',
-            'XSLT processing with external entities',
-            'XPath evaluation with untrusted XML',
-            'XML bomb vulnerability',
-            'XML parser with custom resolvers'
-        ],
-        'impact': 'File disclosure, SSRF, denial of service, or data theft',
-        'mitigation': 'Disable DTDs and external entities in XML parsers, validate and sanitize inputs'
-    },
-    'pathtra': {
-        'name': 'Path Traversal',
-        'description': 'Vulnerabilities allowing access to files outside intended directory',
-        'patterns': [
-            'file operations with user input',
-            'path concatenation without validation',
-            'directory traversal vulnerability',
-            'reading files with variable paths',
-            'filepath not normalized',
-            'unsafe file access',
-            'open function with user parameters',
-            'path manipulation risk',
-            'file include vulnerability',
-            'dot-dot-slash in paths',
-            'missing filepath sanitization',
-            'relative path navigation',
-            'zip slip vulnerability',
-            'path.join with user input',
-            'file.readFile with dynamic path',
-            'filesystem access without validation',
-            'pathname not canonicalized',
-            'archive extraction vulnerability',
-            'symlink following risk',
-            'file download with arbitrary path',
-            'file.read without basedir check',
-            'directory traversal with encoded slash',
-            'file upload path manipulation',
-            'path normalization bypass'
-        ],
-        'impact': 'Unauthorized access to sensitive files, configuration data, or credentials',
-        'mitigation': 'Validate file paths, use allowlists, avoid using user input in file operations'
-    },
-    'idor': {
-        'name': 'Insecure Direct Object Reference',
-        'description': 'Vulnerabilities exposing direct references to internal objects',
-        'patterns': [
-            'user ID in URL parameters',
-            'missing access control checks',
-            'direct object reference in request',
-            'lack of authorization validation',
-            'resource ID manipulation vulnerability',
-            'authorization bypass risk',
-            'direct reference to database records',
-            'object level authorization missing',
-            'unsafe parameter handling',
-            'insufficient permission checking',
-            'horizontal privilege escalation risk',
-            'account enumeration vulnerability',
-            'numeric identifier manipulation',
-            'UUID predictability issue',
-            'missing row-level security',
-            'incremental reference exploitation',
-            'API endpoint without ownership check',
-            'user data access without verification',
-            'mass assignment vulnerability',
-            'blind IDOR vulnerability',
-            'parameter tampering vulnerability',
-            'access control matrix missing',
-            'insufficient object property filtering',
-            'user impersonation through reference',
-            'cross-tenant data access'
-        ],
-        'impact': 'Unauthorized access to data, privilege escalation, or data theft',
-        'mitigation': 'Implement proper access controls, use indirect references, validate user authorization'
-    },
-    'secrets': {
-        'name': 'Hardcoded Secrets',
-        'description': 'Sensitive data embedded directly in code',
-        'patterns': [
-            'hardcoded API key',
-            'password in source code',
-            'hardcoded credentials',
-            'embedded secret',
-            'private key in code',
-            'OAuth token in variables',
-            'secret key declaration',
-            'cleartext password',
-            'connection string with credentials',
-            'JWT secret in code',
-            'database password hardcoded',
-            'encryption key in source',
-            'AWS access key hardcoded',
-            'Azure connection string in code',
-            'Google API key in source',
-            'Firebase credentials embedded',
-            'SSH private key in repository',
-            'certificate private key in code',
-            'auth token hardcoded',
-            'cryptographic seed hardcoded',
-            'sensitive data in client-side code',
-            'access token in JavaScript',
-            'plaintext secrets in comments',
-            'hardcoded test credentials',
-            'sensitive values in configuration',
-            'admin password default'
-        ],
-        'impact': 'Credential exposure leading to unauthorized access or account compromise',
-        'mitigation': 'Use environment variables or secure vaults, avoid hardcoding any secrets'
-    },
-    'auth': {
-        'name': 'Authentication Issues',
-        'description': 'Weaknesses in authentication mechanisms',
-        'patterns': [
-            'weak password requirements',
-            'missing multi-factor authentication',
-            'insufficient credential handling',
-            'authentication bypass vulnerability',
-            'insecure password storage',
-            'broken authentication flow',
-            'credential reset weakness',
-            'session fixation vulnerability',
-            'insecure remember me function',
-            'inadequate brute force protection',
-            'default or weak credentials',
-            'password check timing attack',
-            'lack of account lockout mechanism',
-            'insecure password recovery',
-            'missing CAPTCHA protection',
-            'plain text password storage',
-            'credential stuffing vulnerability',
-            'password reuse vulnerability',
-            'authorization header exposure',
-            'OAuth redirect URI validation',
-            'JWT without signature verification',
-            'missing identity federation security',
-            'insecure authentication protocol',
-            'passwordless authentication risks',
-            'knowledge-based authentication weakness',
-            'shared account vulnerability'
-        ],
-        'impact': 'Account compromise, privilege escalation, or unauthorized access',
-        'mitigation': 'Implement strong password policies, use MFA, secure session handling'
-    },
-    'csrf': {
-        'name': 'Cross-Site Request Forgery',
-        'description': 'Attacks that force users to execute unwanted actions',
-        'patterns': [
-            'missing CSRF token',
-            'state-changing operation without protection',
-            'form submission without CSRF verification',
-            'cookie-only authentication',
-            'missing SameSite attribute',
-            'actions without user confirmation',
-            'lack of request origin validation',
-            'session handling vulnerability',
-            'missing anti-forgery token',
-            'insecure cross-domain requests',
-            'automatic actions without validation',
-            'CSRF token validation missing',
-            'CSRF token leakage',
-            'improper token binding to session',
-            'token reuse vulnerability',
-            'lack of double submit cookie',
-            'GET request with state change',
-            'failure to check referer header',
-            'CORS misconfiguration for CSRF',
-            'XHR without same-origin policy',
-            'JSON request without CSRF protection',
-            'cross-subdomain CSRF',
-            'CORS preflight bypass',
-            'CSRF via SVG or image upload',
-            'browser cookie handling vulnerability'
-        ],
-        'impact': 'Unauthorized actions performed on behalf of authenticated users',
-        'mitigation': 'Use CSRF tokens, SameSite cookies, and verify request origins'
-    }
-}
+
+def _vulnerability_definition_shape_error(data: Any) -> Optional[str]:
+    """
+    Return a short error message if ``data`` is not a usable vulnerability definition dict,
+    otherwise None.
+    """
+    if not isinstance(data, dict):
+        return "root value must be a JSON object"
+    for key in ("name", "description", "impact", "mitigation"):
+        if key not in data:
+            return f"missing required key {key!r}"
+        val = data[key]
+        if not isinstance(val, str):
+            return f"{key!r} must be a string, got {type(val).__name__}"
+    if "patterns" not in data:
+        return "missing required key 'patterns'"
+    patterns = data["patterns"]
+    if not isinstance(patterns, list):
+        return f"'patterns' must be a list, got {type(patterns).__name__}"
+    if not patterns:
+        return "'patterns' must be a non-empty list"
+    return next(
+        (
+            f"'patterns'[{i}] must be a string, got {type(item).__name__}"
+            for i, item in enumerate(patterns)
+            if not isinstance(item, str)
+        ),
+        None,
+    )
+
+
+def load_vulnerability_definitions() -> Dict[str, Any]:
+    """
+    Load vulnerability definitions from JSON files in a vulnerability/ directory.
+
+    Resolution order for the directory path:
+        1. ``OASIS_VULNERABILITY_DIR`` environment variable (expanded path), if set.
+           If that value cannot be resolved (invalid path, I/O errors), a warning is logged
+           and resolution continues with (2).
+        2. ``<repository root>/vulnerability`` (parent of the ``oasis`` package directory).
+
+    If the directory is missing, not a directory, or no definitions load successfully
+    (empty directory or only unreadable/invalid JSON), returns the legacy built-in mapping.
+
+    Partial loads are returned when at least one file succeeds; failures are logged.
+
+    Each JSON file must define an object with string fields ``name``, ``description``,
+    ``impact``, ``mitigation``, and a non-empty ``patterns`` list of strings. Invalid
+    shapes are rejected (logged, counted as failures) and are not stored.
+
+    Returns:
+        Dict containing vulnerability definitions.
+    """
+    vulnerabilities: Dict[str, Any] = {}
+    package_dir = Path(__file__).resolve().parent
+    default_vuln_dir = package_dir.parent / "vulnerability"
+    if env_dir := os.environ.get("OASIS_VULNERABILITY_DIR"):
+        try:
+            vuln_dir = Path(env_dir).expanduser().resolve()
+        except (OSError, RuntimeError) as exc:
+            logger.warning(
+                "Invalid OASIS_VULNERABILITY_DIR %r (%s); trying default directory %s.",
+                env_dir,
+                exc,
+                default_vuln_dir,
+            )
+            vuln_dir = default_vuln_dir
+    else:
+        vuln_dir = default_vuln_dir
+
+    if not vuln_dir.exists() or not vuln_dir.is_dir():
+        logger.warning(
+            "Vulnerability definitions directory not found or not a directory (%s); "
+            "using built-in legacy definitions.",
+            vuln_dir,
+        )
+        return _get_legacy_vulnerability_mapping()
+
+    loaded_files = 0
+    failed_files = 0
+
+    for json_file in sorted(vuln_dir.glob("*.json")):
+        vuln_key = json_file.stem
+        if vuln_key in vulnerabilities:
+            logger.warning(
+                "Duplicate vulnerability key '%s' in %s; skipping to preserve the first entry.",
+                vuln_key,
+                json_file,
+            )
+            failed_files += 1
+            continue
+        try:
+            with json_file.open("r", encoding="utf-8") as f:
+                vuln_data = json.load(f)
+            shape_err = _vulnerability_definition_shape_error(vuln_data)
+            if shape_err is not None:
+                failed_files += 1
+                logger.warning(
+                    "Vulnerability definition in %s has invalid shape (%s); skipping.",
+                    json_file,
+                    shape_err,
+                )
+                continue
+            vulnerabilities[vuln_key] = vuln_data
+            loaded_files += 1
+        except json.JSONDecodeError as exc:
+            failed_files += 1
+            logger.warning(
+                "Failed to decode vulnerability definition file %s: %s",
+                json_file,
+                exc,
+            )
+        except OSError as exc:
+            failed_files += 1
+            logger.warning(
+                "Failed to read vulnerability definition file %s: %s",
+                json_file,
+                exc,
+            )
+
+    if loaded_files == 0:
+        logger.warning(
+            "No vulnerability definitions could be loaded from %s; "
+            "using built-in legacy definitions.",
+            vuln_dir,
+        )
+        return _get_legacy_vulnerability_mapping()
+
+    if failed_files > 0:
+        logger.warning(
+            "Loaded vulnerability definitions from %d file(s) in %s, but %d file(s) failed or were skipped.",
+            loaded_files,
+            vuln_dir,
+            failed_files,
+        )
+
+    return vulnerabilities
+
+def _get_legacy_vulnerability_mapping() -> Dict[str, Any]:
+    """
+    Legacy hardcoded vulnerability definitions for backward compatibility.
+    This serves as a fallback when JSON files are not available.
+    """
+    return copy.deepcopy(LEGACY_VULNERABILITY_MAPPING)
+
+# Load vulnerability definitions dynamically
+VULNERABILITY_MAPPING = load_vulnerability_definitions()
 
 # Prompt extension for vulnerability analysis
 VULNERABILITY_PROMPT_EXTENSION = """
@@ -840,11 +752,29 @@ EXTRACT_FUNCTIONS = {
 }
 
 # Report configuration
+# Intentionally computed at import time: executive-summary tiers are static constants for a process run.
+# If tiers become runtime-configurable later, move this interpolation to report-generation time.
+from .helpers.exec_summary_tiers import executive_summary_tiers_inline_text, executive_summary_tiers_markdown_bullets
+
+_EXEC_SUMMARY_TIERS_BULLETS_MD = executive_summary_tiers_markdown_bullets()
+_EXEC_SUMMARY_TIERS_INLINE_TEXT = executive_summary_tiers_inline_text()
+
 REPORT = {
-    'OUTPUT_FORMATS': ['pdf', 'html', 'md'],
+    'OUTPUT_FORMATS': ['json', 'sarif', 'pdf', 'html', 'md'],
+    # Dashboard / API: human-readable first; any OUTPUT_FORMATS entry missing here is appended after
+    'DASHBOARD_FORMAT_DISPLAY_ORDER': ['html', 'pdf', 'md', 'json', 'sarif'],
+    # Realtime dashboard behavior
+    'DASHBOARD_REALTIME_ENABLED': True,
+    'DASHBOARD_SOCKETIO_CLIENT_URL': 'https://cdn.socket.io/4.7.5/socket.io.min.js',
+    'DASHBOARD_SOCKETIO_ASYNC_MODE': 'auto',
+    # Optional extra Socket.IO origins (use {port} for the dashboard port). Runtime always
+    # adds http://127.0.0.1:{port}, http://localhost:{port}, and when web_expose is not
+    # "local", discovered LAN http://<ip>:{port} URLs for remote browsers.
+    'DASHBOARD_SOCKETIO_CORS_ALLOWED_ORIGINS': [],
+    'DASHBOARD_PROGRESS_MONITOR_INTERVAL_SECONDS': 2.0,
     'OUTPUT_DIR': 'security_reports',
     'BACKGROUND_COLOR': '#F5F2E9',
-    'EXPLAIN_ANALYSIS': """
+    'EXPLAIN_ANALYSIS': f"""
 ## About This Report
 This security analysis report uses embedding similarity to identify potential vulnerabilities in your codebase.
 
@@ -856,9 +786,21 @@ Code embeddings are advanced representations that convert your code into numeric
 - They provide a **measure of relevance** through similarity scores (0.0-1.0)
 
 ## Working with Similarity Scores
-- **High (≥0.6)**: Strong contextual match requiring immediate attention
-- **Medium (0.4-0.6)**: Partial match worth investigating
-- **Low (<0.4)**: Minimal contextual relationship, often false positives
+Similarity scores (0.0–1.0) measure **semantic overlap** between a vulnerability description and your code via embeddings. They are **not** the same as structured finding severity labels from the deep analysis model.
+
+### Executive summary tiers (embedding relevance only)
+The executive summary groups matches by cosine similarity using fixed cutoffs — **independent** of `--threshold` and of per-finding severities in vulnerability reports:
+
+{_EXEC_SUMMARY_TIERS_BULLETS_MD}
+
+### Informal triage bands (reports and audit exploration)
+When reading distribution tables or prioritizing manual review without using the executive summary tiers above, many teams use coarse bands such as:
+
+- **Stronger contextual match (≥0.6)**: Worth reviewing early  
+- **Partial match (0.4–0.6)**: Investigate with context  
+- **Weaker match (<0.4)**: Often noise; verify against the vulnerability description  
+
+Your configured **scan threshold** (`--threshold`, default 0.5) decides which files enter the scanner at all.
 
 <div class="page-break"></div>
 
@@ -877,13 +819,37 @@ Code embeddings are advanced representations that convert your code into numeric
 - Adjust chunk size (`--chunk-size 2048`) for more contextual analysis of larger functions
 
 ## Next Steps
-- Review all high-risk findings immediately
-- Schedule code reviews for medium-risk items
+- Review the strongest embedding matches and structured findings first
+- Schedule code reviews for items with substantive LLM findings or high similarity
 - Consider incorporating these checks into your CI/CD pipeline
-- Use the executive summary to communicate risks to management
+- Use the executive summary to communicate **coverage and similarity-based prioritization** to stakeholders (pair it with detail reports for actual severity)
     """,
-    'EXPLAIN_EXECUTIVE_SUMMARY': """
-## Executive Summary
-This report provides a high-level overview of security vulnerabilities detected in the codebase.
+    'EXPLAIN_EXECUTIVE_SUMMARY': f"""
+## How to read this executive summary
+The tables below group analyzed files by **embedding similarity** between each vulnerability type and the file (cosine similarity). This ordering reflects **retrieval relevance**, not exploit severity and not the severity labels inside per-vulnerability JSON/HTML reports.
+
+**Tiers**: {_EXEC_SUMMARY_TIERS_INLINE_TEXT}. For authoritative finding counts and severities, open the linked vulnerability-type reports.
     """
 }
+
+_cfg_log = logging.getLogger(__name__)
+
+
+def validate_report_dashboard_formats(report_cfg: Optional[Dict[str, Any]] = None) -> List[str]:
+    """
+    Return ``DASHBOARD_FORMAT_DISPLAY_ORDER`` entries that are not in ``OUTPUT_FORMATS``
+    (case-insensitive). Logs a warning when any are found.
+
+    Not run at import time: call from CLI / web entrypoints (see ``OasisScanner._init_arguments``)
+    or from tests that import this function explicitly.
+    """
+    r = report_cfg if report_cfg is not None else REPORT
+    allowed_lower = {str(x).lower() for x in (r.get("OUTPUT_FORMATS") or [])}
+    order = r.get("DASHBOARD_FORMAT_DISPLAY_ORDER") or []
+    bad = [x for x in order if str(x).lower() not in allowed_lower]
+    if bad:
+        _cfg_log.warning(
+            "DASHBOARD_FORMAT_DISPLAY_ORDER contains formats missing from OUTPUT_FORMATS: %s",
+            bad,
+        )
+    return bad
