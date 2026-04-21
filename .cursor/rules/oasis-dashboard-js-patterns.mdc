@@ -7,7 +7,8 @@ alwaysApply: false
 # OASIS Dashboard JS Patterns
 
 - **No duplicated logic**: **Never** repeat the same DOM, fetch, formatting, or state-handling logic in multiple files. Extract to the appropriate module (`utils`, `api`, etc.) and import—same rule as Python: one canonical behavior, **zero** parallel copies.
-- Keep dashboard code modular by concern (`bootstrap`, `api`, `filters`, `interactions`, `modal`, `views`, `utils`).
+- Keep dashboard code modular by concern (`bootstrap`, `api`, `filters`, `interactions`, `modal`, `views`, `utils`, **`assistant`**).
+- **Assistant**: Chat UI and client logic live in `assistant.js` with shared constants in `assistant-constants.js`; HTTP calls go through `api.js` (same pattern as other dashboard APIs—no duplicated `fetch` wiring in `modal.js`). Changing assistant request/response shapes requires updating both JS and `oasis/web.py` handlers together.
 - Extend the shared `DashboardApp` namespace instead of introducing parallel globals.
 - Centralize formatting, display helpers, and repeated request/response handling in utility modules; adding a second inline copy of an existing pattern is **not** acceptable—extend the shared helper instead.
 - When fixing UI bugs, update both interaction scripts and matching templates if the issue spans behavior and markup.

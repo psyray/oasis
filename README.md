@@ -37,6 +37,7 @@
 
 ## 🌟 Features
 
+- 🤖 **Dashboard assistant**: For canonical **JSON** reports, an in-modal AI assistant triages findings with optional **RAG** over the local embedding cache, **Markdown** replies, persisted **chat sessions** beside each report, and configurable Ollama/RAG flags (`--web-ollama-url`, `--web-embed-model`, `--web-assistant-rag`)
 - 🔍 **Multi-Model Analysis**: Leverage multiple Ollama models for comprehensive security scanning
 - 🔄 **Two-Phase Scanning**: Use lightweight models for initial scanning and powerful models for deep analysis
 - 🧠 **LangGraph Orchestration**: Single pipeline (discover → scan → expand → deep → verify → report, optional PoC assist) with bounded context-expand retries
@@ -206,8 +207,8 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 - **`--langgraph-max-expand`** `N`: Maximum **context-expand** retries after verify detects structured-output problems (default: **2**).
 - **`--poc-hints`**: Log optional high-level PoC hint bullets from structured findings only (**no** extra LLM call; **does not** run code).
 - **`--poc-assist`**: Ask the deep model for a standalone executable PoC (script or commands) from findings; **logged only** — OASIS does not run generated code.
-- **`--custom-instructions`**: Extra text appended to deep-analysis and `--poc-assist` prompts (defensive-review guidance).
-- **`--custom-instructions-file`**: UTF-8 file merged with `--custom-instructions` (file first, then inline text).
+- **`--custom-instructions`**: Extra text appended to deep-analysis and **`--poc-assist`** prompts (merged with the file variant below; does **not** inject into the dashboard assistant system prompt—the assistant uses the canonical report JSON and optional RAG).
+- **`--custom-instructions-file`**: UTF-8 file merged with **`--custom-instructions`** (file first, then inline text).
 - `--threshold` `-t`: Similarity threshold (default: 0.5)
 - `--vulns` `-v`: Vulnerability types to check (comma-separated or 'all')
 - `--chunk-size` `-ch`: Maximum size of text chunks for embedding (default: auto-detected)
@@ -469,6 +470,7 @@ oasis -i ./critical-service -sm qwen2.5-coder:7b -m bugtraceai-apex-q4 -t 0.6 -s
 
 ### Web dashboard and Reload
 
+- **Assistant** (when viewing a JSON-backed report): open the Assistant panel in the vulnerability modal to chat about the current report; optional **RAG** uses the same project root and `.oasis_cache` embedding pickle as the scan when enabled. You can disable RAG globally at startup (`--no-web-assistant-rag`) or per message from the UI when supported.
 - Statistics and risk summaries are read from **`json/*.json`**.
 - **Reload** refreshes both `/api/stats?force=1` and `/api/reports?force=1` so listings stay in sync with the filesystem.
 - Canonical JSON reports are previewed in the Web UI by rendering HTML from the JSON via the Jinja template, so the modal matches the HTML/PDF structure as closely as possible.
