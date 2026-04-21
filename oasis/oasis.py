@@ -48,6 +48,7 @@ class OasisScanner:
         self.embed_models = [DEFAULT_ARGS["EMBED_MODEL"]]
         self.primary_embed_model = DEFAULT_ARGS["EMBED_MODEL"]
         self.chunk_size_is_manual = False
+        self._pending_exit_code = None
 
     @staticmethod
     def _parse_embed_models_csv(value: str) -> list[str]:
@@ -438,7 +439,20 @@ class OasisScanner:
                                 help='Ollama URL (default: http://localhost:11434)')
         special_group.add_argument('-V', '--version', action='store_true',
                                 help='Show OASIS version and exit')
-        
+        update_group = special_group.add_mutually_exclusive_group()
+        update_group.add_argument(
+            '--check-update',
+            dest='check_update',
+            action='store_true',
+            help='Compare this install to the latest stable GitHub release and exit',
+        )
+        update_group.add_argument(
+            '--self-update',
+            dest='self_update',
+            action='store_true',
+            help='Upgrade from the latest stable GitHub release (requires pipx on PATH)',
+        )
+
         return parser
 
     _REMOVED_LEGACY_ANALYSIS_FLAGS = frozenset({"--adaptive", "-ad", "--analyze-type", "-at"})
@@ -669,6 +683,9 @@ class OasisScanner:
         # Parse and validate arguments
         init_result = self._init_arguments(args)
 
+        if self._pending_exit_code is not None:
+            return int(self._pending_exit_code)
+
         # Handle special early termination cases
         if init_result is None:
             return 0  # Success exit code for commands like --list-models
@@ -759,6 +776,22 @@ class OasisScanner:
             from .__init__ import __version__
             print(f"OASIS - Ollama Automated Security Intelligence Scanner v{__version__}")
             return None
+
+        if getattr(self.args, "check_update", False):
+            from .helpers.cli_update import print_check_update
+
+            self._pending_exit_code = print_check_update()
+            return None
+
+        if getattr(self.args, "self_update", False):
+            from .helpers.cli_update import run_self_update
+
+            self._pending_exit_code = run_self_update()
+            return None
+
+        from .helpers.cli_update import maybe_emit_update_banner
+
+        maybe_emit_update_banner(silent=bool(self.args.silent))
 
         if self.args.list_models:
             # Setup minimal logging without file creation

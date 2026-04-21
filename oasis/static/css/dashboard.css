@@ -2437,7 +2437,7 @@ body.modal-open {
     }
 }
 .oasis-assistant-log {
-    max-height: 540px;
+    max-height: 640px;
     overflow-y: auto;
     background: var(--light-gray);
     padding: 0.65rem 0.5rem;

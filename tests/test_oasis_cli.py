@@ -164,6 +164,8 @@ class TestOasisCliInitArguments(unittest.TestCase):
     def _build_init_namespace(input_path: str, output_format: str = "%%%invalid%%%"):
         namespace = MagicMock()
         namespace.version = False
+        namespace.check_update = False
+        namespace.self_update = False
         namespace.list_models = False
         namespace.silent = False
         namespace.models = None

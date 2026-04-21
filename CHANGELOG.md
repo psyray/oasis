@@ -27,6 +27,7 @@
 - 🌍 Added report language metadata (`language`) in canonical JSON and dashboard language flags sourced from report data
 - 🌐 Added dashboard language filter with emoji-flag display aligned with report language badges
 - 🧭 Added `.cursor/` rules and agent skills for implementation, releases, and git conventions
+- 📦 **CLI updates from GitHub releases** (no PyPI): **`--check-update`** compares the installed version to the **latest stable** release via the GitHub API (**draft** and **prerelease** releases are ignored); **`--self-update`** reinstalls from `git+https://github.com/psyray/oasis.git@<tag>` using **pipx** when the package is installed under **site-packages** (editable/dev installs get `git pull` guidance). Optional **stderr** notice when a newer stable release exists, with **24 h** on-disk cache under `XDG_CACHE_HOME` / `~/.cache/oasis/`; set **`OASIS_NO_UPDATE_CHECK=1`** to disable. Adds **`packaging`** as a declared runtime dependency for version ordering
 
 ### 🐛 Fixed
 - 🔧 Fixed **`--embeddings-analyze-type`** default: was incorrectly tied to the removed analyze-type default; default is now **`file`** (`EMBEDDING_ANALYSIS_TYPE`)

@@ -19,9 +19,14 @@ class AssistantThinkSplit:
     thought_segments: List[str]
 
 
-# Matches ``<|channel>thought <channel|>`` then body until ``\\n\\n`` (reply) or EOS.
+# Open: ``<|channel>`` + one or more ``thought`` tokens; close: ``<channel|>`` or ``<|channel|>``
+# (provider output varies; some models repeat ``thought`` or use a symmetric close tag).
 _CHANNEL_THOUGHT_OPEN = re.compile(
-    r"<\|channel>\s*thought\s*<\s*channel\s*\|\s*>",
+    r"<\|channel>\s*(?:thought\s*)+"
+    r"(?:"
+    r"<\s*channel\s*\|>"  # e.g. <channel|>
+    r"|<\s*\|channel\|>"  # e.g. <|channel|>
+    r")",
     re.IGNORECASE,
 )
 
@@ -38,18 +43,34 @@ _THINK_BLOCK_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 
 def _strip_channel_thought_prefix(work: str, segments: List[str]) -> str:
-    """Extract ``<|channel>thought <channel|>…`` blocks; optional ``\\n\\n`` splits thought vs reply."""
+    """Extract ``<|channel>thought … <|channel|>`` segments.
+
+    End of segment: next channel opener if any (handles multiple reasoning blocks back-to-back),
+    else first ``\\n\\n`` (thought vs reply), else end of string.
+    """
     while True:
         m = _CHANNEL_THOUGHT_OPEN.search(work)
         if not m:
             return work
+        before = work[: m.start()]
         tail = work[m.end() :]
-        parts = tail.split("\n\n", 1)
-        thought_body = parts[0].strip()
-        visible_rest = parts[1].strip() if len(parts) > 1 else ""
+        next_open = _CHANNEL_THOUGHT_OPEN.search(tail)
+        para_idx = tail.find("\n\n")
+
+        if next_open is not None and (para_idx == -1 or next_open.start() < para_idx):
+            end = next_open.start()
+            thought_body = tail[:end].strip()
+            # Keep remainder starting at the next opener so the outer loop extracts it too.
+            work = before + tail[end:]
+        elif para_idx != -1:
+            thought_body = tail[:para_idx].strip()
+            work = before + tail[para_idx + 2 :]
+        else:
+            thought_body = tail.strip()
+            work = before
+
         if thought_body:
             segments.append(thought_body)
-        work = work[: m.start()] + visible_rest
 
 
 def parse_assistant_think(text: str) -> AssistantThinkSplit:
