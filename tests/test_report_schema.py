@@ -318,6 +318,22 @@ class TestReportSchema(unittest.TestCase):
         self.assertIn("strong", html)
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_build_executive_summary_json_document_handles_none_deep_model_name(self):
+        report = Report.__new__(Report)
+
+        payload = report._build_executive_summary_json_document(
+            all_results={},
+            model_name="fallback-model",
+            deep_model_name=None,
+            scan_model_name="scan-model",
+            embedding_model_name="embed-model",
+            similarity_groups={},
+        )
+
+        self.assertEqual(payload["model_name"], "fallback-model")
+        self.assertEqual(payload["deep_model"], "")
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_render_report_html_from_json_payload_rejects_unknown_report_type(self):
         report = Report(input_path=".", output_format=["md"])
         with self.assertRaises(ValueError):

@@ -1,5 +1,4 @@
 import base64
-from html import escape
 import json
 import logging
 import math
@@ -350,48 +349,27 @@ class Report:
         return template.render(document=doc.model_dump(mode="json"))
 
     def _render_executive_summary_inner_html(self, payload: Dict[str, Any]) -> str:
-        title = escape(str(payload.get("title") or "Executive Summary"))
-        generated_at = escape(str(payload.get("generated_at") or "N/A"))
-        deep_model = escape(str(payload.get("deep_model") or payload.get("model_name") or "N/A"))
-        small_model = escape(str(payload.get("small_model") or "N/A"))
-        embedding_model = escape(str(payload.get("embedding_model") or "N/A"))
-
-        vuln_summary = payload.get("vulnerability_summary") or {}
-        tier_counts = payload.get("similarity_tier_counts") or {}
-        if not isinstance(vuln_summary, dict):
-            vuln_summary = {}
-        if not isinstance(tier_counts, dict):
-            tier_counts = {}
-
-        vuln_items = "\n".join(
-            f"<li><strong>{escape(str(name))}</strong>: {escape(str(count))}</li>"
-            for name, count in sorted(vuln_summary.items(), key=lambda item: str(item[0]).lower())
-        ) or "<li>No vulnerability summary available.</li>"
-        tier_items = "\n".join(
-            f"<li><strong>{escape(str(tier))}</strong>: {escape(str(count))}</li>"
-            for tier, count in sorted(tier_counts.items(), key=lambda item: str(item[0]).lower())
-        ) or "<li>No similarity tier data available.</li>"
-
-        return f"""
-<article class="report-executive-summary">
-  <h1>{title}</h1>
-  <p><strong>Generated at:</strong> {generated_at}</p>
-  <h2>Models Used</h2>
-  <ul>
-    <li><strong>Deep model:</strong> {deep_model}</li>
-    <li><strong>Small model:</strong> {small_model}</li>
-    <li><strong>Embedding model:</strong> {embedding_model}</li>
-  </ul>
-  <h2>Vulnerability Summary</h2>
-  <ul>
-    {vuln_items}
-  </ul>
-  <h2>Similarity Tier Counts</h2>
-  <ul>
-    {tier_items}
-  </ul>
-</article>
-"""
+        vuln_summary = payload.get("vulnerability_summary")
+        tier_counts = payload.get("similarity_tier_counts")
+        safe_payload = {
+            "title": str(payload.get("title") or "Executive Summary"),
+            "generated_at": str(payload.get("generated_at") or "N/A"),
+            "deep_model": str(payload.get("deep_model") or payload.get("model_name") or "N/A"),
+            "small_model": str(payload.get("small_model") or "N/A"),
+            "embedding_model": str(payload.get("embedding_model") or "N/A"),
+            "vulnerability_summary": (
+                sorted(vuln_summary.items(), key=lambda item: str(item[0]).lower())
+                if isinstance(vuln_summary, dict)
+                else []
+            ),
+            "similarity_tier_counts": (
+                sorted(tier_counts.items(), key=lambda item: str(item[0]).lower())
+                if isinstance(tier_counts, dict)
+                else []
+            ),
+        }
+        template = self.template_env.get_template("reports/executive_summary_from_json.html.j2")
+        return template.render(payload=safe_payload)
 
     def render_report_html_from_json_payload(self, payload: Dict) -> str:
         """
@@ -817,12 +795,13 @@ class Report:
             tier_id: len(similarity_groups.get(tier_id) or [])
             for tier_id, _ in EXEC_SUMMARY_EMBEDDING_TIER_ORDER
         }
-        primary_model = deep_model_name.strip() or str(model_name or "").strip()
+        deep_model = str(deep_model_name or "").strip()
+        primary_model = deep_model or str(model_name or "").strip()
         return {
             "report_type": "executive_summary",
             "schema_version": 1,
             "model_name": primary_model,
-            "deep_model": deep_model_name,
+            "deep_model": deep_model,
             "small_model": scan_model_name,
             "embedding_model": embedding_model_name,
             "title": "Executive Summary",
