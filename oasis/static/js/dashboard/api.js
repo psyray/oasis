@@ -446,4 +446,145 @@ DashboardApp.refreshDashboard = function(options = {}) {
     });
 };
 
+/** Align with ``WebServer._ASSISTANT_MAX_MESSAGES`` (trim loaded history). */
+DashboardApp.ASSISTANT_MAX_MESSAGES_CAP = 40;
+
+DashboardApp.fetchAssistantSessions = function (reportPath, limit) {
+    const params = new URLSearchParams();
+    params.append('report_path', reportPath);
+    if (limit != null && limit !== undefined) {
+        params.append('limit', String(limit));
+    }
+    return fetch(`/api/assistant/sessions?${params.toString()}`, {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+    }).then(async (response) => {
+        const data = await response.json().catch(() => ([]));
+        if (!response.ok) {
+            const err = data && data.error ? data.error : `HTTP ${response.status}`;
+            throw new Error(err);
+        }
+        return Array.isArray(data) ? data : [];
+    });
+};
+
+DashboardApp.fetchAssistantSession = function (reportPath, sessionId) {
+    const params = new URLSearchParams();
+    params.append('report_path', reportPath);
+    params.append('session_id', sessionId);
+    return fetch(`/api/assistant/session?${params.toString()}`, {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+    }).then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const err = data && data.error ? data.error : `HTTP ${response.status}`;
+            throw new Error(err);
+        }
+        return data;
+    });
+};
+
+DashboardApp.fetchAssistantChatModels = function () {
+    return fetch('/api/assistant/chat-models', {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+    }).then(async function (response) {
+        const data = await response.json().catch(function () {
+            return {};
+        });
+        if (!response.ok) {
+            const err = data && data.error ? data.error : `HTTP ${response.status}`;
+            throw new Error(err);
+        }
+        const models = data.models;
+        return Array.isArray(models) ? models : [];
+    });
+};
+
+DashboardApp.fetchExecutivePreviewMeta = function (reportPath) {
+    const rel = String(reportPath || '').trim();
+    if (!rel) {
+        return Promise.reject(new Error('missing report path'));
+    }
+    const url = `/api/executive-preview-meta?path=${encodeURIComponent(rel)}`;
+    return fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } }).then(
+        async function (response) {
+            const data = await response.json().catch(function () {
+                return {};
+            });
+            if (!response.ok) {
+                const err = data && data.error ? data.error : `HTTP ${response.status}`;
+                throw new Error(err);
+            }
+            return data;
+        }
+    );
+};
+
+DashboardApp.postAssistantChat = function (payload) {
+    return fetch('/api/assistant/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload),
+    }).then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const err = data && data.error ? data.error : `HTTP ${response.status}`;
+            throw new Error(err);
+        }
+        return data;
+    });
+};
+
+DashboardApp.deleteAssistantSession = function (reportPath, sessionId) {
+    return fetch('/api/assistant/session', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ report_path: reportPath, session_id: sessionId }),
+    }).then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const err = data && data.error ? data.error : `HTTP ${response.status}`;
+            throw new Error(err);
+        }
+        return data;
+    });
+};
+
+/** Load canonical vulnerability report JSON for the dashboard assistant (finding selectors). */
+DashboardApp.fetchReportJsonPayload = function (reportPath) {
+    const rel = String(reportPath || '').trim();
+    if (!rel) {
+        return Promise.reject(new Error('missing report path'));
+    }
+    const url = `/api/report-json/${encodeURIComponent(rel)}`;
+    return fetch(url, { credentials: 'same-origin' }).then(async function (response) {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const err = data && data.error ? data.error : `HTTP ${response.status}`;
+            throw new Error(err);
+        }
+        return data;
+    });
+};
+
+DashboardApp.deleteAllAssistantSessions = function (reportPath) {
+    return fetch('/api/assistant/sessions', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ report_path: reportPath }),
+    }).then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const err = data && data.error ? data.error : `HTTP ${response.status}`;
+            throw new Error(err);
+        }
+        return data;
+    });
+};
+
 DashboardApp.debug("API module loaded"); 

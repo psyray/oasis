@@ -2,11 +2,14 @@
 
 ### Breaking
 
-- **CLI**: **`--poc-assist`** no longer means hint-only logs: use **`--poc-hints`** for non-executable bullets from findings; **`--poc-assist`** now requests an LLM-generated executable PoC (still **not** executed by OASIS).
 - **CLI**: Removed **`--adaptive` / `-ad`**; vulnerability analysis is orchestrated exclusively by **LangGraph** (Discover → Scan → Expand → Deep → Verify → Report → optional PoC stage).
 - **CLI**: Removed **`--analyze-type` / `-at`** (`standard` | `deep`). Embedding similarity cache segment uses **`file`/`function`** only (`--embeddings-analyze-type` / `-eat`).
 
 ### ✨ Added
+- 🤖 **Dashboard assistant** (JSON and **executive** MD/JSON): triage chat in the report modal; **executive** opens **scan-wide aggregate** context (run JSON under the model directory) with a **severity** Chart.js rollup, **chat model** list from Ollama (`/api/assistant/chat-models`), **context / system-budget** hints, and optional **embedding-cache RAG** with a **union of file paths** from vulnerability reports in the run (`--web-assistant-rag` / `--no-web-assistant-rag`, overridable per request). Single-vulnerability mode still supports focus on a structured finding via indices, Markdown answers with sanitized HTML, and collapsible **model thinking** blocks when the model emits tagged thinking sections
+- 💾 **Assistant chat persistence**: conversations stored under `security_reports/<run>/json/.../chat/` (one session file per chat); list, resume, start new, and delete sessions via REST (`GET`/`DELETE` `/api/assistant/session(s)`, `POST /api/assistant/chat`)
+- 🧩 **Assistant stack**: helpers for API validation, path containment, session I/O, RAG retrieval, and thinking parse (`oasis/helpers/assistant_*.py`, `path_containment.py`, `prompt_compose.py`); contract tests in `tests/test_web_assistant_api.py`, `tests/test_assistant_*.py`, `tests/test_path_containment.py`, `tests/test_prompt_compose.py`
+- 📎 **CLI custom instructions** for analysis: `--custom-instructions` and `--custom-instructions-file` append user guidance to deep-analysis and **`--poc-assist`** prompts (`resolved_custom_instructions` / `append_user_instructions`)
 - 🧠 Added **LangGraph** orchestration (`langgraph` + compatible **langchain-core** as required dependencies) as the sole vulnerability analysis pipeline
 - 🎛️ Added **`--langgraph-max-expand`** (`N`): maximum context-expand retries after verify detects structured-output issues (default: **2**)
 - 📎 Added **`--poc-hints`** and repurposed **`--poc-assist`**: hints are derived from structured findings only; PoC assist asks the deep model for executable PoC text (**no** automated execution by OASIS)
@@ -37,6 +40,8 @@
 - 🧷 Fixed date-chip model filtering to prefer local report index data and use API fallback only when needed
 
 ### ⚡ Changed
+- 📄 Canonical JSON and export templates carry **assistant-oriented metadata** where applicable (e.g. embedding model and analysis root context) so the dashboard assistant can align RAG and explanations with the run that produced the report
+- 🎨 Dashboard **report preview** styling updates for assistant UX (`dashboard.css`, `report_preview.css`, login polish)
 - 🎛️ Tunable **`OASIS_*`** environment variables for Ollama timeouts, `num_predict`, PoC digest/log caps, LangGraph context-expand budgets, and structured-output degeneracy heuristics (documented in README + `oasis/config.py`)
 - 🔑 Embedding analyzer per-vulnerability result cache key suffix is **`file`** or **`function`** (replaces obsolete `standard`/`deep` segment from `-at`)
 - 💾 Changed cache layout: per-project folders under `.oasis_cache`, schema-aware cleanup for structured outputs

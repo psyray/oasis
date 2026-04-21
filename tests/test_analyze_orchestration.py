@@ -163,6 +163,34 @@ class TestAnalyzeOrchestration(unittest.TestCase):
         self.assertIn("LLM-assisted executable PoC", md)
         self.assertIn("echo ok", md)
 
+    def test_langgraph_poc_assist_custom_instructions_in_prompt(self):
+        analyzer = SecurityAnalyzer.__new__(SecurityAnalyzer)
+        analyzer.llm_model = "deep-m"
+        analyzer.ollama_manager = MagicMock()
+        analyzer.ollama_manager.get_model_display_name.return_value = "Deep M"
+        analyzer.ollama_manager.chat.return_value = {"message": {"content": "ok"}}
+        args = SimpleNamespace(
+            poc_hints=False,
+            poc_assist=True,
+            debug=False,
+            custom_instructions="Prefer curl examples.",
+            custom_instructions_file=None,
+        )
+        all_results = {
+            "SQ": [
+                {
+                    "file_path": "/q.sql",
+                    "structured_chunks": [
+                        {"findings": [{"title": "Injection", "vulnerable_code": "SELECT"}]}
+                    ],
+                }
+            ]
+        }
+        analyzer.langgraph_poc_assist(args, all_results)
+        prompt = analyzer.ollama_manager.chat.call_args[0][1][0]["content"]
+        self.assertIn("USER_ADDITIONAL_INSTRUCTIONS", prompt)
+        self.assertIn("curl", prompt)
+
 @unittest.skipIf(route_after_report is None, "agent routing dependencies unavailable")
 class TestAgentRouting(unittest.TestCase):
     def test_route_after_report_goes_to_poc_when_hints_enabled(self):

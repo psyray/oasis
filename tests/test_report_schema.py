@@ -343,6 +343,22 @@ class TestReportSchema(unittest.TestCase):
         self.assertIn("**Example payloads**:", markdown)
         self.assertIn('<div class="page-break"></div>', markdown)
 
+    def test_chunk_analysis_to_markdown_includes_http_raw_requests(self):
+        chunk = ChunkDeepAnalysis(
+            findings=[
+                VulnerabilityFinding(
+                    title="API issue",
+                    vulnerable_code="x",
+                    explanation="y",
+                    severity="Medium",
+                    http_raw_requests=["GET /api?q=1 HTTP/1.1\nHost: example.test"],
+                )
+            ]
+        )
+        markdown = chunk_analysis_to_markdown(chunk, 0)
+        self.assertIn("HTTP raw requests", markdown)
+        self.assertIn("GET /api?q=1 HTTP/1.1", markdown)
+
     def test_chunk_analysis_to_markdown_includes_source_line_hint(self):
         chunk = ChunkDeepAnalysis(
             findings=[
@@ -420,31 +436,42 @@ class TestReportSchema(unittest.TestCase):
         report.current_model = "test-model"
         report.executive_summary_scan_model = "small-model"
         report.executive_summary_embedding_model = "embed-model"
+        report._executive_summary_sidecar_write_failed = False
         report.report_dirs = {"test_model": {"md": Path("/tmp")}}
         report.create_header = lambda title, model_name: [f"# {title}", f"Model: {model_name}"]
-        report.filter_output_files = lambda safe_name: {"md": Path("/tmp") / f"{safe_name}.md"}
-        captured = {}
-        report._generate_and_save_report = lambda output_files, report_content, report_type=None: captured.update(
-            {"output_files": output_files, "report_content": report_content, "report_type": report_type}
-        )
+        with tempfile.TemporaryDirectory() as td:
+            run_md = Path(td) / "embed_model" / "md" / "_executive_summary.md"
+            run_md.parent.mkdir(parents=True)
+            report.filter_output_files = lambda safe_name: {"md": run_md}
+            captured = {}
+            report._generate_and_save_report = lambda output_files, report_content, report_type=None: captured.update(
+                {"output_files": output_files, "report_content": report_content, "report_type": report_type}
+            )
 
-        all_results = {"SQL Injection": [{"file_path": "app.py", "similarity_score": 0.9}]}
-        report.generate_executive_summary(
-            all_results,
-            "test-model",
-            progress={"completed_vulnerabilities": 1, "total_vulnerabilities": 3, "is_partial": True},
-        )
+            all_results = {"SQL Injection": [{"file_path": "app.py", "similarity_score": 0.9}]}
+            report.generate_executive_summary(
+                all_results,
+                "test-model",
+                progress={"completed_vulnerabilities": 1, "total_vulnerabilities": 3, "is_partial": True},
+            )
 
-        content = "\n".join(captured["report_content"])
-        self.assertIn("Scan Progress", content)
-        self.assertIn("1/3", content)
-        self.assertIn("partial", content.lower())
-        self.assertIn("Strong embedding match", content)
-        self.assertIn("| Similarity |", content)
-        self.assertIn("Deep model: test-model", content)
-        self.assertIn("Small model: small-model", content)
-        self.assertIn("Embedding model: embed-model", content)
-        self.assertNotIn("Risk Findings", content)
+            canon = Path(td) / "embed_model" / "json" / "_executive_summary.json"
+            self.assertTrue(canon.is_file())
+            parsed = json.loads(canon.read_text(encoding="utf-8"))
+            self.assertEqual(parsed.get("report_type"), "executive_summary")
+            self.assertEqual(parsed.get("model_name"), "test-model")
+            self.assertEqual(parsed.get("vulnerability_summary"), {"SQL Injection": 1})
+
+            content = "\n".join(captured["report_content"])
+            self.assertIn("Scan Progress", content)
+            self.assertIn("1/3", content)
+            self.assertIn("partial", content.lower())
+            self.assertIn("Strong embedding match", content)
+            self.assertIn("| Similarity |", content)
+            self.assertIn("Deep model: test-model", content)
+            self.assertIn("Small model: small-model", content)
+            self.assertIn("Embedding model: embed-model", content)
+            self.assertNotIn("Risk Findings", content)
 
     @unittest.skipIf(publish_incremental_summary is None, "oasis.report dependencies are unavailable")
     def test_publish_incremental_summary_strips_unknown_progress_extras(self):
@@ -565,6 +592,7 @@ class TestReportSchema(unittest.TestCase):
 
         self.assertEqual(stats.get("formats"), {})
         self.assertEqual(stats["risk_summary"]["total_findings"], 0)
+        self.assertEqual(stats["risk_summary"]["critical"], 0)
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_executive_summary_notifier_receives_progress_payload(self):
@@ -663,6 +691,7 @@ class TestReportSchema(unittest.TestCase):
             "dates": {},
             "risk_summary": {
                 "total_findings": 0,
+                "critical": 0,
                 "high": 0,
                 "medium": 0,
                 "low": 0,
@@ -677,7 +706,8 @@ class TestReportSchema(unittest.TestCase):
                 "language": "FR",
                 "date": "2026-04-19 10:00:00",
                 "stats": {
-                    "total_findings": 5,
+                    "total_findings": 6,
+                    "critical_risk": 1,
                     "high_risk": 2,
                     "medium_risk": 2,
                     "low_risk": 1,
@@ -689,7 +719,8 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(stats["vulnerabilities"]["SQL Injection"], 1)
         self.assertEqual(stats["languages"]["fr"], 1)
         self.assertEqual(stats["dates"]["2026-04-19"], 1)
-        self.assertEqual(stats["risk_summary"]["total_findings"], 5)
+        self.assertEqual(stats["risk_summary"]["total_findings"], 6)
+        self.assertEqual(stats["risk_summary"]["critical"], 1)
         self.assertEqual(stats["risk_summary"]["high"], 2)
         self.assertEqual(stats["risk_summary"]["medium"], 2)
         self.assertEqual(stats["risk_summary"]["low"], 1)

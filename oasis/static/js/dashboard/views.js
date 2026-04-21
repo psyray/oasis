@@ -356,6 +356,79 @@ DashboardApp.renderListViewWithTemplate = function() {
     container.innerHTML = html;
 };
 
+DashboardApp._destroyStatsSeverityChart = function () {
+    if (DashboardApp._statsSeverityChart) {
+        try {
+            DashboardApp._statsSeverityChart.destroy();
+        } catch (e) {
+            /* ignore */
+        }
+        DashboardApp._statsSeverityChart = null;
+    }
+};
+
+/** Horizontal bar chart for severity counts (requires Chart.js on ``window``). */
+DashboardApp._initStatsSeverityChart = function () {
+    DashboardApp._destroyStatsSeverityChart();
+    const rs = (DashboardApp.stats && DashboardApp.stats.risk_summary) ? DashboardApp.stats.risk_summary : {};
+    const critical = Number(rs.critical != null ? rs.critical : 0) || 0;
+    const high = Number(rs.high != null ? rs.high : 0) || 0;
+    const medium = Number(rs.medium != null ? rs.medium : 0) || 0;
+    const low = Number(rs.low != null ? rs.low : 0) || 0;
+    const canvas = document.getElementById('stats-severity-chart');
+    if (!canvas || typeof Chart === 'undefined') {
+        return;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+        return;
+    }
+    DashboardApp._statsSeverityChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: ['Critical', 'High', 'Medium', 'Low'],
+            datasets: [
+                {
+                    label: 'Findings',
+                    data: [critical, high, medium, low],
+                    backgroundColor: ['#7b1fa2', '#c62828', '#ef6c00', '#2e7d32'],
+                    borderWidth: 0,
+                    borderRadius: 4,
+                    maxBarThickness: 22,
+                },
+            ],
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label(item) {
+                            const v = item.parsed && typeof item.parsed.x === 'number' ? item.parsed.x : item.raw;
+                            return ` ${Number(v)} finding(s)`;
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: {
+                    beginAtZero: true,
+                    ticks: {
+                        precision: 0,
+                    },
+                    grid: { display: true },
+                },
+                y: {
+                    grid: { display: false },
+                },
+            },
+        },
+    });
+};
+
 DashboardApp.renderStats = function() {
     DashboardApp.debug("Rendering stats...");
     const statsContainer = document.getElementById('stats-container');
@@ -370,12 +443,6 @@ DashboardApp.renderStats = function() {
         console.error("Stats data not available");
         return;
     }
-    
-    // Preparing risk data for display
-    const totalRisks = DashboardApp.stats.risk_summary.high + DashboardApp.stats.risk_summary.medium + DashboardApp.stats.risk_summary.low || 1;
-    const highPct = (DashboardApp.stats.risk_summary.high / totalRisks * 100) || 0;
-    const mediumPct = (DashboardApp.stats.risk_summary.medium / totalRisks * 100) || 0;
-    const lowPct = (DashboardApp.stats.risk_summary.low / totalRisks * 100) || 0;
     const progress = DashboardApp.progressState || {};
     const hasRun = Boolean(progress.has_progress);
     const totalVulns = Math.max(0, Number(progress.total_vulnerabilities || 0));
@@ -514,23 +581,21 @@ DashboardApp.renderStats = function() {
             </div>
             <div class="card risk-summary-card">
                 <div class="card-title">📈 Findings by severity (LLM)</div>
-                <div class="risk-indicator">
-                    <div class="risk-bar">
-                        <div class="risk-high" style="width: ${highPct}%"></div>
-                        <div class="risk-medium" style="width: ${mediumPct}%"></div>
-                        <div class="risk-low" style="width: ${lowPct}%"></div>
-                    </div>
+                <div class="stats-severity-chart-wrap">
+                    <canvas id="stats-severity-chart" width="400" height="180" aria-label="Findings by severity chart"></canvas>
                 </div>
-                <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; margin-top: 5px;">
-                    <span class="badge badge-high">🚨 ${DashboardApp.stats.risk_summary.high || 0} High severity</span>
-                    <span class="badge badge-medium">⚠️ ${DashboardApp.stats.risk_summary.medium || 0} Medium severity</span>
-                    <span class="badge badge-low">📌 ${DashboardApp.stats.risk_summary.low || 0} Low severity</span>
+                <div class="stats-severity-badges">
+                    <span class="badge badge-critical">🔴 ${DashboardApp.stats.risk_summary.critical != null ? DashboardApp.stats.risk_summary.critical : 0} Critical</span>
+                    <span class="badge badge-high">🚨 ${DashboardApp.stats.risk_summary.high || 0} High</span>
+                    <span class="badge badge-medium">⚠️ ${DashboardApp.stats.risk_summary.medium || 0} Medium</span>
+                    <span class="badge badge-low">📌 ${DashboardApp.stats.risk_summary.low || 0} Low</span>
                 </div>
                 <div class="card-label">From structured findings, not embedding similarity tiers</div>
             </div>
             ${progressCard}
         </div>
     `;
+    DashboardApp._initStatsSeverityChart();
 };
 
 DashboardApp.switchView = function(viewMode) {

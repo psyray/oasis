@@ -15,12 +15,33 @@
             {% if error %}
                 <div class="error">{{ error }}</div>
             {% endif %}
-            <form method="post">
+            <form method="post" id="login-form">
                 <div class="form-control">
-                    <input type="password" id="password" name="password" placeholder="Password" required>
+                    <input type="password" id="password" name="password" placeholder="Password" required autofocus>
                 </div>
                 <button type="submit">Login</button>
             </form>
         </div>
     </div>
+    <script>
+        (function () {
+            var pw = document.getElementById('password');
+            var form = document.getElementById('login-form');
+            if (!pw || !form) {
+                return;
+            }
+            pw.addEventListener('paste', function () {
+                setTimeout(function () {
+                    if (!pw.value) {
+                        return;
+                    }
+                    if (typeof form.requestSubmit === 'function') {
+                        form.requestSubmit();
+                    } else {
+                        form.submit();
+                    }
+                }, 0);
+            });
+        })();
+    </script>
 {% endblock %}

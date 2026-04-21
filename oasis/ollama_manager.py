@@ -437,6 +437,24 @@ class OllamaManager:
             logger.debug("Using default chunk size", exc_info=True)
             return MAX_CHUNK_SIZE
 
+    def get_effective_context_token_count(self, model: str) -> Optional[int]:
+        """Return merged context window size in tokens from ``show()`` (num_ctx / GGUF), or None."""
+        try:
+            model_info = self._get_model_info(model)
+            tokens, _src = self._model_info_effective_context_tokens(model_info)
+            if tokens is None or tokens <= 0:
+                return None
+            return int(tokens)
+        except Exception:
+            return None
+
+    def list_chat_model_names(self) -> List[str]:
+        """Return sorted model tags available from Ollama (respecting excluded patterns)."""
+        try:
+            return list(self._get_models(self.excluded_models))
+        except Exception:
+            return []
+
     _NUM_CTX_IN_PARAMETERS = re.compile(r"num_ctx\s+(\d+)", re.IGNORECASE)
 
     @staticmethod

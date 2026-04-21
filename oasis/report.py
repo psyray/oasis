@@ -136,6 +136,7 @@ class Report:
         self.language = LANGUAGES[self.language_code]
         self.progress_notifier = None
         self._notifying_progress = False
+        self.embed_model: Optional[str] = None
         self._last_summary_results: Dict[str, List[Dict]] = {}
         self._last_summary_model_name: str = ""
         self._last_progress_payload: Dict[str, Any] = {}
@@ -320,6 +321,7 @@ class Report:
         vuln_name = vulnerability["name"]
         file_entries = self._results_to_file_entries(results)
         stats = self._compute_document_stats(file_entries)
+        root = Path(self.input_path).resolve() if self.input_path else None
         return VulnerabilityReportDocument(
             title=f"{vuln_name} Security Analysis",
             generated_at=generate_timestamp(),
@@ -329,6 +331,8 @@ class Report:
             vulnerability=dict(vulnerability),
             files=file_entries,
             stats=stats,
+            analysis_root=str(root) if root else None,
+            embed_model=self.embed_model,
         )
 
     @staticmethod
@@ -737,7 +741,51 @@ class Report:
         scan_model_name = str(getattr(self, "executive_summary_scan_model", "") or "").strip()
         embedding_model_name = str(getattr(self, "executive_summary_embedding_model", "") or "").strip()
         return deep_model_name, scan_model_name, embedding_model_name
-    
+
+    def _executive_summary_canonical_json_path(self, output_files: Dict[str, Path]) -> Optional[Path]:
+        """``model_dir/json/_executive_summary.json`` when MD lives under ``model_dir/md/``."""
+        md_path = output_files.get("md")
+        if md_path is None:
+            return None
+        if md_path.parent.name.lower() != "md":
+            logger.warning(
+                "Executive MD path not under a ``md`` folder (%s); skipping canonical JSON write",
+                md_path,
+            )
+            return None
+        model_dir = md_path.parent.parent
+        return model_dir / "json" / artifact_filename("_executive_summary", "json")
+
+    def _build_executive_summary_json_document(
+        self,
+        all_results: Dict[str, List[Dict]],
+        model_name: str,
+        deep_model_name: str,
+        scan_model_name: str,
+        embedding_model_name: str,
+        similarity_groups: Dict[str, List[Dict[str, Any]]],
+    ) -> Dict[str, Any]:
+        """Structured canonical payload for dashboard/API (in addition to rendered Markdown)."""
+        vuln_summary = {vt: len(rs) for vt, rs in all_results.items()}
+        tier_counts = {
+            tier_id: len(similarity_groups.get(tier_id) or [])
+            for tier_id, _ in EXEC_SUMMARY_EMBEDDING_TIER_ORDER
+        }
+        primary_model = deep_model_name.strip() if deep_model_name.strip() else str(model_name or "").strip()
+        return {
+            "report_type": "executive_summary",
+            "schema_version": 1,
+            "model_name": primary_model,
+            "deep_model": deep_model_name,
+            "small_model": scan_model_name,
+            "embedding_model": embedding_model_name,
+            "title": "Executive Summary",
+            "generated_at": progress_timestamp_iso(),
+            "oasis_version": oasis_version,
+            "vulnerability_summary": vuln_summary,
+            "similarity_tier_counts": tier_counts,
+        }
+
     def generate_executive_summary(
         self,
         all_results: Dict[str, List[Dict]],
@@ -783,20 +831,32 @@ class Report:
         similarity_groups = self._executive_summary_similarity_groups(all_results)
         self._extend_executive_summary_similarity_sections(report, similarity_groups)
 
-        report.extend([
-            "\n---",
-            f"Report generated on: {generate_timestamp()}",
-            f"Deep model: {deep_model_name}",
-            f"Small model: {scan_model_name or 'N/A'}",
-            f"Embedding model: {embedding_model_name or 'N/A'}",
-        ])
-
         self._generate_and_save_report(output_files, report, report_type='Executive Summary')
 
-        json_path = output_files.get("json")
-        if progress and json_path:
+        canonical_json_path = self._executive_summary_canonical_json_path(output_files)
+        if canonical_json_path is not None:
             try:
-                progress_path = executive_summary_progress_sidecar_path(Path(json_path))
+                self.ensure_directory(canonical_json_path.parent)
+                exec_doc = self._build_executive_summary_json_document(
+                    all_results,
+                    model_name,
+                    deep_model_name,
+                    scan_model_name,
+                    embedding_model_name,
+                    similarity_groups,
+                )
+                if progress:
+                    exec_doc["progress"] = dict(self._last_progress_payload or {})
+                write_utf8_text(
+                    canonical_json_path,
+                    json.dumps(exec_doc, indent=2, ensure_ascii=False),
+                )
+            except Exception:
+                logger.warning("Failed to write canonical executive summary JSON", exc_info=True)
+
+        if progress and canonical_json_path:
+            try:
+                progress_path = executive_summary_progress_sidecar_path(canonical_json_path)
                 # Compatibility: keep legacy `model` as primary deep-model field for existing
                 # consumers; newer readers can use explicit `deep_model`/`small_model`/`embedding_model`.
                 doc = {

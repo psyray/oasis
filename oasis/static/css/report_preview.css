@@ -1,0 +1,264 @@
+/*
+ * Styles for server-rendered vulnerability HTML shown inside the dashboard modal
+ * (`/api/report-html`). Mirrors key rules from templates/report_styles.css, scoped so
+ * they do not affect the rest of the dashboard.
+ */
+#report-modal-content .html-content-container .report-toc,
+#report-modal-content .html-content-container .report-stats-chart {
+    box-sizing: border-box;
+}
+
+#report-modal-content .html-content-container .report-toc {
+    margin: 1em 0 1.25rem;
+    padding: 12px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: linear-gradient(to bottom, var(--white), var(--light-gray));
+}
+
+#report-modal-content .html-content-container h2.report-toc-title {
+    margin: 0 0 10px;
+    padding: 0;
+    border: none;
+    border-left: none;
+    font-size: 1.05rem;
+}
+
+#report-modal-content .html-content-container .report-toc-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+@media (min-width: 720px) {
+    #report-modal-content .html-content-container .report-toc-list {
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: stretch;
+        gap: 10px;
+    }
+}
+
+#report-modal-content .html-content-container .report-toc-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background-color: var(--white);
+    color: var(--dark-blue);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.88rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+#report-modal-content .html-content-container .report-toc-btn:hover {
+    border-color: var(--turquoise);
+    background-color: var(--light-sand);
+}
+
+#report-modal-content .html-content-container .report-toc-icon {
+    font-style: normal;
+}
+
+#report-modal-content .html-content-container .report-stats-summary-list {
+    margin: 0.6em 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.75rem 1.5rem;
+    list-style: none;
+    padding-left: 0;
+}
+
+#report-modal-content .html-content-container .report-stats-chart {
+    margin: 14px 0;
+    padding: 12px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--white);
+}
+
+#report-modal-content .html-content-container .report-stats-chart-row {
+    display: grid;
+    grid-template-columns: 72px 1fr 36px;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+#report-modal-content .html-content-container .report-stats-chart-row:last-child {
+    margin-bottom: 0;
+}
+
+#report-modal-content .html-content-container .report-stats-chart-label {
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+#report-modal-content .html-content-container .report-stats-chart-track {
+    height: 14px;
+    border-radius: 7px;
+    background: var(--light-gray);
+    overflow: hidden;
+}
+
+#report-modal-content .html-content-container .report-stats-chart-fill {
+    display: block;
+    height: 100%;
+    border-radius: 7px;
+    min-width: 2px;
+}
+
+#report-modal-content .html-content-container .report-stats-chart-row--critical .report-stats-chart-fill {
+    background: linear-gradient(90deg, #7b1fa2, #ba68c8);
+}
+
+#report-modal-content .html-content-container .report-stats-chart-row--high .report-stats-chart-fill {
+    background: linear-gradient(90deg, #c62828, #ef5350);
+}
+
+#report-modal-content .html-content-container .report-stats-chart-row--medium .report-stats-chart-fill {
+    background: linear-gradient(90deg, #ef6c00, #ffb74d);
+}
+
+#report-modal-content .html-content-container .report-stats-chart-row--low .report-stats-chart-fill {
+    background: linear-gradient(90deg, #2e7d32, #81c784);
+}
+
+#report-modal-content .html-content-container .report-stats-chart-val {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-weight: bold;
+}
+
+#report-modal-content .html-content-container .report-file-block {
+    background-color: var(--white);
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--turquoise);
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin: 14px 0 18px 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+#report-modal-content .html-content-container .chunk-source-lines {
+    font-size: 0.92rem;
+    margin: 0.35rem 0;
+}
+
+#report-modal-content .html-content-container .report-finding-details {
+    margin: 0.5rem 0;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0.35rem 0.5rem;
+    background: var(--white);
+    box-shadow: 0 1px 3px rgba(14, 31, 43, 0.06);
+}
+
+#report-modal-content .html-content-container .report-finding-summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--dark-blue-2);
+    list-style: none;
+}
+
+#report-modal-content .html-content-container .report-finding-summary::-webkit-details-marker {
+    display: none;
+}
+
+#report-modal-content .html-content-container .report-finding-details .report-finding-summary::before {
+    content: '\25B8 ';
+    display: inline-block;
+    margin-right: 0.25rem;
+    transition: transform 0.15s ease;
+}
+
+#report-modal-content .html-content-container .report-finding-details[open] .report-finding-summary::before {
+    transform: rotate(90deg);
+}
+
+#report-modal-content .html-content-container .report-finding-body {
+    margin-top: 0.5rem;
+    padding: 0.25rem 0 0.25rem 0.5rem;
+    border-left: 3px solid var(--turquoise);
+}
+
+#report-modal-content .html-content-container pre.http-raw {
+    background: #f8f8f8;
+    padding: 0.35rem;
+    overflow-x: auto;
+}
+
+#report-modal-content .html-content-container .report-return-top {
+    margin: 1rem 0 0;
+    font-size: 0.85rem;
+    text-align: right;
+}
+
+#report-modal-content .html-content-container .report-return-top-link {
+    color: var(--turquoise);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+#report-modal-content .html-content-container .report-return-top-link:hover {
+    text-decoration: underline;
+}
+
+#report-modal-content .html-content-container .report-assistant-section {
+    margin: 1rem 0 1.25rem;
+}
+
+#report-modal-content .html-content-container .report-assistant-lead {
+    margin: 0.35rem 0 0;
+    max-width: min(100%, 80rem);
+}
+
+/* Synthetic assistant block (executive MD / paths without vulnerability template) */
+#report-modal-content .html-content-container .report-assistant-section.oasis-assistant-synthetic-wrap .report-assistant-lead {
+    margin-top: 0;
+    margin-bottom: 0.65rem;
+    font-size: 0.95rem;
+    line-height: 1.45;
+    color: var(--dark-blue-2);
+}
+
+#report-modal-content .html-content-container .report-assistant-section.oasis-assistant-synthetic-wrap > h2:first-of-type {
+    margin-top: 1.35rem;
+}
+
+#report-modal-content .html-content-container .oasis-assistant-mount {
+    min-height: 0;
+}
+
+/* Executive summary preview: Chart.js severity rollup (injected by executive-preview.js) */
+#report-modal-content .executive-preview .executive-preview-charts {
+    box-sizing: border-box;
+    margin: 0.75rem 0 1rem;
+    padding: 10px 12px;
+    max-height: 280px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--white);
+    position: relative;
+}
+#report-modal-content .executive-preview .executive-preview-charts canvas {
+    max-height: 240px;
+}
+
+/* Footer from report_template.html is moved after the assistant panel in JS; normalize print-oriented rules. */
+#report-modal-content > footer.report-footer {
+    position: static;
+    display: flex;
+    justify-content: center;
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    width: 100%;
+    box-sizing: border-box;
+}

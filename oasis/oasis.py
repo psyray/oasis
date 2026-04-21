@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 import time
@@ -326,6 +327,20 @@ class OasisScanner:
                 'output is logged only — OASIS does not run generated code'
             ),
         )
+        analysis_group.add_argument(
+            '--custom-instructions',
+            dest='custom_instructions',
+            default=None,
+            metavar='TEXT',
+            help='Additional instructions appended to deep-analysis and PoC-assist prompts (defensive review context)',
+        )
+        analysis_group.add_argument(
+            '--custom-instructions-file',
+            dest='custom_instructions_file',
+            default=None,
+            metavar='PATH',
+            help='UTF-8 file with extra instructions for deep analysis and PoC assist (combined with --custom-instructions)',
+        )
         analysis_group.add_argument('-t', '--threshold', type=float, default=DEFAULT_ARGS['THRESHOLD'], 
                                     help=f'Similarity threshold (default: {DEFAULT_ARGS["THRESHOLD"]})')
         analysis_group.add_argument('-v', '--vulns', type=str, default=DEFAULT_ARGS['VULNS'], 
@@ -377,6 +392,36 @@ class OasisScanner:
                             help='Web interface password (if not specified, a random password will be generated)')
         web_group.add_argument('-wp', '--web-port', dest='web_port', type=int, default=5000,
                             help='Web interface port (default: 5000)')
+        web_group.add_argument(
+            '--web-ollama-url',
+            dest='web_ollama_url',
+            default=None,
+            metavar='URL',
+            help=(
+                'Ollama API URL for dashboard assistant chat (default: same as --ollama-url when unset in env OASIS_WEB_OLLAMA_URL)'
+            ),
+        )
+        web_group.add_argument(
+            '--web-embed-model',
+            dest='web_embed_model',
+            default=None,
+            metavar='MODEL',
+            help='Embedding model name for assistant RAG (defaults to report embed_model or nomic-embed-text)',
+        )
+        _rag = parser.add_mutually_exclusive_group()
+        _rag.add_argument(
+            '--web-assistant-rag',
+            dest='web_assistant_rag',
+            action='store_true',
+            help='Enable embedding-cache RAG for dashboard assistant when cache is available',
+        )
+        _rag.add_argument(
+            '--no-web-assistant-rag',
+            dest='web_assistant_rag',
+            action='store_false',
+            help='Disable embedding-cache RAG for the dashboard assistant',
+        )
+        parser.set_defaults(web_assistant_rag=True)
         
         # Logging and Debug
         logging_group = parser.add_argument_group('Logging and Debug')
@@ -645,7 +690,11 @@ class OasisScanner:
                 debug=self.args.debug,
                 web_expose=self.args.web_expose,
                 web_password=self.args.web_password,
-                web_port=self.args.web_port
+                web_port=self.args.web_port,
+                web_ollama_url=getattr(self.args, "web_ollama_url", None) or os.environ.get("OASIS_WEB_OLLAMA_URL"),
+                web_embed_model=getattr(self.args, "web_embed_model", None),
+                web_assistant_rag=bool(getattr(self.args, "web_assistant_rag", True)),
+                default_ollama_url=getattr(self.args, "ollama_url", None),
             )
             self.report.set_progress_notifier(web_server.emit_scan_progress)
 
@@ -821,6 +870,7 @@ class OasisScanner:
 
         # Initialize embedding manager
         self.embedding_manager = EmbeddingManager(self.args, self.ollama_manager)
+        self.report.embed_model = getattr(self.embedding_manager, "embedding_model", None)
         self.report.set_executive_summary_models(
             embedding_model=getattr(self.embedding_manager, "embedding_model", None)
         )
