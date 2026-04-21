@@ -76,6 +76,41 @@ class TestAssistantThinkParse(unittest.TestCase):
         self.assertEqual(split.thought_segments, ["Only thinking text here."])
         self.assertEqual(split.visible_markdown, "")
 
+    def test_channel_thought_double_word_opener(self):
+        raw = (
+            "<|channel>thought thought <channel|>Dup token opener.\n\n"
+            "## Answer\n\nDone."
+        )
+        split = parse_assistant_think(raw)
+        self.assertEqual(split.thought_segments, ["Dup token opener."])
+        self.assertEqual(split.visible_markdown, "## Answer\n\nDone.")
+
+    def test_channel_thought_symmetric_close_tag(self):
+        raw = "<|channel>thought <|channel|>Symmetric close.\n\n## A\n\nB."
+        split = parse_assistant_think(raw)
+        self.assertEqual(split.thought_segments, ["Symmetric close."])
+        self.assertEqual(split.visible_markdown, "## A\n\nB.")
+
+    def test_channel_thought_two_blocks_back_to_back(self):
+        raw = (
+            "<|channel>thought <channel|>First block."
+            "<|channel>thought <channel|>Second block.\n\n"
+            "## Reply\n\nOK."
+        )
+        split = parse_assistant_think(raw)
+        self.assertEqual(split.thought_segments, ["First block.", "Second block."])
+        self.assertEqual(split.visible_markdown, "## Reply\n\nOK.")
+
+    def test_channel_thought_two_blocks_then_reply(self):
+        raw = (
+            "<|channel>thought <channel|>One.\n\n"
+            "<|channel>thought <channel|>Two.\n\n"
+            "## Final\n\nText."
+        )
+        split = parse_assistant_think(raw)
+        self.assertEqual(split.thought_segments, ["One.", "Two."])
+        self.assertEqual(split.visible_markdown, "## Final\n\nText.")
+
 
 if __name__ == "__main__":
     unittest.main()

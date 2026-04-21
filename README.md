@@ -102,7 +102,16 @@ Code is mounted at **`/work`**; use `-i` paths under `/work`. More options (bund
 
 ### Maintenance
 
-**Update** — after `git pull`, your editable pipx install tracks the repo; bump metadata if needed:
+**Update from GitHub releases** (recommended when you installed from tags / non-editable):
+
+```bash
+oasis --check-update   # compare installed version vs latest stable release on GitHub
+oasis --self-update    # reinstall latest stable via pipx (requires pipx on PATH)
+```
+
+Stable releases only: GitHub entries marked pre-release are ignored. To skip the occasional “update available” line on stderr, set `OASIS_NO_UPDATE_CHECK=1`. For unexpected banner failures, set `OASIS_DEBUG_UPDATE` to `1`, `true`, or `yes` to print a short diagnostic on stderr (developer troubleshooting).
+
+**Editable / development clone** — after `git pull`, your editable pipx install tracks the repo:
 
 ```bash
 git pull origin master
