@@ -111,6 +111,16 @@ class TestAssistantThinkParse(unittest.TestCase):
         self.assertEqual(split.thought_segments, ["One.", "Two."])
         self.assertEqual(split.visible_markdown, "## Final\n\nText.")
 
+    def test_channel_thought_prefers_earliest_boundary(self):
+        raw = (
+            "<|channel>thought <channel|>reasoning notes.\n\n"
+            "Visible reply starts here."
+            "<|channel>thought <channel|>later block."
+        )
+        split = parse_assistant_think(raw)
+        self.assertEqual(split.thought_segments, ["reasoning notes.", "later block."])
+        self.assertEqual(split.visible_markdown, "Visible reply starts here.")
+
 
 if __name__ == "__main__":
     unittest.main()

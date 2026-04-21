@@ -1,11 +1,14 @@
 """Unit tests for GitHub-based CLI update helpers."""
 
+import contextlib
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,6 +94,23 @@ class TestPrintCheckUpdate(unittest.TestCase):
                 rc = cli_update.print_check_update()
         self.assertEqual(rc, 0)
 
+    def test_update_available_prints_message_and_command(self):
+        latest = cli_update.StableRelease(
+            tag_name="v2.0.0",
+            version=Version("2.0.0"),
+            published_at="2026-01-01T00:00:00Z",
+        )
+        with patch.object(cli_update, "fetch_latest_stable_release", return_value=latest):
+            with patch.object(cli_update, "installed_version_string", return_value="1.0.0"):
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    rc = cli_update.print_check_update()
+
+        output = stdout.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertIn("Update available", output)
+        self.assertIn("oasis --self-update", output)
+        self.assertIn("pipx install", output)
+
 
 class TestRunSelfUpdate(unittest.TestCase):
     def test_editable_returns_one(self):
@@ -133,6 +153,40 @@ class TestRunSelfUpdate(unittest.TestCase):
             ["/usr/bin/pipx", "install", "--force", "git+https://github.com/psyray/oasis.git@v2.0.0"],
         )
 
+    def test_run_self_update_pipx_not_found(self):
+        fake = cli_update.StableRelease(
+            tag_name="v0.0.2",
+            version=Version("0.0.2"),
+            published_at="2020-01-02T00:00:00Z",
+        )
+        stderr = io.StringIO()
+        with patch.object(cli_update, "is_site_packages_install", return_value=True):
+            with patch.object(cli_update, "fetch_latest_stable_release", return_value=fake):
+                with patch.object(cli_update, "installed_version_string", return_value="0.0.1"):
+                    with patch.object(cli_update.shutil, "which", return_value=None):
+                        with contextlib.redirect_stderr(stderr):
+                            rc = cli_update.run_self_update()
+        self.assertEqual(rc, 1)
+        self.assertIn("pipx", stderr.getvalue().lower())
+
+    def test_run_self_update_propagates_non_zero_returncode(self):
+        fake = cli_update.StableRelease(
+            tag_name="v0.0.2",
+            version=Version("0.0.2"),
+            published_at="2020-01-02T00:00:00Z",
+        )
+        completed = SimpleNamespace(returncode=3)
+        with patch.object(cli_update, "is_site_packages_install", return_value=True):
+            with patch.object(cli_update, "fetch_latest_stable_release", return_value=fake):
+                with patch.object(cli_update, "installed_version_string", return_value="0.0.1"):
+                    with patch.object(cli_update.shutil, "which", return_value="/usr/bin/pipx"):
+                        with patch.object(
+                            cli_update.subprocess, "run", return_value=completed
+                        ) as run:
+                            rc = cli_update.run_self_update()
+        run.assert_called_once()
+        self.assertEqual(rc, 3)
+
 
 class TestMaybeEmitBanner(unittest.TestCase):
     def test_respects_silent(self):
@@ -145,6 +199,23 @@ class TestMaybeEmitBanner(unittest.TestCase):
             with patch.object(cli_update, "resolve_latest_stable_for_notice") as res:
                 cli_update.maybe_emit_update_banner(silent=False)
         res.assert_not_called()
+
+    def test_emits_banner_when_update_available(self):
+        latest = cli_update.StableRelease(
+            tag_name="v2.0.0",
+            version=Version("2.0.0"),
+            published_at="2026-01-01T00:00:00Z",
+        )
+        with patch.object(cli_update, "installed_version_string", return_value="1.0.0"):
+            with patch.object(
+                cli_update, "get_latest_stable_release", return_value=(latest, True)
+            ):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    cli_update.maybe_emit_update_banner(silent=False)
+        output = stderr.getvalue()
+        self.assertIn("oasis: update available", output)
+        self.assertIn("pipx install --force", output)
 
 
 class TestCacheRoundTrip(unittest.TestCase):
@@ -183,4 +254,44 @@ class TestOasisCliUpdateFlags(unittest.TestCase):
             self.assertFalse(ns.self_update)
         finally:
             Path(td).rmdir()
+
+
+class TestOasisCliUpdateFlow(unittest.TestCase):
+    @patch.object(cli_update, "print_check_update", return_value=11)
+    def test_check_update_sets_pending_exit_code_and_skips_scan_init(
+        self, mock_print_check_update
+    ):
+        from oasis.oasis import OasisScanner
+
+        scanner = OasisScanner()
+        ns = scanner.setup_argument_parser().parse_args(["--check-update"])
+        init_result = scanner._init_arguments(ns)
+        self.assertIsNone(init_result)
+        self.assertEqual(scanner._pending_exit_code, 11)
+        mock_print_check_update.assert_called_once()
+
+        with patch.object(scanner, "_init_ollama") as mock_init_ollama:
+            rc = scanner._init_oasis(ns)
+
+        self.assertEqual(rc, 11)
+        mock_init_ollama.assert_not_called()
+
+    @patch.object(cli_update, "run_self_update", return_value=22)
+    def test_self_update_sets_pending_exit_code_and_skips_scan_init(
+        self, mock_run_self_update
+    ):
+        from oasis.oasis import OasisScanner
+
+        scanner = OasisScanner()
+        ns = scanner.setup_argument_parser().parse_args(["--self-update"])
+        init_result = scanner._init_arguments(ns)
+        self.assertIsNone(init_result)
+        self.assertEqual(scanner._pending_exit_code, 22)
+        mock_run_self_update.assert_called_once()
+
+        with patch.object(scanner, "_init_ollama") as mock_init_ollama:
+            rc = scanner._init_oasis(ns)
+
+        self.assertEqual(rc, 22)
+        mock_init_ollama.assert_not_called()
 

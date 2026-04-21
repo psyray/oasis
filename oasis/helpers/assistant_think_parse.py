@@ -57,7 +57,7 @@ def _strip_channel_thought_prefix(work: str, segments: List[str]) -> str:
         next_open = _CHANNEL_THOUGHT_OPEN.search(tail)
         para_idx = tail.find("\n\n")
 
-        if next_open is not None:
+        if next_open is not None and (para_idx == -1 or next_open.start() < para_idx):
             end = next_open.start()
             thought_body = tail[:end].strip()
             # Keep remainder starting at the next opener so the outer loop extracts it too.

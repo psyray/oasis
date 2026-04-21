@@ -46,6 +46,15 @@ class StableRelease:
     published_at: str
 
 
+@dataclass(frozen=True)
+class UpdateStatus:
+    """Normalized local/latest status for CLI update actions."""
+
+    local: Optional[Version]
+    latest: Optional[StableRelease]
+    error: Optional[str] = None
+
+
 def _user_agent() -> str:
     try:
         ver = installed_version_string()
@@ -77,94 +86,39 @@ def version_from_tag_name(tag_name: str) -> Optional[Version]:
         return None
 
 
-def _iter_site_package_roots() -> list[Path]:
-    """Return candidate site-packages root directories as resolved Paths."""
-    roots: set[Path] = set()
+def is_site_packages_install() -> bool:
+    """True when ``oasis`` is loaded from interpreter site-packages roots."""
+    import oasis
 
+    src = getattr(oasis, "__file__", None)
+    if not src:
+        return False
     try:
-        cfg_paths = sysconfig.get_paths()
-        for key in ("purelib", "platlib"):
-            p = cfg_paths.get(key)
-            if p:
-                roots.add(Path(p))
-    except (KeyError, TypeError, OSError):
-        pass
-
-    try:
-        import site
-
-        gs = getattr(site, "getsitepackages", None)
-        if callable(gs):
-            for p in gs() or []:
-                roots.add(Path(p))
-        gu = getattr(site, "getusersitepackages", None)
-        if callable(gu):
-            user_site = gu()
-            if user_site:
-                roots.add(Path(user_site))
-    except Exception:
-        pass
-
-    for entry in sys.path:
-        if not entry:
-            continue
-        p = Path(entry)
-        name = p.name.lower()
-        if "site-packages" in name or "dist-packages" in name:
-            roots.add(p)
-
-    normalized: list[Path] = []
-    for r in roots:
-        try:
-            normalized.append(r.resolve())
-        except OSError:
-            normalized.append(r)
-    return normalized
-
-
-def _is_under_any(path: Path, roots: list[Path]) -> bool:
-    """Return True if ``path`` is located under any of the given ``roots``."""
-    try:
-        path = path.resolve()
+        pkg_path = Path(src).resolve()
     except OSError:
-        pass
+        pkg_path = Path(src)
 
-    for root in roots:
+    try:
+        purelib = Path(sysconfig.get_path("purelib")).resolve()
+        platlib = Path(sysconfig.get_path("platlib")).resolve()
+    except (TypeError, KeyError, OSError):
         try:
-            root_resolved = root.resolve()
+            prefix = Path(sys.prefix).resolve()
         except OSError:
-            root_resolved = root
-
+            prefix = Path(sys.prefix)
         try:
-            path.relative_to(root_resolved)
+            pkg_path.relative_to(prefix)
+            return True
+        except ValueError:
+            return False
+
+    for root in (purelib, platlib):
+        try:
+            pkg_path.relative_to(root)
             return True
         except ValueError:
             continue
     return False
-
-
-def is_site_packages_install() -> bool:
-    """True when ``oasis`` is loaded from a recognized site-packages root (sysconfig/site/sys.path)."""
-    import oasis
-
-    pkg_paths = getattr(oasis, "__path__", None)
-    pkg_path: Path
-    if pkg_paths:
-        try:
-            pkg_path = Path(next(iter(pkg_paths)))
-        except StopIteration:
-            src = getattr(oasis, "__file__", None)
-            if not src:
-                return False
-            pkg_path = Path(src)
-    else:
-        src = getattr(oasis, "__file__", None)
-        if not src:
-            return False
-        pkg_path = Path(src)
-
-    roots = _iter_site_package_roots()
-    return _is_under_any(pkg_path, roots)
 
 
 def _cache_base_dir() -> Path:
@@ -254,30 +208,29 @@ def fetch_latest_stable_release(
             client.close()
 
 
-def resolve_latest_stable_for_notice(
+def get_latest_stable_release(
     *,
-    force_refresh: bool,
+    use_cache: bool,
     client: Optional[httpx.Client] = None,
+    timeout_sec: float = 12.0,
 ) -> tuple[Optional[StableRelease], bool]:
-    """
-    Return (release, used_network). Uses disk cache when fresh unless force_refresh.
-    """
+    """Return (release, used_network), with optional cache read/write."""
     now = time.time()
-    cached = None if force_refresh else _read_cache()
-    if cached:
-        try:
-            ts = float(cached.get("checked_at_epoch", 0))
-            tag = cached.get("tag_name")
-            ver_s = cached.get("latest_version")
-            if tag and ver_s and (now - ts) <= CACHE_TTL_SECONDS:
-                ver = Version(ver_s)
-                pub = str(cached.get("published_at", ""))
-                return StableRelease(tag_name=str(tag), version=ver, published_at=pub), False
-        except (InvalidVersion, TypeError, ValueError):
-            pass
+    if use_cache:
+        cached = _read_cache()
+        if cached:
+            try:
+                ts = float(cached.get("checked_at_epoch", 0))
+                if (now - ts) <= CACHE_TTL_SECONDS:
+                    tag = str(cached["tag_name"])
+                    ver = Version(str(cached["latest_version"]))
+                    pub = str(cached.get("published_at", ""))
+                    return StableRelease(tag_name=tag, version=ver, published_at=pub), False
+            except (KeyError, InvalidVersion, TypeError, ValueError):
+                pass
 
-    latest = fetch_latest_stable_release(client=client)
-    if latest is not None:
+    latest = fetch_latest_stable_release(client=client, timeout_sec=timeout_sec)
+    if latest is not None and use_cache:
         _write_cache(
             {
                 "checked_at_epoch": now,
@@ -287,6 +240,52 @@ def resolve_latest_stable_for_notice(
             }
         )
     return latest, True
+
+
+def resolve_latest_stable_for_notice(
+    *,
+    force_refresh: bool,
+    client: Optional[httpx.Client] = None,
+) -> tuple[Optional[StableRelease], bool]:
+    """Backward-compatible wrapper for notice resolution semantics."""
+    if force_refresh:
+        latest, used_network = get_latest_stable_release(
+            use_cache=False,
+            client=client,
+        )
+        if latest is not None:
+            _write_cache(
+                {
+                    "checked_at_epoch": time.time(),
+                    "tag_name": latest.tag_name,
+                    "latest_version": str(latest.version),
+                    "published_at": latest.published_at,
+                }
+            )
+        return latest, used_network
+
+    return get_latest_stable_release(use_cache=True, client=client)
+
+
+def get_update_status(*, use_cache: bool) -> UpdateStatus:
+    """Build local/latest update status with shared parse and error handling."""
+    try:
+        local_v = Version(installed_version_string())
+    except InvalidVersion:
+        return UpdateStatus(
+            local=None,
+            latest=None,
+            error="Could not parse installed version.",
+        )
+
+    latest, _ = get_latest_stable_release(use_cache=use_cache)
+    if latest is None:
+        return UpdateStatus(
+            local=local_v,
+            latest=None,
+            error="Could not determine the latest stable release (network or GitHub API).",
+        )
+    return UpdateStatus(local=local_v, latest=latest)
 
 
 def _log_update_banner_error(exc: BaseException) -> None:
@@ -308,13 +307,14 @@ def maybe_emit_update_banner(*, silent: bool) -> None:
     if os.environ.get(ENV_DISABLE_CHECK):
         return
     try:
-        local = Version(installed_version_string())
-        latest, _ = resolve_latest_stable_for_notice(force_refresh=False)
-        if latest is None or latest.version <= local:
+        status = get_update_status(use_cache=True)
+        if status.error or status.local is None or status.latest is None:
             return
-        pip_ref = f"git+{GIT_REMOTE_INSTALL_URL}@{latest.tag_name}"
+        if status.latest.version <= status.local:
+            return
+        pip_ref = f"git+{GIT_REMOTE_INSTALL_URL}@{status.latest.tag_name}"
         print(
-            f"oasis: update available ({local} -> {latest.version}). "
+            f"oasis: update available ({status.local} -> {status.latest.version}). "
             f"Run: pipx install --force {pip_ref}",
             file=sys.stderr,
         )
@@ -326,25 +326,16 @@ def maybe_emit_update_banner(*, silent: bool) -> None:
 
 def print_check_update() -> int:
     """Print local vs latest stable from GitHub; stdout user text, non-zero on hard errors."""
-    try:
-        local_v = Version(installed_version_string())
-    except InvalidVersion:
-        print("Could not parse installed version.", file=sys.stderr)
+    status = get_update_status(use_cache=False)
+    if status.error or status.local is None or status.latest is None:
+        print(status.error or "Could not determine update status.", file=sys.stderr)
         return 1
 
-    latest = fetch_latest_stable_release()
-    if latest is None:
-        print(
-            "Could not determine the latest stable release (network or GitHub API).",
-            file=sys.stderr,
-        )
-        return 1
+    print(f"Current version: {status.local}")
+    print(f"Latest stable:   {status.latest.version} ({status.latest.tag_name})")
 
-    print(f"Current version: {local_v}")
-    print(f"Latest stable:   {latest.version} ({latest.tag_name})")
-
-    if latest.version > local_v:
-        pip_ref = f"git+{GIT_REMOTE_INSTALL_URL}@{latest.tag_name}"
+    if status.latest.version > status.local:
+        pip_ref = f"git+{GIT_REMOTE_INSTALL_URL}@{status.latest.tag_name}"
         print("Update available. Run: oasis --self-update")
         print(f"Or: pipx install --force {pip_ref}")
         return 0
@@ -363,25 +354,16 @@ def run_self_update() -> int:
         )
         return 1
 
-    try:
-        local_v = Version(installed_version_string())
-    except InvalidVersion:
-        print("Could not parse installed version.", file=sys.stderr)
+    status = get_update_status(use_cache=False)
+    if status.error or status.local is None or status.latest is None:
+        print(status.error or "Could not determine update status.", file=sys.stderr)
         return 1
 
-    latest = fetch_latest_stable_release()
-    if latest is None:
-        print(
-            "Could not determine the latest stable release (network or GitHub API).",
-            file=sys.stderr,
-        )
-        return 1
-
-    if latest.version <= local_v:
-        print(f"Already up to date ({local_v}).")
+    if status.latest.version <= status.local:
+        print(f"Already up to date ({status.local}).")
         return 0
 
-    pip_url = f"git+{GIT_REMOTE_INSTALL_URL}@{latest.tag_name}"
+    pip_url = f"git+{GIT_REMOTE_INSTALL_URL}@{status.latest.tag_name}"
 
     pipx_exe = shutil.which("pipx")
     if pipx_exe is None:
@@ -393,7 +375,8 @@ def run_self_update() -> int:
         return 1
 
     cmd = [pipx_exe, "install", "--force", pip_url]
-    print(f"Upgrading to {latest.tag_name} ({latest.version}) …")
-    proc = subprocess.run(cmd)
+    print(f"Upgrading to {status.latest.tag_name} ({status.latest.version}) …")
+    # Safe: shell=False and args list; no shell interpolation occurs.
+    proc = subprocess.run(cmd, shell=False)  # nosec B603
     return int(proc.returncode)
 
