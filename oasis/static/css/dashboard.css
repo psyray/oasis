@@ -423,6 +423,25 @@ body {
     color: #2cbe4e;
 }
 
+.badge-critical {
+    background-color: #f3e5f5;
+    color: #7b1fa2;
+}
+
+.stats-severity-chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 168px;
+    margin-top: 8px;
+}
+
+.stats-severity-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+
 /* Scan progress chip (distinct from vulnerability severity badges above) */
 .badge-status-aborted {
     background-color: #fde8e8;
@@ -499,6 +518,15 @@ body {
     padding: 15px;
     font-size: 14px;
     margin-top: auto;
+    position: relative;
+    z-index: 0;
+}
+
+/* Dashboard report modal is above the page footer; hide footer while modal is open so it cannot sit visually over the Assistant panel. */
+html.report-modal-scroll-locked .footer,
+body.report-modal-scroll-locked .footer {
+    visibility: hidden;
+    pointer-events: none;
 }
 
 .footer-links {
@@ -1371,6 +1399,11 @@ body {
     line-height: 1.6;
     color: var(--dark-blue);
     padding: 0 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    align-items: stretch;
+    min-height: 0;
 }
 
 #report-modal-content h1 {
@@ -1436,6 +1469,83 @@ body {
 .json-report-preview {
     max-height: 400px;
     overflow: auto;
+}
+
+.json-report-detail-heading {
+    margin-top: 1rem;
+    margin-bottom: 0.5rem;
+    color: var(--dark-blue-2);
+}
+
+.oasis-json-file-section {
+    margin: 1rem 0 1.25rem;
+    padding-top: 0.25rem;
+}
+
+.oasis-json-file-heading {
+    margin: 0.5rem 0 0.35rem;
+    font-size: 1.05rem;
+    color: var(--dark-blue-2);
+}
+
+.oasis-json-file-heading code {
+    font-size: 0.95em;
+}
+
+.oasis-json-meta {
+    margin: 0.2rem 0;
+    font-size: 0.92rem;
+    color: var(--dark-blue-2);
+}
+
+.oasis-json-chunk-notes {
+    margin: 0.35rem 0 0.5rem;
+    font-size: 0.92rem;
+}
+
+.oasis-json-error {
+    color: #b00020;
+}
+
+.oasis-json-finding-details {
+    margin: 0.45rem 0;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.35rem 0.5rem;
+    background: var(--white);
+    box-shadow: 0 1px 3px rgba(14, 31, 43, 0.06);
+}
+
+.oasis-json-finding-summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--dark-blue-2);
+    list-style: none;
+}
+
+.oasis-json-finding-summary::-webkit-details-marker {
+    display: none;
+}
+
+.oasis-json-finding-details .oasis-json-finding-summary::before {
+    content: '▸ ';
+    display: inline-block;
+    margin-right: 0.25rem;
+    transition: transform 0.15s ease;
+}
+
+.oasis-json-finding-details[open] .oasis-json-finding-summary::before {
+    transform: rotate(90deg);
+}
+
+.oasis-json-finding-body {
+    margin-top: 0.5rem;
+    padding: 0.35rem 0 0.25rem 0.5rem;
+    border-left: 3px solid var(--turquoise);
+}
+
+.oasis-json-finding-body p:first-child {
+    margin-top: 0;
 }
 
 .json-preview {
@@ -1515,9 +1625,11 @@ body {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
+/* Report HTML/PDF companions: do not fix height — modal-body scrolls as one column.
+   A fixed height here made overflowing report text paint under the Assistant panel sibling. */
 .html-content-container {
     width: 100%;
-    height: calc(100vh - 200px);
+    box-sizing: border-box;
     border: none;
     border-radius: 0;
     background: transparent;
@@ -2096,4 +2208,156 @@ body.modal-open {
 .date-tag {
     box-sizing: border-box;
     max-width: 100%;
+}
+
+/* Report modal assistant — embedded in #oasis-assistant-mount (JSON preview) or appended at modal end */
+.oasis-assistant-panel {
+    flex-shrink: 0;
+    margin-top: 1rem;
+    border-top: 1px solid var(--border-color);
+    padding-top: 0.75rem;
+    position: relative;
+    z-index: 1;
+    background: var(--white);
+    box-shadow: 0 -4px 12px rgba(14, 31, 43, 0.06);
+}
+#report-modal-content .oasis-assistant-mount > .oasis-assistant-panel {
+    margin-top: 0.75rem;
+    border-top: none;
+    padding: 14px 16px;
+    box-shadow: none;
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--turquoise);
+    border-radius: 6px;
+}
+.oasis-assistant-controls {
+    margin-top: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    position: relative;
+}
+.oasis-assistant-controls label {
+    font-size: 0.9rem;
+}
+.oasis-assistant-finding-ref-intro {
+    display: block;
+    margin-bottom: 0.35rem;
+    font-size: 0.9rem;
+}
+.oasis-assistant-finding-selects {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.5rem 0.75rem;
+}
+.oasis-assistant-finding-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.85rem;
+    min-width: 0;
+}
+.oasis-assistant-finding-key {
+    font-weight: 600;
+    color: var(--dark-blue-2);
+}
+.oasis-assistant-finding-field select {
+    min-width: 9rem;
+    max-width: min(18rem, 100%);
+    padding: 0.25rem 0.35rem;
+    font-size: 0.85rem;
+    box-sizing: border-box;
+}
+.oasis-assistant-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+.oasis-assistant-input {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: inherit;
+}
+.oasis-assistant-log {
+    max-height: 840px;
+    overflow-y: auto;
+    background: var(--light-gray);
+    padding: 0.5rem;
+    border-radius: 4px;
+    margin-top: 0.5rem;
+    font-size: 0.9rem;
+    white-space: normal;
+}
+.oasis-assistant-msg--user {
+    margin: 0.25rem 0;
+    color: var(--dark-blue-2);
+    white-space: pre-wrap;
+}
+.oasis-assistant-msg--assistant {
+    margin: 0.25rem 0;
+    border-left: 3px solid var(--turquoise);
+    padding-left: 0.5rem;
+}
+.oasis-assistant-session-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0 0.5rem;
+    font-size: 0.88rem;
+}
+.oasis-assistant-session-bar .btn {
+    padding: 0.25rem 0.5rem;
+}
+.oasis-assistant-session-label select {
+    margin-left: 0.35rem;
+    max-width: min(100%, 14rem);
+}
+.oasis-assistant-md {
+    white-space: normal;
+    word-break: break-word;
+}
+.oasis-assistant-md pre,
+.oasis-assistant-md code {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.oasis-assistant-md pre {
+    background: rgba(14, 31, 43, 0.06);
+    padding: 0.35rem 0.5rem;
+    border-radius: 4px;
+    overflow-x: auto;
+}
+.oasis-assistant-md p:first-child {
+    margin-top: 0;
+}
+.oasis-assistant-md p:last-child {
+    margin-bottom: 0;
+}
+.oasis-assistant-think {
+    margin: 0.35rem 0;
+    font-size: 0.82rem;
+    color: var(--dark-blue-2);
+}
+.oasis-assistant-think summary {
+    cursor: pointer;
+    font-weight: 500;
+}
+.oasis-assistant-think-pre {
+    margin: 0.35rem 0 0;
+    padding: 0.35rem;
+    background: rgba(14, 31, 43, 0.05);
+    border-radius: 4px;
+    max-height: 8rem;
+    overflow: auto;
+    white-space: pre-wrap;
+}
+.oasis-assistant-log .oasis-assistant-md {
+    white-space: normal;
+}
+pre.http-raw {
+    background: #f8f8f8;
+    padding: 0.35rem;
+    overflow-x: auto;
 }

@@ -6,14 +6,21 @@ Model: {{ document.model_name }}
 Vulnerability: {{ document.vulnerability_name }}
 {%- endmacro %}
 
+{% macro render_return_to_toc() -%}
+[Return to table of contents](#table-of-contents)
+
+{%- endmacro %}
+
 {% macro render_table_of_contents() -%}
+<a id="table-of-contents"></a>
+
 ## Table of contents
 
-1. [Summary](#summary)
-2. [Statistics](#statistics)
-3. [Files](#files)
-4. [Detailed Analysis](#detailed-analysis)
-5. [Errors & Notes](#errors--notes)
+| | |
+| --- | --- |
+| 📋 [Summary](#summary) | 📊 [Statistics](#statistics) |
+| 📁 [Files](#files) | 🔍 [Detailed analysis](#detailed-analysis) |
+| 💬 [Assistant](#assistant) | ⚠️ [Errors & notes](#errors--notes) |
 {%- endmacro %}
 
 {% macro render_statistics(stats) -%}
@@ -25,6 +32,8 @@ Vulnerability: {{ document.vulnerability_name }}
 - High: {{ stats.high_risk }}
 - Medium: {{ stats.medium_risk }}
 - Low: {{ stats.low_risk }}
+
+{{ render_return_to_toc() }}
 {%- endmacro %}
 
 {% macro render_file_summary(files) -%}
@@ -35,6 +44,8 @@ Vulnerability: {{ document.vulnerability_name }}
 {% for file in files -%}
 | `{{ file.file_path }}` | {{ "%.3f"|format(file.similarity_score) }} |
 {% endfor %}
+
+{{ render_return_to_toc() }}
 {%- endmacro %}
 
 {% macro render_chunk_source_lines(chunk) -%}
@@ -50,7 +61,11 @@ _Source lines {{ chunk.start_line }}-{{ chunk.end_line }} (1-based, inclusive)._
 {%- endmacro %}
 
 {% macro render_finding(finding, file_index, finding_index) -%}
-#### Finding {{ file_index }}.{{ finding_index }}: {{ finding.title }} ({{ finding.severity }})
+<details class="report-finding-details">
+
+<summary>Finding {{ file_index }}.{{ finding_index }}: {{ finding.title }} ({{ finding.severity }})</summary>
+
+<div class="report-finding-body">
 
 {% if finding.vulnerable_code %}
 ##### Vulnerable Code
@@ -105,6 +120,16 @@ _Source lines {{ chunk.start_line }}-{{ chunk.end_line }} (1-based, inclusive)._
 - `{{ payload }}`
 {% endfor %}
 {% endif %}
+{% if finding.http_raw_requests %}
+##### HTTP raw requests (Burp / ZAP)
+
+{% for raw in finding.http_raw_requests %}
+```http
+{{ raw }}
+```
+
+{% endfor %}
+{% endif %}
 {% if finding.exploitation_conditions %}
 ##### Conditions
 
@@ -122,4 +147,8 @@ _Source lines {{ chunk.start_line }}-{{ chunk.end_line }} (1-based, inclusive)._
 {{ finding.secure_code_example }}
 ```
 {% endif %}
+
+</div>
+
+</details>
 {%- endmacro %}

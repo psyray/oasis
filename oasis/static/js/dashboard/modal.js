@@ -14,100 +14,6 @@ DashboardApp._pdfEmbedSrcForPath = function (reportPath) {
     return `/reports/${encodeURIComponent(reportPath)}?_pdf_embed=${pdfEmbedToken}`;
 };
 
-DashboardApp.renderJsonReportPreview = function(doc) {
-    const lines = [];
-    const files = Array.isArray(doc.files) ? doc.files : [];
-    const stats = doc.stats || {};
-
-    lines.push(`# ${doc.title || 'Security Analysis Report'}`);
-    lines.push('');
-    if (doc.generated_at) {
-        lines.push(`Date: ${doc.generated_at}`);
-    }
-    if (doc.model_name) {
-        lines.push(`Model: ${doc.model_name}`);
-    }
-    if (doc.vulnerability_name) {
-        lines.push(`Vulnerability: ${doc.vulnerability_name}`);
-    }
-
-    lines.push('');
-    lines.push('## Summary');
-    lines.push('');
-    lines.push(`Analyzed ${files.length} file(s).`);
-    lines.push('');
-    lines.push(`- Total findings: ${stats.total_findings || 0}`);
-    lines.push(`- Critical: ${stats.critical_risk || 0}`);
-    lines.push(`- High: ${stats.high_risk || 0}`);
-    lines.push(`- Medium: ${stats.medium_risk || 0}`);
-    lines.push(`- Low: ${stats.low_risk || 0}`);
-    lines.push('');
-
-    lines.push('| File | Similarity |');
-    lines.push('|------|------------|');
-    files.forEach(fileEntry => {
-        const score = typeof fileEntry.similarity_score === 'number'
-            ? fileEntry.similarity_score.toFixed(3)
-            : '0.000';
-        lines.push(`| \`${fileEntry.file_path || 'unknown'}\` | ${score} |`);
-    });
-
-    lines.push('');
-    lines.push('## Detailed Analysis');
-    lines.push('');
-
-    files.forEach(fileEntry => {
-        lines.push(`### ${fileEntry.file_path || 'unknown file'}`);
-        if (typeof fileEntry.similarity_score === 'number') {
-            lines.push(`Similarity score: ${fileEntry.similarity_score.toFixed(3)}`);
-        }
-        lines.push('');
-
-        if (fileEntry.error) {
-            lines.push(`**Error:** ${fileEntry.error}`);
-            lines.push('');
-        }
-
-        const chunkAnalyses = Array.isArray(fileEntry.chunk_analyses) ? fileEntry.chunk_analyses : [];
-        chunkAnalyses.forEach(chunk => {
-            if (chunk.notes && (!chunk.findings || chunk.findings.length === 0)) {
-                lines.push(`_Notes_: ${chunk.notes}`);
-                lines.push('');
-            }
-
-            const findings = Array.isArray(chunk.findings) ? chunk.findings : [];
-            findings.forEach((finding, idx) => {
-                lines.push(`#### Finding ${idx + 1}: ${finding.title || 'Vulnerability found'} (${finding.severity || 'Unknown'})`);
-                lines.push('');
-                if (finding.vulnerable_code) {
-                    lines.push('```');
-                    lines.push(finding.vulnerable_code);
-                    lines.push('```');
-                    lines.push('');
-                }
-                if (finding.explanation) {
-                    lines.push(finding.explanation);
-                    lines.push('');
-                }
-                if (finding.impact) {
-                    lines.push(`**Impact:** ${finding.impact}`);
-                }
-                if (finding.remediation) {
-                    lines.push(`**Remediation:** ${finding.remediation}`);
-                }
-                lines.push('');
-            });
-        });
-    });
-
-    const markdownPreview = lines.join('\n');
-    return (
-        '<div class="json-report-preview">' +
-        DashboardApp.convertMarkdownToHtml(markdownPreview) +
-        '</div>'
-    );
-};
-
 DashboardApp.getAvailableFormatsForPath = function(path, currentFormat) {
     const byPath = DashboardApp.reportFormatsByPath || {};
     if (byPath[path] && Array.isArray(byPath[path].formats)) {
@@ -137,25 +43,6 @@ DashboardApp.getAvailableFormatsForPath = function(path, currentFormat) {
         return fh.sortFormatsForDisplay(Array.from(available));
     }
     return Array.from(available);
-};
-
-DashboardApp.ensureModalStyles = function() {
-    // Check if styles already exist
-    if (document.getElementById('modal-dynamic-styles')) {
-        return;
-    }
-    
-    // Create style element
-    const style = document.createElement('style');
-    style.id = 'modal-dynamic-styles';
-    
-    // Define basic modal styles
-    style.textContent = `
-    `;
-    
-    // Add to document
-    document.head.appendChild(style);
-    DashboardApp.debug("Modal styles added dynamically");
 };
 
 DashboardApp._relativePathUnderReportsHref = function(href) {
@@ -290,6 +177,9 @@ DashboardApp._finalizeReportModalView = function(restoreScrollTop) {
     if (typeof restoreScrollTop === 'number' && !Number.isNaN(restoreScrollTop)) {
         DashboardApp._restoreReportModalScrollTop(restoreScrollTop);
     }
+    if (typeof DashboardApp.mountReportAssistantPanel === 'function') {
+        DashboardApp.mountReportAssistantPanel();
+    }
 };
 
 DashboardApp._syncReportModalBackButton = function() {
@@ -373,6 +263,14 @@ DashboardApp.openReport = function(path, format, options) {
     if (!path) {
         console.error("No path provided for report");
         return;
+    }
+
+    const prevPath = DashboardApp.reportModalState.currentPath || '';
+    const prevFormat = DashboardApp.reportModalState.currentFormat || '';
+    if (prevPath !== path || prevFormat !== format) {
+        if (typeof DashboardApp.resetAssistantPanelForModalNavigation === 'function') {
+            DashboardApp.resetAssistantPanelForModalNavigation();
+        }
     }
 
     const opts = Object.assign(
@@ -507,7 +405,7 @@ DashboardApp.openReport = function(path, format, options) {
             })
             .then((data) => {
                 if (data.content) {
-                    DashboardApp._appendSanitizedHtml(modalContent, data.content);
+                    DashboardApp._appendSanitizedHtml(modalContent, data.content, 'html-content-container');
                 } else {
                     DashboardApp._appendTextMessage(
                         modalContent,
@@ -694,26 +592,33 @@ DashboardApp.closeReportModal = function() {
     DashboardApp.reportModalState.currentFormat = '';
 };
 
-// Helper function to convert Markdown to HTML
-DashboardApp.convertMarkdownToHtml = function(markdown) {
+/**
+ * Convert markdown to HTML. ``marked`` v9+ (jsDelivr UMD) exposes an object with
+ * ``.parse()``; older builds were a single function — support both.
+ */
+DashboardApp.convertMarkdownToHtml = function (markdown) {
     if (!markdown) {
         return '<p>Empty content</p>';
     }
-    
+    const simpleFallback = function (md) {
+        return String(md)
+            .replace(/\n/g, '<br>')
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>');
+    };
     try {
-        // Check if marked is available
-        if (typeof marked !== 'undefined') {
-            return marked(markdown);
-        } else {
-            // Simple fallback if marked.js is not loaded
-            return markdown
-                .replace(/\n/g, '<br>')
-                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                .replace(/\*(.*?)\*/g, '<em>$1</em>');
+        if (typeof marked !== 'undefined' && marked !== null) {
+            if (typeof marked.parse === 'function') {
+                return marked.parse(markdown);
+            }
+            if (typeof marked === 'function') {
+                return marked(markdown);
+            }
         }
+        return simpleFallback(markdown);
     } catch (error) {
         console.error('Error converting Markdown:', error);
-        return `<pre style="white-space: pre-wrap;">${markdown.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
+        return simpleFallback(markdown);
     }
 };
 

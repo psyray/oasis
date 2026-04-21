@@ -63,6 +63,7 @@ from .helpers.poc import (
     maybe_debug_log_poc_stage_output,
     poc_assist_chat_options,
 )
+from .helpers.prompt_compose import append_user_instructions, resolved_custom_instructions
 from .helpers.progress import (
     EXEC_SUMMARY_PROGRESS_EVENT_VERSION,
     graph_final_phases,
@@ -652,7 +653,7 @@ class SecurityAnalyzer:
                 f"(1-based, inclusive) in the file under analysis.\n"
             )
 
-        return f"""{self.get_language_instruction()}You are a cybersecurity expert specialized in {vuln_name} vulnerabilities ONLY.
+        prompt = f"""{self.get_language_instruction()}You are a cybersecurity expert specialized in {vuln_name} vulnerabilities ONLY.
 
 CRITICAL INSTRUCTION: You must ONLY analyze the code for {vuln_name} vulnerabilities.
 DO NOT mention, describe, or analyze ANY other type of vulnerability.
@@ -673,6 +674,7 @@ Analyze this code segment ({i + 1}/{total_chunks}) for {vuln_name} vulnerabiliti
 
 {VULNERABILITY_PROMPT_EXTENSION}
 """
+        return append_user_instructions(prompt, resolved_custom_instructions(self.args))
 
     def get_language_instruction(self) -> str:
         """
@@ -1193,7 +1195,8 @@ Code to analyze:
                 "_No structured findings available to derive a PoC._"
             )
         digest = finalize_poc_digest_json(compact, POC_DIGEST_JSON_MAX_CHARS)
-        prompt = f"""You are assisting a defensive security review.
+        prompt = append_user_instructions(
+            f"""You are assisting a defensive security review.
 
 Based ONLY on the JSON summary below (from a prior static scan), produce:
 1) A minimal standalone proof-of-concept: a short script OR shell/Python/etc. commands that could demonstrate the issue in an isolated lab or VM.
@@ -1204,7 +1207,9 @@ OASIS will LOG your answer only; it will NOT execute your output. The human must
 
 FINDINGS SUMMARY (valid JSON envelope; ``truncated_for_llm_prompt_budget`` may be true):
 {digest}
-"""
+""",
+            resolved_custom_instructions(args),
+        )
         try:
             opts: dict = poc_assist_chat_options()
             if getattr(args, "debug", False):
@@ -2182,6 +2187,8 @@ For each finding:
 - manipulable_parameters: parameter or header names
 - exploitation_steps: short bullet strings for the attack path
 - example_payloads: example strings if applicable
+- http_raw_requests: optional list of full raw HTTP request texts (request line, Host, headers, blank line, body)
+  suitable for Burp Suite Repeater or OWASP ZAP when the finding involves HTTP; use [] when not applicable
 - exploitation_conditions: dependencies or preconditions
 - remediation: remediation guidance
 - secure_code_example: optional secure code sample as plain text

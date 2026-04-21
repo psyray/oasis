@@ -5,26 +5,58 @@
 {%- endmacro %}
 
 {% macro render_table_of_contents() -%}
-<h2 id="table-of-contents">Table of contents</h2>
-<ol>
-  <li><a href="#summary">Summary</a></li>
-  <li><a href="#statistics">Statistics</a></li>
-  <li><a href="#files">Files</a></li>
-  <li><a href="#detailed-analysis">Detailed analysis</a></li>
-  <li><a href="#errors-notes">Errors &amp; Notes</a></li>
-</ol>
+<nav class="report-toc" aria-label="Table of contents">
+  <h2 id="table-of-contents" class="report-toc-title">Table of contents</h2>
+  <ul class="report-toc-list">
+    <li><a class="report-toc-btn" href="#summary"><span class="report-toc-icon" aria-hidden="true">📋</span><span class="report-toc-label">Summary</span></a></li>
+    <li><a class="report-toc-btn" href="#statistics"><span class="report-toc-icon" aria-hidden="true">📊</span><span class="report-toc-label">Statistics</span></a></li>
+    <li><a class="report-toc-btn" href="#files"><span class="report-toc-icon" aria-hidden="true">📁</span><span class="report-toc-label">Files</span></a></li>
+    <li><a class="report-toc-btn" href="#detailed-analysis"><span class="report-toc-icon" aria-hidden="true">🔍</span><span class="report-toc-label">Detailed analysis</span></a></li>
+    <li><a class="report-toc-btn" href="#assistant"><span class="report-toc-icon" aria-hidden="true">💬</span><span class="report-toc-label">Assistant</span></a></li>
+    <li><a class="report-toc-btn" href="#errors-notes"><span class="report-toc-icon" aria-hidden="true">⚠️</span><span class="report-toc-label">Errors &amp; notes</span></a></li>
+  </ul>
+</nav>
+{%- endmacro %}
+
+{% macro render_return_to_toc() -%}
+<p class="report-return-top"><a class="report-return-top-link" href="#table-of-contents">Return to table of contents</a></p>
 {%- endmacro %}
 
 {% macro render_statistics(stats) -%}
 <h2 id="statistics">Statistics</h2>
-<ul>
+<ul class="report-stats-summary-list">
   <li><strong>Files analyzed:</strong> {{ stats.files_analyzed }}</li>
   <li><strong>Total findings:</strong> {{ stats.total_findings }}</li>
-  <li><strong>Critical:</strong> {{ stats.critical_risk }}</li>
-  <li><strong>High:</strong> {{ stats.high_risk }}</li>
-  <li><strong>Medium:</strong> {{ stats.medium_risk }}</li>
-  <li><strong>Low:</strong> {{ stats.low_risk }}</li>
 </ul>
+{% set _c = stats.critical_risk | default(0) %}
+{% set _h = stats.high_risk | default(0) %}
+{% set _m = stats.medium_risk | default(0) %}
+{% set _l = stats.low_risk | default(0) %}
+{% set _mx = [_c, _h, _m, _l]|max %}
+{% set _den = _mx if _mx > 0 else 1 %}
+<div class="report-stats-chart" role="img" aria-label="Findings by severity">
+  <div class="report-stats-chart-row report-stats-chart-row--critical">
+    <span class="report-stats-chart-label">Critical</span>
+    <div class="report-stats-chart-track"><span class="report-stats-chart-fill" style="width: {{ ((_c / _den) * 100)|round(1) }}%;"></span></div>
+    <span class="report-stats-chart-val">{{ _c }}</span>
+  </div>
+  <div class="report-stats-chart-row report-stats-chart-row--high">
+    <span class="report-stats-chart-label">High</span>
+    <div class="report-stats-chart-track"><span class="report-stats-chart-fill" style="width: {{ ((_h / _den) * 100)|round(1) }}%;"></span></div>
+    <span class="report-stats-chart-val">{{ _h }}</span>
+  </div>
+  <div class="report-stats-chart-row report-stats-chart-row--medium">
+    <span class="report-stats-chart-label">Medium</span>
+    <div class="report-stats-chart-track"><span class="report-stats-chart-fill" style="width: {{ ((_m / _den) * 100)|round(1) }}%;"></span></div>
+    <span class="report-stats-chart-val">{{ _m }}</span>
+  </div>
+  <div class="report-stats-chart-row report-stats-chart-row--low">
+    <span class="report-stats-chart-label">Low</span>
+    <div class="report-stats-chart-track"><span class="report-stats-chart-fill" style="width: {{ ((_l / _den) * 100)|round(1) }}%;"></span></div>
+    <span class="report-stats-chart-val">{{ _l }}</span>
+  </div>
+</div>
+{{ render_return_to_toc() }}
 {%- endmacro %}
 
 {% macro render_file_summary(files) -%}
@@ -37,6 +69,7 @@
   {% endfor %}
   </tbody>
 </table>
+{{ render_return_to_toc() }}
 {%- endmacro %}
 
 {% macro render_chunk_source_lines(chunk) -%}
@@ -51,7 +84,9 @@
 {%- endmacro %}
 
 {% macro render_finding(finding, file_index, finding_index) -%}
-<h4>Finding {{ file_index }}.{{ finding_index }}: {{ finding.title }} <span class="severity">({{ finding.severity }})</span></h4>
+<details class="report-finding-details">
+<summary class="report-finding-summary">Finding {{ file_index }}.{{ finding_index }}: {{ finding.title }} <span class="severity">({{ finding.severity }})</span></summary>
+<div class="report-finding-body">
 {% if finding.vulnerable_code %}
 <h5>Vulnerable code</h5>
 <pre><code>{{ finding.vulnerable_code }}</code></pre>
@@ -74,10 +109,18 @@
 <h5>Example payloads</h5>
 <ul>{% for payload in finding.example_payloads %}<li><code>{{ payload }}</code></li>{% endfor %}</ul>
 {% endif %}
+{% if finding.http_raw_requests %}
+<h5>HTTP raw requests (Burp / ZAP)</h5>
+{% for raw in finding.http_raw_requests %}
+<pre class="http-raw"><code>{{ raw }}</code></pre>
+{% endfor %}
+{% endif %}
 {% if finding.exploitation_conditions %}<h5>Conditions</h5><p>{{ finding.exploitation_conditions }}</p>{% endif %}
 {% if finding.remediation %}<h5>Remediation</h5><p>{{ finding.remediation }}</p>{% endif %}
 {% if finding.secure_code_example %}
 <h5>Secure example</h5>
 <pre><code>{{ finding.secure_code_example }}</code></pre>
 {% endif %}
+</div>
+</details>
 {%- endmacro %}

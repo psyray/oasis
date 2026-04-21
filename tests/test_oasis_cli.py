@@ -97,6 +97,26 @@ class TestOasisCliParsing(unittest.TestCase):
         finally:
             shutil.rmtree(td)
 
+    def test_custom_instructions_and_web_flags_parse(self):
+        scanner = OasisScanner()
+        parser = scanner.setup_argument_parser()
+        td = tempfile.mkdtemp()
+        try:
+            ns = self._parse_cli_args(
+                parser,
+                td,
+                "--custom-instructions",
+                "extra",
+                "--web-ollama-url",
+                "http://127.0.0.1:11434",
+                "--no-web-assistant-rag",
+            )
+            self.assertEqual(ns.custom_instructions, "extra")
+            self.assertEqual(ns.web_ollama_url, "http://127.0.0.1:11434")
+            self.assertFalse(ns.web_assistant_rag)
+        finally:
+            shutil.rmtree(td)
+
     def test_parse_embed_models_csv_returns_unique_trimmed_ordered_values(self):
         models = OasisScanner._parse_embed_models_csv(
             " qwen3-embedding:4b, bge-m3 ,qwen3-embedding:4b "

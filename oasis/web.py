@@ -1,12 +1,14 @@
 from datetime import datetime, timezone
 import logging
 import json
+import os
 from pathlib import Path
 import re
 import secrets
 import socket
 import string
 from threading import Thread
+from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect, url_for
 from functools import wraps
@@ -43,7 +45,8 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for minimal test envs
         return None
 
 
-from .config import REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS, LANGUAGES
+from .config import DEFAULT_ARGS, REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS, LANGUAGES
+from .config import OLLAMA_URL
 from .export.filenames import artifact_filename, report_dir_glob_for_format
 from .helpers.dashboard import (
     AUDIT_METRIC_LABELS,
@@ -66,6 +69,31 @@ from .helpers.dashboard import (
 )
 from .helpers.progress import SCAN_PROGRESS_EXTENDED_KEYS, coerce_scan_progress_event_version
 from .report import Report, executive_summary_progress_sidecar_path, is_executive_summary_progress_sidecar
+from .ollama_manager import OllamaManager
+from .helpers.assistant_rag import (
+    embedding_cache_file_path,
+    json_finding_slice,
+    load_embedding_code_base,
+    retrieve_relevant_snippets,
+)
+from .helpers.path_containment import is_path_within_root
+from .helpers.assistant_api_validate import (
+    coerce_finding_indices,
+    normalize_report_rel_query_arg,
+    resolve_assistant_report_json_path,
+    validate_assistant_messages,
+)
+from .helpers.assistant_persistence import (
+    delete_all_chat_sessions,
+    delete_chat_session,
+    list_chat_sessions,
+    load_chat_session,
+    new_session_id,
+    save_chat_session,
+    utc_now_iso,
+    validate_session_id,
+)
+from .helpers.assistant_think_parse import enrich_messages_for_response, parse_assistant_think
 from .tools import parse_iso_date, parse_report_date
 
 logger = logging.getLogger(__name__)
@@ -102,8 +130,29 @@ class WebServer:
     _AUDIT_METRIC_LABELS: dict[str, tuple[str, str]] = AUDIT_METRIC_LABELS
     _AUDIT_METRICS_TABLE_HEADER_LABELS = AUDIT_METRICS_TABLE_HEADER_LABELS
     _AUDIT_METRIC_TABLE_ROW_PATTERN = AUDIT_METRIC_TABLE_ROW_PATTERN
+    _ASSISTANT_MAX_REPORT_JSON_CHARS = 28000
+    _ASSISTANT_MAX_TOTAL_REPORT_CHARS = _ASSISTANT_MAX_REPORT_JSON_CHARS * 4
+    _ASSISTANT_MAX_MESSAGES = 40
+    _ASSISTANT_MAX_MESSAGE_CHARS = 12000
+    _ASSISTANT_SYSTEM_INTRO_PREFIX = (
+        'You are a defensive security assistant helping triage static-analysis findings '
+        'and understand code context. Only provide guidance for authorized testing. '
+        'Prefer citing file paths from REPORT_JSON_EXCERPT or RETRIEVAL_CONTEXT.\n\n'
+        'REPORT_JSON_EXCERPT:\n'
+    )
 
-    def __init__(self, report, debug=False, web_expose='local', web_password=None, web_port=5000):
+    def __init__(
+        self,
+        report,
+        debug=False,
+        web_expose='local',
+        web_password=None,
+        web_port=5000,
+        web_ollama_url=None,
+        web_embed_model=None,
+        web_assistant_rag=True,
+        default_ollama_url=None,
+    ):
         """Initialize a dashboard server bound to a single runtime session.
 
         Runtime attributes (`app`, `socketio`, progress monitor flags) are reset
@@ -115,6 +164,11 @@ class WebServer:
         self.web_expose = web_expose
         self.web_password = web_password
         self.web_port = web_port
+        self.web_ollama_url = web_ollama_url
+        self.web_embed_model = web_embed_model
+        self.web_assistant_rag = bool(web_assistant_rag)
+        self._default_ollama_url = default_ollama_url or OLLAMA_URL
+        self._assistant_ollama_manager: Optional[OllamaManager] = None
         self.report_data = None
         self.socketio = None
         self.app = None
@@ -148,6 +202,7 @@ class WebServer:
         self._progress_monitor_started = False
         self._stop_progress_monitor = False
         self._last_emitted_progress_key = None
+        self._assistant_ollama_manager = None
 
         app = Flask(
             __name__, template_folder=str(Path(__file__).parent / "templates"),
@@ -441,23 +496,6 @@ class WebServer:
         """Render the login template"""
         return render_template('login.html', error=error)
 
-    def _is_within_security_root(self, path: Path, root: Path) -> bool:
-        """Compatibility-safe path containment check (Python 3.9+ and older).
-
-        Both inputs are resolved here so containment checks always operate on
-        normalized absolute paths, regardless of caller behavior.
-        """
-        path = path.resolve(strict=False)
-        root = root.resolve()
-        is_relative_to = getattr(path, "is_relative_to", None)
-        if callable(is_relative_to):
-            return path.is_relative_to(root)
-        try:
-            path.relative_to(root)
-            return True
-        except ValueError:
-            return False
-
     def _report_preview_error_response(self, logger_message: str):
         logger.exception(logger_message)
         return (
@@ -468,6 +506,122 @@ class WebServer:
             ),
             500,
         )
+
+    def _resolve_assistant_ollama_url(self) -> str:
+        for raw in (
+            self.web_ollama_url,
+            os.environ.get("OASIS_WEB_OLLAMA_URL"),
+            self._default_ollama_url,
+            OLLAMA_URL,
+        ):
+            if raw is None:
+                continue
+            candidate = str(raw).strip()
+            if candidate:
+                return candidate
+        return str(OLLAMA_URL).strip()
+
+    def _get_assistant_ollama_manager(self) -> OllamaManager:
+        if self._assistant_ollama_manager is None:
+            self._assistant_ollama_manager = OllamaManager(self._resolve_assistant_ollama_url())
+        return self._assistant_ollama_manager
+
+    def _embed_model_for_assistant(self, report_payload: Optional[Dict[str, Any]]) -> str:
+        if self.web_embed_model and str(self.web_embed_model).strip():
+            return str(self.web_embed_model).strip()
+        if report_payload:
+            em = report_payload.get("embed_model")
+            if isinstance(em, str) and em.strip():
+                return em.strip()
+        return str(DEFAULT_ARGS.get("EMBED_MODEL") or "nomic-embed-text")
+
+    def _assistant_reserved_chars_for_extras(self) -> int:
+        total = self._ASSISTANT_MAX_TOTAL_REPORT_CHARS
+        r = int(total * 0.25)
+        return max(512, min(4096, r))
+
+    def _assistant_run_rag_retrieval(
+        self,
+        *,
+        last_user: str,
+        report_payload: Dict[str, Any],
+        report_rel: str,
+        rag_expand_project: bool,
+    ) -> Tuple[str, bool]:
+        """Return ``(rag_block, rag_unavailable)`` for assistant context."""
+        em_model = self._embed_model_for_assistant(report_payload)
+        ar = report_payload.get("analysis_root")
+        root_path = Path(ar).resolve() if isinstance(ar, str) and ar.strip() else self.input_path_absolute
+        cache_path = embedding_cache_file_path(root_path, em_model)
+
+        try:
+            cb = load_embedding_code_base(cache_path)
+        except OSError as exc:
+            logger.warning(
+                "Assistant RAG cache read failed report_path=%s cache=%s err=%s",
+                report_rel,
+                cache_path,
+                type(exc).__name__,
+            )
+            return "", True
+
+        if not cb:
+            return "", False
+
+        try:
+            client = self._get_assistant_ollama_manager().get_client()
+            er = client.embeddings(model=em_model, prompt=last_user[:8000])
+        except Exception as exc:
+            logger.warning(
+                "Assistant RAG embedding request failed report_path=%s embed_model=%s cache=%s err=%s",
+                report_rel,
+                em_model,
+                cache_path,
+                type(exc).__name__,
+                exc_info=True,
+            )
+            return "", True
+
+        qe = er.get("embedding") if isinstance(er, dict) else None
+        if not isinstance(qe, list) or not qe:
+            logger.warning(
+                "Assistant RAG missing query embedding report_path=%s embed_model=%s",
+                report_rel,
+                em_model,
+            )
+            return "", True
+
+        fps: List[str] = []
+        for fe in report_payload.get("files") or []:
+            if isinstance(fe, dict):
+                fp = fe.get("file_path")
+                if isinstance(fp, str):
+                    fps.append(fp)
+
+        rag_stats: Dict[str, int] = {}
+        try:
+            rag_block = retrieve_relevant_snippets(
+                code_base=cb,
+                report_file_paths=fps,
+                query_embedding=qe,
+                top_k=5,
+                expand_project_wide=rag_expand_project,
+                stats_out=rag_stats,
+                cache_path=cache_path,
+                embed_model=em_model,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Assistant RAG snippet retrieval failed report_path=%s embed_model=%s cache=%s err=%s",
+                report_rel,
+                em_model,
+                cache_path,
+                type(exc).__name__,
+                exc_info=True,
+            )
+            return "", True
+
+        return rag_block, False
 
     def register_routes(self, app, server, login_required):
         # Logout route
@@ -492,6 +646,8 @@ class WebServer:
                 debug=self.debug,
                 report_output_formats=REPORT.get('OUTPUT_FORMATS', []),
                 dashboard_format_display_order=dashboard_format_display_order(),
+                dashboard_assistant_enabled=True,
+                dashboard_assistant_rag_default=bool(getattr(self, "web_assistant_rag", True)),
             )
             
         @app.route('/api/reports')
@@ -566,7 +722,7 @@ class WebServer:
                 security_root = self.security_dir.resolve()
                 resolved_path = file_path.resolve(strict=False)
 
-                if not self._is_within_security_root(resolved_path, security_root):
+                if not is_path_within_root(resolved_path, security_root):
                     return jsonify({'error': 'Invalid path'}), 403
 
                 if not resolved_path.exists() or resolved_path.suffix != '.md':
@@ -602,7 +758,7 @@ class WebServer:
                 security_root = self.security_dir.resolve()
                 resolved_path = file_path.resolve(strict=False)
 
-                if not self._is_within_security_root(resolved_path, security_root):
+                if not is_path_within_root(resolved_path, security_root):
                     return jsonify({'error': 'Invalid path'}), 403
                 if not resolved_path.exists() or resolved_path.suffix != '.json':
                     return jsonify({'error': 'File not found or not JSON'}), 404
@@ -618,13 +774,290 @@ class WebServer:
             except Exception:
                 return self._report_preview_error_response("Error while generating JSON report preview")
 
+        @app.route('/api/source-snippet', methods=['GET'])
+        @login_required
+        def get_source_snippet():
+            rel = request.args.get('path', '').strip()
+            if not rel or rel.startswith('/') or '..' in Path(rel).parts:
+                return jsonify({'error': 'Invalid path'}), 400
+            try:
+                start_line = int(request.args.get('start_line', '1'))
+                end_line = int(request.args.get('end_line', '1'))
+            except ValueError:
+                return jsonify({'error': 'Invalid line range'}), 400
+            root = self.input_path_absolute.resolve()
+            target = (root / rel).resolve(strict=False)
+            if not is_path_within_root(target, root):
+                return jsonify({'error': 'Invalid path'}), 403
+            if not target.is_file():
+                return jsonify({'error': 'File not found'}), 404
+            try:
+                text = target.read_text(encoding='utf-8', errors='replace')
+            except OSError:
+                return jsonify({'error': 'Unreadable file'}), 500
+            lines = text.splitlines()
+            start_line = max(1, start_line)
+            end_line = max(start_line, end_line)
+            chunk = lines[start_line - 1 : end_line]
+            return jsonify({'lines': chunk, 'start_line': start_line, 'end_line': end_line, 'path': rel})
+
+        @app.route('/api/assistant/chat', methods=['POST'])
+        @login_required
+        def assistant_chat():
+            try:
+                data = request.get_json(silent=True)
+            except Exception:
+                data = None
+            if not isinstance(data, dict):
+                return jsonify({'error': 'Invalid JSON'}), 400
+
+            messages, msg_err = validate_assistant_messages(
+                data.get('messages'),
+                max_messages=self._ASSISTANT_MAX_MESSAGES,
+                max_message_chars=self._ASSISTANT_MAX_MESSAGE_CHARS,
+            )
+            if msg_err is not None:
+                err_body, status = msg_err
+                return jsonify(err_body), status
+            assert messages is not None
+
+            resolved_report, path_err = resolve_assistant_report_json_path(
+                data.get('report_path'),
+                self.security_dir,
+            )
+            if path_err is not None:
+                err_body, status = path_err
+                return jsonify(err_body), status
+            assert resolved_report is not None
+
+            try:
+                with open(resolved_report, 'r', encoding='utf-8') as rf:
+                    report_payload = json.load(rf)
+            except Exception:
+                return jsonify({'error': 'Could not read report'}), 500
+            if not isinstance(report_payload, dict):
+                return jsonify({'error': 'Invalid report'}), 422
+
+            report_rel = str(data.get('report_path', '')).strip()
+
+            chat_model = data.get('model')
+            if isinstance(chat_model, str) and chat_model.strip():
+                chat_model = chat_model.strip()
+            else:
+                mn = report_payload.get('model_name')
+                chat_model = mn.strip() if isinstance(mn, str) and mn.strip() else ''
+            if not chat_model:
+                return jsonify({'error': 'model required (pass model or ensure report has model_name)'}), 400
+
+            total_budget = self._ASSISTANT_MAX_TOTAL_REPORT_CHARS
+            reserved_extras = self._assistant_reserved_chars_for_extras()
+            excerpt_budget = max(total_budget - reserved_extras, 0)
+
+            excerpt = json.dumps(report_payload, ensure_ascii=False)
+            excerpt_truncated = False
+            if excerpt_budget > 0 and len(excerpt) > excerpt_budget:
+                excerpt = excerpt[:excerpt_budget] + '\n…(truncated)…'
+                excerpt_truncated = True
+            elif excerpt_budget <= 0:
+                excerpt = ''
+                excerpt_truncated = True
+
+            fi, ci, gi = coerce_finding_indices(data)
+            used_after_excerpt = len(self._ASSISTANT_SYSTEM_INTRO_PREFIX) + len(excerpt)
+            remaining_for_prompt = max(0, total_budget - used_after_excerpt)
+            finding_header_len = len('\n\nSELECTED_FINDING_JSON:\n')
+            finding_max = max(0, min(12000, remaining_for_prompt - finding_header_len - 200))
+            finding_json = json_finding_slice(
+                report_payload,
+                fi,
+                ci,
+                gi,
+                max_chars=finding_max,
+            )
+
+            use_rag = self.web_assistant_rag and not bool(data.get('rag_disabled'))
+            rag_block = ''
+            rag_unavailable = False
+            if use_rag:
+                last_user = ''
+                for m in reversed(messages):
+                    if isinstance(m, dict) and m.get('role') == 'user':
+                        c = m.get('content', '')
+                        last_user = c if isinstance(c, str) else ''
+                        break
+                if last_user.strip():
+                    rag_block, rag_unavailable = self._assistant_run_rag_retrieval(
+                        last_user=last_user,
+                        report_payload=report_payload,
+                        report_rel=report_rel,
+                        rag_expand_project=bool(data.get('rag_expand_project')),
+                    )
+
+            prompt_chunks: List[str] = [self._ASSISTANT_SYSTEM_INTRO_PREFIX + excerpt]
+            if finding_json:
+                prompt_chunks.extend(['', 'SELECTED_FINDING_JSON:', finding_json])
+            if rag_block:
+                prompt_chunks.extend(['', 'RETRIEVAL_CONTEXT:', rag_block])
+
+            labels_note = data.get('user_finding_labels')
+            labels_header = '\n\nUSER_LOCAL_TRIAGE_NOTES:\n'
+            core_so_far = '\n'.join(prompt_chunks)
+            labels_cap = max(0, total_budget - len(core_so_far) - len(labels_header))
+            if isinstance(labels_note, str) and labels_note.strip():
+                note = labels_note.strip()
+                if labels_cap > 0 and len(note) > labels_cap:
+                    note = note[:labels_cap] + '\n…(truncated)…'
+                elif labels_cap <= 0:
+                    note = ''
+                if note:
+                    prompt_chunks.extend(['', 'USER_LOCAL_TRIAGE_NOTES:', note])
+
+            system_content = '\n'.join(prompt_chunks)
+            if len(system_content) > total_budget:
+                logger.info(
+                    "Assistant system prompt capped (chars=%s budget=%s excerpt_truncated=%s)",
+                    len(system_content),
+                    total_budget,
+                    excerpt_truncated,
+                )
+                system_content = system_content[:total_budget] + '\n…(truncated)…'
+            elif excerpt_truncated:
+                logger.info(
+                    "Assistant report JSON excerpt truncated (budget=%s reserved_extras=%s)",
+                    excerpt_budget,
+                    reserved_extras,
+                )
+            full_messages: List[Dict[str, str]] = [{'role': 'system', 'content': system_content}]
+            for m in messages:
+                role = str(m.get('role', ''))
+                content = m.get('content', '')
+                if isinstance(content, str):
+                    full_messages.append({'role': role, 'content': content})
+
+            try:
+                om = self._get_assistant_ollama_manager()
+                resp = om.chat(chat_model, full_messages, options={'temperature': 0.2})
+            except Exception as exc:
+                logger.exception('Assistant chat failed')
+                return jsonify({'error': f'Assistant request failed: {type(exc).__name__}'}), 502
+
+            msg = resp.get('message') if isinstance(resp, dict) else None
+            raw = ''
+            if isinstance(msg, dict):
+                raw = msg.get('content') or ''
+            split = parse_assistant_think(raw if isinstance(raw, str) else '')
+            sid_raw = data.get('session_id')
+            if isinstance(sid_raw, str) and validate_session_id(sid_raw.strip()):
+                sess_id = sid_raw.strip()
+            else:
+                sess_id = new_session_id()
+            ts = utc_now_iso()
+            persist_msgs: List[Dict[str, Any]] = []
+            for m in messages:
+                if not isinstance(m, dict):
+                    continue
+                mc: Dict[str, Any] = {
+                    'role': str(m.get('role', '')),
+                    'content': m.get('content') if isinstance(m.get('content'), str) else '',
+                }
+                att = m.get('at')
+                mc['at'] = att.strip() if isinstance(att, str) and att.strip() else ts
+                persist_msgs.append(mc)
+            persist_msgs.append({'role': 'assistant', 'content': raw if isinstance(raw, str) else '', 'at': ts})
+            vn = report_payload.get('vulnerability_name')
+            vuln_label = vn.strip() if isinstance(vn, str) else ''
+            try:
+                save_chat_session(
+                    self.security_dir,
+                    report_rel,
+                    sess_id,
+                    persist_msgs,
+                    chat_model,
+                    vuln_label,
+                )
+            except (ValueError, OSError):
+                logger.warning('Assistant session save failed', exc_info=True)
+
+            return jsonify(
+                {
+                    'message': raw,
+                    'visible_markdown': split.visible_markdown,
+                    'thought_segments': split.thought_segments,
+                    'session_id': sess_id,
+                    'model': chat_model,
+                    'rag_unavailable': bool(rag_unavailable),
+                }
+            )
+
+        @app.route('/api/assistant/sessions', methods=['GET'])
+        @login_required
+        def assistant_sessions():
+            report_rel = normalize_report_rel_query_arg(request.args.get('report_path'))
+            if not report_rel:
+                return jsonify({'error': 'report_path required'}), 400
+            try:
+                lim = int(request.args.get('limit', '20'))
+            except ValueError:
+                lim = 20
+            rows = list_chat_sessions(self.security_dir, report_rel, limit=lim)
+            return jsonify(rows)
+
+        @app.route('/api/assistant/session', methods=['GET'])
+        @login_required
+        def assistant_session_get():
+            report_rel = normalize_report_rel_query_arg(request.args.get('report_path'))
+            sid = request.args.get('session_id', '').strip()
+            if not report_rel or not sid:
+                return jsonify({'error': 'report_path and session_id required'}), 400
+            doc = load_chat_session(self.security_dir, report_rel, sid)
+            if not doc:
+                return jsonify({'error': 'session not found'}), 404
+            msgs = doc.get('messages')
+            if isinstance(msgs, list):
+                doc = dict(doc)
+                doc['messages'] = enrich_messages_for_response([m for m in msgs if isinstance(m, dict)])
+            return jsonify(doc)
+
+        @app.route('/api/assistant/session', methods=['DELETE'])
+        @login_required
+        def assistant_session_delete():
+            try:
+                body = request.get_json(silent=True)
+            except Exception:
+                body = None
+            data = body if isinstance(body, dict) else {}
+            report_rel = data.get('report_path', '')
+            sid = data.get('session_id', '')
+            if not isinstance(report_rel, str) or not report_rel.strip():
+                return jsonify({'error': 'report_path required'}), 400
+            if not isinstance(sid, str) or not sid.strip():
+                return jsonify({'error': 'session_id required'}), 400
+            deleted = delete_chat_session(self.security_dir, report_rel.strip(), sid.strip())
+            if not deleted:
+                return jsonify({'error': 'session not found'}), 404
+            return jsonify({'deleted': True})
+
+        @app.route('/api/assistant/sessions', methods=['DELETE'])
+        @login_required
+        def assistant_sessions_delete_all():
+            try:
+                body = request.get_json(silent=True)
+            except Exception:
+                body = None
+            data = body if isinstance(body, dict) else {}
+            report_rel = data.get('report_path', '')
+            if not isinstance(report_rel, str) or not report_rel.strip():
+                return jsonify({'error': 'report_path required'}), 400
+            n = delete_all_chat_sessions(self.security_dir, report_rel.strip())
+            return jsonify({'deleted_count': n})
+
         def _load_report_html_from_json_path(filename: str):
             try:
                 file_path = self.security_dir / filename
                 security_root = self.security_dir.resolve()
                 resolved_path = file_path.resolve(strict=False)
 
-                if not self._is_within_security_root(resolved_path, security_root):
+                if not is_path_within_root(resolved_path, security_root):
                     return jsonify({'error': 'Invalid path'}), 403
                 if not resolved_path.exists() or resolved_path.suffix != '.json':
                     return jsonify({'error': 'File not found or not JSON'}), 404
@@ -1163,9 +1596,10 @@ class WebServer:
             "formats": {},
             "dates": {},
             "risk_summary": {
+                "critical": sum(report.get("stats", {}).get("critical_risk", 0) for report in reports if report["format"] == "json"),
                 "high": sum(report.get("stats", {}).get("high_risk", 0) for report in reports if report["format"] == "json"),
                 "medium": sum(report.get("stats", {}).get("medium_risk", 0) for report in reports if report["format"] == "json"),
-                "low": sum(report.get("stats", {}).get("low_risk", 0) for report in reports if report["format"] == "json")
+                "low": sum(report.get("stats", {}).get("low_risk", 0) for report in reports if report["format"] == "json"),
             }
         }
         
@@ -1381,9 +1815,10 @@ class WebServer:
             "dates": {},
             "risk_summary": {
                 "total_findings": 0,
+                "critical": 0,
                 "high": 0,
                 "medium": 0,
-                "low": 0
+                "low": 0,
             }
         }
 
@@ -1442,6 +1877,7 @@ class WebServer:
         if "stats" in report and report["stats"]:
             report_stats = report["stats"]
             stats["risk_summary"]["total_findings"] += report_stats.get("total_findings", 0)
+            stats["risk_summary"]["critical"] += report_stats.get("critical_risk", 0)
             stats["risk_summary"]["high"] += report_stats.get("high_risk", 0)
             stats["risk_summary"]["medium"] += report_stats.get("medium_risk", 0)
             stats["risk_summary"]["low"] += report_stats.get("low_risk", 0)

@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 # Bump when changing chunk or report shapes (cache invalidation).
-ANALYSIS_SCHEMA_VERSION = 3
+ANALYSIS_SCHEMA_VERSION = 4
 
 
 class ScanVerdict(BaseModel):
@@ -57,6 +57,13 @@ class VulnerabilityFinding(BaseModel):
     snippet_end_line: Optional[int] = Field(
         default=None,
         description="1-based last line of vulnerable_code in the file when resolved in the chunk (tooling)",
+    )
+    http_raw_requests: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional raw HTTP request lines for Burp Suite / OWASP ZAP repeater "
+            "(one full request per string when applicable)"
+        ),
     )
 
 
@@ -131,6 +138,14 @@ class VulnerabilityReportDocument(BaseModel):
     vulnerability: Dict[str, Any] = Field(default_factory=dict)
     files: List[FileReportEntry] = Field(default_factory=list)
     stats: DashboardStats = Field(default_factory=DashboardStats)
+    analysis_root: Optional[str] = Field(
+        default=None,
+        description="Resolved scanned project root when available (assistant / cache linkage)",
+    )
+    embed_model: Optional[str] = Field(
+        default=None,
+        description="Embedding model used during the scan when recorded",
+    )
 
 
 ScanVerdict.model_rebuild()
@@ -201,6 +216,12 @@ def chunk_analysis_to_markdown(chunk: ChunkDeepAnalysis, chunk_index: int) -> st
             parts.append("\n**Exploitation steps**:\n" + "\n".join(f"- {s}" for s in finding.exploitation_steps) + "\n")
         if finding.example_payloads:
             parts.append("\n**Example payloads**:\n" + "\n".join(f"- `{p}`" for p in finding.example_payloads) + "\n")
+        if finding.http_raw_requests:
+            parts.append(
+                "\n**HTTP raw requests (proxy tools)**:\n"
+                + "\n".join("```http\n" + h.strip() + "\n```" for h in finding.http_raw_requests)
+                + "\n"
+            )
         if finding.exploitation_conditions:
             parts.append(f"\n**Conditions**: {finding.exploitation_conditions}\n")
         if finding.remediation:

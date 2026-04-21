@@ -95,6 +95,12 @@ const DashboardApp = {
         this.loadModules()
             .then(() => {
                 this.debug("All modules loaded successfully");
+                if (typeof marked === 'undefined') {
+                    console.warn('[OASIS Dashboard] marked.js failed to load from CDN; markdown previews may be degraded.');
+                }
+                if (typeof Chart === 'undefined') {
+                    console.warn('[OASIS Dashboard] Chart.js failed to load from CDN; dashboard charts may not render.');
+                }
                 this.startApplication();
             })
             .catch(error => {
@@ -186,6 +192,8 @@ const DashboardApp = {
                 'views.js',
                 'api.js',
                 'modal.js',
+                'assistant-constants.js',
+                'assistant.js',
                 'interactions.js'
             ];
             

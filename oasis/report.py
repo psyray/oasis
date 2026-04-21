@@ -136,6 +136,7 @@ class Report:
         self.language = LANGUAGES[self.language_code]
         self.progress_notifier = None
         self._notifying_progress = False
+        self.embed_model: Optional[str] = None
         self._last_summary_results: Dict[str, List[Dict]] = {}
         self._last_summary_model_name: str = ""
         self._last_progress_payload: Dict[str, Any] = {}
@@ -320,6 +321,7 @@ class Report:
         vuln_name = vulnerability["name"]
         file_entries = self._results_to_file_entries(results)
         stats = self._compute_document_stats(file_entries)
+        root = Path(self.input_path).resolve() if self.input_path else None
         return VulnerabilityReportDocument(
             title=f"{vuln_name} Security Analysis",
             generated_at=generate_timestamp(),
@@ -329,6 +331,8 @@ class Report:
             vulnerability=dict(vulnerability),
             files=file_entries,
             stats=stats,
+            analysis_root=str(root) if root else None,
+            embed_model=self.embed_model,
         )
 
     @staticmethod

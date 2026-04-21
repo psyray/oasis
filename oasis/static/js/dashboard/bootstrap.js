@@ -99,6 +99,45 @@ DashboardApp._sanitizeHtml = function(rawHtml) {
     return parsedDoc.body ? parsedDoc.body.innerHTML : '';
 };
 
+/**
+ * Render assistant reply HTML: optional collapsed ``thought_segments`` plus sanitized markdown body.
+ * Expects ``marked`` plus ``DashboardApp.convertMarkdownToHtml`` (modal.js) at call time.
+ */
+DashboardApp.renderAssistantMessageHtml = function (data) {
+    let visible = '';
+    let thoughts = [];
+    let rawMsg = '';
+    if (typeof data === 'string') {
+        rawMsg = data;
+    } else if (data && typeof data === 'object') {
+        rawMsg = typeof data.message === 'string' ? data.message : '';
+        visible = typeof data.visible_markdown === 'string' ? data.visible_markdown : '';
+        thoughts = Array.isArray(data.thought_segments) ? data.thought_segments : [];
+    }
+    if (!visible && rawMsg !== undefined && rawMsg !== null) {
+        visible = String(rawMsg);
+    }
+    const parts = [];
+    thoughts.forEach(function (seg, idx) {
+        const esc = DashboardApp._escapeHtml(seg);
+        parts.push(
+            '<details class="oasis-assistant-think"><summary>Reasoning (' +
+                (idx + 1) +
+                ')</summary><pre class="oasis-assistant-think-pre">' +
+                esc +
+                '</pre></details>'
+        );
+    });
+    let mdHtml = '';
+    if (typeof DashboardApp.convertMarkdownToHtml === 'function') {
+        mdHtml = DashboardApp.convertMarkdownToHtml(visible || '(empty)');
+    } else {
+        mdHtml = '<p>' + DashboardApp._escapeHtml(visible || '') + '</p>';
+    }
+    parts.push('<div class="oasis-assistant-md">' + DashboardApp._sanitizeHtml(mdHtml) + '</div>');
+    return parts.join('');
+};
+
 DashboardApp._appendSanitizedHtml = function(target, rawHtml, className = '') {
     if (!target) {
         return;

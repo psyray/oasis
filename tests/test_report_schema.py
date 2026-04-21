@@ -343,6 +343,22 @@ class TestReportSchema(unittest.TestCase):
         self.assertIn("**Example payloads**:", markdown)
         self.assertIn('<div class="page-break"></div>', markdown)
 
+    def test_chunk_analysis_to_markdown_includes_http_raw_requests(self):
+        chunk = ChunkDeepAnalysis(
+            findings=[
+                VulnerabilityFinding(
+                    title="API issue",
+                    vulnerable_code="x",
+                    explanation="y",
+                    severity="Medium",
+                    http_raw_requests=["GET /api?q=1 HTTP/1.1\nHost: example.test"],
+                )
+            ]
+        )
+        markdown = chunk_analysis_to_markdown(chunk, 0)
+        self.assertIn("HTTP raw requests", markdown)
+        self.assertIn("GET /api?q=1 HTTP/1.1", markdown)
+
     def test_chunk_analysis_to_markdown_includes_source_line_hint(self):
         chunk = ChunkDeepAnalysis(
             findings=[
@@ -565,6 +581,7 @@ class TestReportSchema(unittest.TestCase):
 
         self.assertEqual(stats.get("formats"), {})
         self.assertEqual(stats["risk_summary"]["total_findings"], 0)
+        self.assertEqual(stats["risk_summary"]["critical"], 0)
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_executive_summary_notifier_receives_progress_payload(self):
@@ -663,6 +680,7 @@ class TestReportSchema(unittest.TestCase):
             "dates": {},
             "risk_summary": {
                 "total_findings": 0,
+                "critical": 0,
                 "high": 0,
                 "medium": 0,
                 "low": 0,
@@ -677,7 +695,8 @@ class TestReportSchema(unittest.TestCase):
                 "language": "FR",
                 "date": "2026-04-19 10:00:00",
                 "stats": {
-                    "total_findings": 5,
+                    "total_findings": 6,
+                    "critical_risk": 1,
                     "high_risk": 2,
                     "medium_risk": 2,
                     "low_risk": 1,
@@ -689,7 +708,8 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(stats["vulnerabilities"]["SQL Injection"], 1)
         self.assertEqual(stats["languages"]["fr"], 1)
         self.assertEqual(stats["dates"]["2026-04-19"], 1)
-        self.assertEqual(stats["risk_summary"]["total_findings"], 5)
+        self.assertEqual(stats["risk_summary"]["total_findings"], 6)
+        self.assertEqual(stats["risk_summary"]["critical"], 1)
         self.assertEqual(stats["risk_summary"]["high"], 2)
         self.assertEqual(stats["risk_summary"]["medium"], 2)
         self.assertEqual(stats["risk_summary"]["low"], 1)
