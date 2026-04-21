@@ -1,6 +1,8 @@
 // Centralized UI copy for the report assistant panel (single place for future i18n / overrides).
 DashboardApp.ASSISTANT_UI = {
     panelSummary: 'Assistant (triage / codebase)',
+    assistantLeadExecutive:
+        'In the OASIS dashboard (executive summary preview), use the chat below for scan-wide triage: severity patterns, cross-report themes, and remediation priorities. Optional vulnerability and finding scope narrows context when needed.',
     sessionLabel: 'Session',
     sessionAriaLabel: 'Chat session',
     newChat: 'New chat',
@@ -16,12 +18,20 @@ DashboardApp.ASSISTANT_UI = {
     ariaFindingFile: 'Report file',
     ariaFindingChunk: 'Chunk in file',
     ariaFindingFinding: 'Finding in chunk',
+    findingVulnReportLabel: 'Vulnerability',
+    ariaFindingVulnReport: 'Vulnerability report JSON in this scan',
     chipFalsePositive: 'False positive?',
     chipNextChecks: 'Next checks',
     chipPreconditions: ' Preconditions',
     chipQueryFalsePositive: 'Is this likely a false positive given the snippet?',
     chipQueryNextChecks: 'What should I verify next in the codebase?',
     chipQueryPreconditions: 'Summarize exploitation preconditions only.',
+    chipExploit: 'Exploit',
+    chipHttpRequest: 'HTTP request',
+    chipQueryExploit:
+        'For authorized defensive testing only: using this report and any selected finding scope, draft a minimal Python 3 proof-of-concept script that demonstrates the issue against an explicit placeholder target (e.g. configurable base URL variable). Include prerequisites (imports, Python version), assumptions, and safety guardrails. Put the complete script in one fenced ```python``` code block. Do not encourage unauthorized use.',
+    chipQueryHttpRequest:
+        'For authorized replay in a controlled lab only: produce a curl command that mirrors the HTTP traffic implied by this finding (method, URL path, headers, cookies, JSON/form body). Use placeholders such as HOST, TOKEN, or SESSION where values are unknown; note TLS with -k only if strictly for local testing. Add one short paragraph of explanation, then put the curl example in one fenced ```bash``` code block.',
     inputPlaceholder: 'Ask about this report (defensive review)…',
     send: 'Send',
     sessionSelectPlaceholder: '— select —',
@@ -34,4 +44,11 @@ DashboardApp.ASSISTANT_UI = {
     contextExecutiveAggregate: 'Context: full scan (aggregate JSON)',
     budgetHintPrefix: 'System prompt budget ~',
     chatModelsUnavailable: '(models unavailable)',
+    msgLabelUser: 'You',
+    msgLabelAssistant: 'Assistant',
+    questionsIndexTitle: 'Questions',
+    ariaQuestionsIndex: 'Question index',
+    jumpToQuestion: 'Jump to question',
+    copyCode: 'Copy',
+    copiedCode: 'Copied',
 };

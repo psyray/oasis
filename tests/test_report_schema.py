@@ -436,31 +436,42 @@ class TestReportSchema(unittest.TestCase):
         report.current_model = "test-model"
         report.executive_summary_scan_model = "small-model"
         report.executive_summary_embedding_model = "embed-model"
+        report._executive_summary_sidecar_write_failed = False
         report.report_dirs = {"test_model": {"md": Path("/tmp")}}
         report.create_header = lambda title, model_name: [f"# {title}", f"Model: {model_name}"]
-        report.filter_output_files = lambda safe_name: {"md": Path("/tmp") / f"{safe_name}.md"}
-        captured = {}
-        report._generate_and_save_report = lambda output_files, report_content, report_type=None: captured.update(
-            {"output_files": output_files, "report_content": report_content, "report_type": report_type}
-        )
+        with tempfile.TemporaryDirectory() as td:
+            run_md = Path(td) / "embed_model" / "md" / "_executive_summary.md"
+            run_md.parent.mkdir(parents=True)
+            report.filter_output_files = lambda safe_name: {"md": run_md}
+            captured = {}
+            report._generate_and_save_report = lambda output_files, report_content, report_type=None: captured.update(
+                {"output_files": output_files, "report_content": report_content, "report_type": report_type}
+            )
 
-        all_results = {"SQL Injection": [{"file_path": "app.py", "similarity_score": 0.9}]}
-        report.generate_executive_summary(
-            all_results,
-            "test-model",
-            progress={"completed_vulnerabilities": 1, "total_vulnerabilities": 3, "is_partial": True},
-        )
+            all_results = {"SQL Injection": [{"file_path": "app.py", "similarity_score": 0.9}]}
+            report.generate_executive_summary(
+                all_results,
+                "test-model",
+                progress={"completed_vulnerabilities": 1, "total_vulnerabilities": 3, "is_partial": True},
+            )
 
-        content = "\n".join(captured["report_content"])
-        self.assertIn("Scan Progress", content)
-        self.assertIn("1/3", content)
-        self.assertIn("partial", content.lower())
-        self.assertIn("Strong embedding match", content)
-        self.assertIn("| Similarity |", content)
-        self.assertIn("Deep model: test-model", content)
-        self.assertIn("Small model: small-model", content)
-        self.assertIn("Embedding model: embed-model", content)
-        self.assertNotIn("Risk Findings", content)
+            canon = Path(td) / "embed_model" / "json" / "_executive_summary.json"
+            self.assertTrue(canon.is_file())
+            parsed = json.loads(canon.read_text(encoding="utf-8"))
+            self.assertEqual(parsed.get("report_type"), "executive_summary")
+            self.assertEqual(parsed.get("model_name"), "test-model")
+            self.assertEqual(parsed.get("vulnerability_summary"), {"SQL Injection": 1})
+
+            content = "\n".join(captured["report_content"])
+            self.assertIn("Scan Progress", content)
+            self.assertIn("1/3", content)
+            self.assertIn("partial", content.lower())
+            self.assertIn("Strong embedding match", content)
+            self.assertIn("| Similarity |", content)
+            self.assertIn("Deep model: test-model", content)
+            self.assertIn("Small model: small-model", content)
+            self.assertIn("Embedding model: embed-model", content)
+            self.assertNotIn("Risk Findings", content)
 
     @unittest.skipIf(publish_incremental_summary is None, "oasis.report dependencies are unavailable")
     def test_publish_incremental_summary_strips_unknown_progress_extras(self):

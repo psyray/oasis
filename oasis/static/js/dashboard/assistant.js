@@ -17,6 +17,11 @@ DashboardApp.resetAssistantPanelForModalNavigation = function () {
     }
     const wrapper = document.getElementById('report-modal-content');
     if (wrapper) {
+        wrapper.querySelectorAll('.oasis-assistant-synthetic-wrap').forEach(function (el) {
+            if (el.parentNode) {
+                el.parentNode.removeChild(el);
+            }
+        });
         wrapper.querySelectorAll('.oasis-assistant-panel').forEach(function (el) {
             if (el.parentNode) {
                 el.parentNode.removeChild(el);
@@ -84,17 +89,72 @@ DashboardApp.canonicalAssistantReportPath = function (reportPath) {
     return r;
 };
 
+/** Scoped localStorage key so each canonical report prefers its own last model choice. */
+DashboardApp._assistantChatModelStorageKey = function (canonicalReportPath) {
+    const r = String(canonicalReportPath || '').trim();
+    return r ? 'oasis_assistant_chat_model::' + r : 'oasis_assistant_chat_model';
+};
+
+/** Prefer analysis model fields from canonical report JSON (executive or vulnerability). */
+DashboardApp.preferredChatModelFromReportPayload = function (payload) {
+    if (!payload || typeof payload !== 'object') {
+        return '';
+    }
+    const keys = ['model_name', 'deep_model', 'small_model', 'model'];
+    for (let i = 0; i < keys.length; i++) {
+        const v = payload[keys[i]];
+        if (typeof v === 'string' && v.trim()) {
+            return v.trim();
+        }
+    }
+    return '';
+};
+
 /**
- * Populate file/chunk/finding dropdowns from report JSON; wire cascading changes.
+ * Fill file/chunk/finding dropdowns from a vulnerability report payload (shared by single-report and executive scope).
  */
-DashboardApp.wireAssistantFindingSelectors = function (panelRoot, txt, reportPath) {
+DashboardApp.populateAssistantFindingSelectorsFromPayload = function (panelRoot, txt, payload) {
     const selFi = panelRoot.querySelector('#oasis-assistant-fi');
     const selCi = panelRoot.querySelector('#oasis-assistant-ci');
     const selGi = panelRoot.querySelector('#oasis-assistant-gi');
     if (!selFi || !selCi || !selGi) {
         return;
     }
+    const noneText = txt('findingNoneOption', '— none —');
+    function resetSelect(sel) {
+        DashboardApp._clearElement(sel);
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = noneText;
+        sel.appendChild(opt);
+    }
+    const files =
+        payload && typeof payload === 'object' && Array.isArray(payload.files) ? payload.files : [];
+    panelRoot._oasisAssistantFiles = files;
+    resetSelect(selFi);
+    resetSelect(selCi);
+    resetSelect(selGi);
+    files.forEach(function (f, idx) {
+        const opt = document.createElement('option');
+        opt.value = String(idx);
+        const fp = f && typeof f.file_path === 'string' ? f.file_path : '(' + idx + ')';
+        opt.textContent = DashboardApp._truncateAssistantLabel(fp, 72);
+        selFi.appendChild(opt);
+    });
+};
 
+/** Wire cascading file/chunk/finding changes once per panel. */
+DashboardApp._assistantBindFindingSelectorEvents = function (panelRoot, txt) {
+    if (panelRoot.dataset.oasisFindingSelectorEvents === '1') {
+        return;
+    }
+    panelRoot.dataset.oasisFindingSelectorEvents = '1';
+    const selFi = panelRoot.querySelector('#oasis-assistant-fi');
+    const selCi = panelRoot.querySelector('#oasis-assistant-ci');
+    const selGi = panelRoot.querySelector('#oasis-assistant-gi');
+    if (!selFi || !selCi || !selGi) {
+        return;
+    }
     const noneText = txt('findingNoneOption', '— none —');
 
     function selectedIndex(sel) {
@@ -122,9 +182,7 @@ DashboardApp.wireAssistantFindingSelectors = function (panelRoot, txt, reportPat
         return DashboardApp._truncateAssistantLabel(base, 96);
     }
 
-    let files = [];
-
-    function renderChunksForFile(fi) {
+    function renderChunksForFile(files, fi) {
         resetSelect(selCi);
         resetSelect(selGi);
         if (!Number.isFinite(fi) || fi < 0 || fi >= files.length) {
@@ -139,7 +197,7 @@ DashboardApp.wireAssistantFindingSelectors = function (panelRoot, txt, reportPat
         });
     }
 
-    function renderFindingsForChunk(fi, ci) {
+    function renderFindingsForChunk(files, fi, ci) {
         resetSelect(selGi);
         if (!Number.isFinite(fi) || fi < 0 || fi >= files.length) {
             return;
@@ -162,51 +220,116 @@ DashboardApp.wireAssistantFindingSelectors = function (panelRoot, txt, reportPat
     }
 
     function onFileChange() {
+        const files = panelRoot._oasisAssistantFiles || [];
         const fi = selectedIndex(selFi);
         if (!Number.isFinite(fi) || fi < 0 || fi >= files.length) {
             resetSelect(selCi);
             resetSelect(selGi);
             return;
         }
-        renderChunksForFile(fi);
+        renderChunksForFile(files, fi);
     }
 
     function onChunkChange() {
+        const files = panelRoot._oasisAssistantFiles || [];
         const fi = selectedIndex(selFi);
         const ci = selectedIndex(selCi);
-        renderFindingsForChunk(fi, ci);
+        renderFindingsForChunk(files, fi, ci);
     }
 
-    resetSelect(selFi);
-    resetSelect(selCi);
-    resetSelect(selGi);
+    selFi.addEventListener('change', onFileChange);
+    selCi.addEventListener('change', onChunkChange);
+};
 
+/**
+ * Populate file/chunk/finding dropdowns from one report JSON; wire cascading changes.
+ */
+DashboardApp.wireAssistantFindingSelectors = function (panelRoot, txt, reportPath) {
     if (typeof DashboardApp.fetchReportJsonPayload !== 'function') {
         return;
     }
-
     DashboardApp.fetchReportJsonPayload(reportPath)
         .then(function (payload) {
             if (!payload || typeof payload !== 'object') {
                 return;
             }
-            files = Array.isArray(payload.files) ? payload.files : [];
-            resetSelect(selFi);
-            resetSelect(selCi);
-            resetSelect(selGi);
-            files.forEach(function (f, idx) {
-                const opt = document.createElement('option');
-                opt.value = String(idx);
-                const fp = f && typeof f.file_path === 'string' ? f.file_path : '(' + idx + ')';
-                opt.textContent = DashboardApp._truncateAssistantLabel(fp, 72);
-                selFi.appendChild(opt);
-            });
-            selFi.addEventListener('change', onFileChange);
-            selCi.addEventListener('change', onChunkChange);
+            DashboardApp.populateAssistantFindingSelectorsFromPayload(panelRoot, txt, payload);
+            DashboardApp._assistantBindFindingSelectorEvents(panelRoot, txt);
         })
         .catch(function () {
             /* keep none-only selects */
         });
+};
+
+/**
+ * Executive aggregate: vuln-report list from preview meta, then same file/chunk/finding drill-down.
+ */
+DashboardApp.wireAssistantExecutiveFindingSelectors = function (panelRoot, txt, rawMetaPath) {
+    const selVi = panelRoot.querySelector('#oasis-assistant-vi');
+    if (!selVi || typeof DashboardApp.fetchExecutivePreviewMeta !== 'function') {
+        return;
+    }
+    const noneText = txt('findingNoneOption', '— none —');
+    DashboardApp.populateAssistantFindingSelectorsFromPayload(panelRoot, txt, { files: [] });
+    DashboardApp._assistantBindFindingSelectorEvents(panelRoot, txt);
+
+    function fillVulnReportList(rows) {
+        DashboardApp._clearElement(selVi);
+        const opt0 = document.createElement('option');
+        opt0.value = '';
+        opt0.textContent = noneText;
+        selVi.appendChild(opt0);
+        rows.forEach(function (row) {
+            const rel =
+                row && typeof row.relative_path === 'string' ? row.relative_path.trim() : '';
+            if (!rel) {
+                return;
+            }
+            const opt = document.createElement('option');
+            opt.value = rel;
+            const lb =
+                row && typeof row.label === 'string' && row.label.trim()
+                    ? row.label.trim()
+                    : rel;
+            opt.textContent = DashboardApp._truncateAssistantLabel(lb, 72);
+            selVi.appendChild(opt);
+        });
+    }
+
+    DashboardApp.fetchExecutivePreviewMeta(String(rawMetaPath || '').trim())
+        .then(function (meta) {
+            const rows =
+                meta && Array.isArray(meta.vulnerability_reports) ? meta.vulnerability_reports : [];
+            fillVulnReportList(rows);
+        })
+        .catch(function () {
+            fillVulnReportList([]);
+        });
+
+    if (panelRoot.dataset.oasisExecutiveViBound === '1') {
+        return;
+    }
+    panelRoot.dataset.oasisExecutiveViBound = '1';
+    selVi.addEventListener('change', function () {
+        const rel = String(selVi.value || '').trim();
+        if (!rel || typeof DashboardApp.fetchReportJsonPayload !== 'function') {
+            DashboardApp.populateAssistantFindingSelectorsFromPayload(panelRoot, txt, { files: [] });
+            return;
+        }
+        DashboardApp.fetchReportJsonPayload(rel)
+            .then(function (payload) {
+                if (!payload || typeof payload !== 'object') {
+                    DashboardApp.populateAssistantFindingSelectorsFromPayload(panelRoot, txt, {
+                        files: [],
+                    });
+                    return;
+                }
+                DashboardApp.populateAssistantFindingSelectorsFromPayload(panelRoot, txt, payload);
+            })
+            .catch(function () {
+                DashboardApp.populateAssistantFindingSelectorsFromPayload(panelRoot, txt, { files: [] });
+            });
+    });
 };
 
 DashboardApp.mountReportAssistantPanel = function () {
@@ -235,6 +358,7 @@ DashboardApp.mountReportAssistantPanel = function () {
     DashboardApp._assistantReportPath = reportPath;
     DashboardApp._assistantAggregateMode = !!execSummary;
     const showFindingSelectors = rms.currentFormat === 'json' && !execSummary;
+    const showFindingRefBlock = showFindingSelectors || execSummary;
 
     const ui = DashboardApp.ASSISTANT_UI || {};
     const txt = function (key, fallback) {
@@ -245,7 +369,13 @@ DashboardApp.mountReportAssistantPanel = function () {
     const contextBadgeText = execSummary
         ? txt('contextExecutiveAggregate', 'Context: full scan (aggregate JSON)')
         : txt('contextSingleVuln', 'Context: single vulnerability report');
-    const findingHiddenClass = showFindingSelectors ? '' : ' oasis-assistant-finding-ref--hidden';
+    const findingHiddenClass = showFindingRefBlock ? '' : ' oasis-assistant-finding-ref--hidden';
+    const viRowHtml = execSummary
+        ? `
+                        <label class="oasis-assistant-finding-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingVulnReportLabel', 'Vulnerability'))}</span>
+                            <select id="oasis-assistant-vi" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingVulnReport', 'Vulnerability report'))}"></select>
+                        </label>`
+        : '';
 
     const panel = document.createElement('div');
     panel.className = 'oasis-assistant-panel';
@@ -279,6 +409,7 @@ DashboardApp.mountReportAssistantPanel = function () {
                 <div class="oasis-assistant-finding-ref${findingHiddenClass}">
                     <span class="oasis-assistant-finding-ref-intro">${DashboardApp._escapeHtml(txt('findingRefIntro', ''))}</span>
                     <div class="oasis-assistant-finding-selects">
+                        ${viRowHtml}
                         <label class="oasis-assistant-finding-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingFileLabel', 'File'))}</span>
                             <select id="oasis-assistant-fi" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingFile', 'File'))}"></select>
                         </label>
@@ -294,19 +425,53 @@ DashboardApp.mountReportAssistantPanel = function () {
                     <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryFalsePositive', ''))}">${DashboardApp._escapeHtml(txt('chipFalsePositive', ''))}</button>
                     <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryNextChecks', ''))}">${DashboardApp._escapeHtml(txt('chipNextChecks', ''))}</button>
                     <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryPreconditions', ''))}">${DashboardApp._escapeHtml(txt('chipPreconditions', ''))}</button>
+                    <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryExploit', ''))}">${DashboardApp._escapeHtml(txt('chipExploit', 'Exploit'))}</button>
+                    <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryHttpRequest', ''))}">${DashboardApp._escapeHtml(txt('chipHttpRequest', 'HTTP request'))}</button>
                 </div>
                 <textarea id="oasis-assistant-input" class="oasis-assistant-input" rows="3" placeholder="${DashboardApp._escapeHtml(txt('inputPlaceholder', ''))}"></textarea>
                 <button type="button" class="btn btn-primary" id="oasis-assistant-send">${DashboardApp._escapeHtml(txt('send', 'Send'))}</button>
             </div>
-            <div id="oasis-assistant-log" class="oasis-assistant-log" aria-live="polite"></div>
+            <div class="oasis-assistant-convo-row">
+                <aside class="oasis-assistant-index-column" aria-label="${DashboardApp._escapeHtml(txt('ariaQuestionsIndex', 'Question index'))}">
+                    <div class="oasis-assistant-index-heading">${DashboardApp._escapeHtml(txt('questionsIndexTitle', 'Questions'))}</div>
+                    <nav id="oasis-assistant-q-index" class="oasis-assistant-q-index-nav"></nav>
+                </aside>
+                <div class="oasis-assistant-log-column">
+                    <div id="oasis-assistant-log" class="oasis-assistant-log" aria-live="polite"></div>
+                </div>
+            </div>
     `;
 
-    const mountPoint = document.getElementById('oasis-assistant-mount');
-    if (mountPoint) {
-        mountPoint.appendChild(panel);
-    } else {
-        wrapper.appendChild(panel);
+    let mountPoint = document.getElementById('oasis-assistant-mount');
+    if (!mountPoint) {
+        const mountParent =
+            wrapper.querySelector('.executive-preview') ||
+            wrapper.querySelector('.html-content-container') ||
+            wrapper;
+        const section = document.createElement('section');
+        section.id = 'assistant';
+        section.className = 'report-assistant-section oasis-assistant-synthetic-wrap';
+
+        const titleEl = document.createElement('h2');
+        titleEl.textContent = txt('panelSummary', 'Assistant (triage / codebase)');
+
+        const leadEl = document.createElement('p');
+        leadEl.className = 'report-assistant-lead';
+        leadEl.textContent = txt(
+            'assistantLeadExecutive',
+            'In the OASIS dashboard (executive summary preview), use the chat below for scan-wide triage: severity patterns, cross-report themes, and remediation priorities. Optional vulnerability and finding scope narrows context when needed.'
+        );
+
+        mountPoint = document.createElement('div');
+        mountPoint.id = 'oasis-assistant-mount';
+        mountPoint.className = 'oasis-assistant-mount';
+
+        section.appendChild(titleEl);
+        section.appendChild(leadEl);
+        section.appendChild(mountPoint);
+        mountParent.appendChild(section);
     }
+    mountPoint.appendChild(panel);
 
     /* report_template.html puts .report-footer before the injected assistant in DOM order; relocate below the panel. */
     wrapper.querySelectorAll('footer.report-footer').forEach(function (footer) {
@@ -320,8 +485,11 @@ DashboardApp.mountReportAssistantPanel = function () {
     if (showFindingSelectors) {
         DashboardApp.wireAssistantFindingSelectors(panel, txt, reportPath);
     }
+    if (execSummary) {
+        DashboardApp.wireAssistantExecutiveFindingSelectors(panel, txt, rawPath);
+    }
 
-    const CHAT_MODEL_LS = 'oasis_assistant_chat_model';
+    const chatModelLsKey = DashboardApp._assistantChatModelStorageKey(reportPath);
     const chatModelSelect = panel.querySelector('#oasis-assistant-chat-model');
     const budgetHintEl = panel.querySelector('#oasis-assistant-budget-hint');
 
@@ -341,7 +509,7 @@ DashboardApp.mountReportAssistantPanel = function () {
     if (chatModelSelect) {
         chatModelSelect.addEventListener('change', function () {
             try {
-                window.localStorage.setItem(CHAT_MODEL_LS, chatModelSelect.value || '');
+                window.localStorage.setItem(chatModelLsKey, chatModelSelect.value || '');
             } catch (e) {
                 /* ignore */
             }
@@ -349,6 +517,12 @@ DashboardApp.mountReportAssistantPanel = function () {
     }
 
     const logEl = panel.querySelector('#oasis-assistant-log');
+    const wireMdCodeCopy = function () {
+        DashboardApp.wireMarkdownCodeCopyButtons(logEl, {
+            copyCode: txt('copyCode', 'Copy'),
+            copiedCode: txt('copiedCode', 'Copied'),
+        });
+    };
     const inputEl = panel.querySelector('#oasis-assistant-input');
     const sendBtn = panel.querySelector('#oasis-assistant-send');
     const sessionSelect = panel.querySelector('#oasis-assistant-session-select');
@@ -356,23 +530,92 @@ DashboardApp.mountReportAssistantPanel = function () {
     const delOneBtn = panel.querySelector('#oasis-assistant-delete-one');
     const delAllBtn = panel.querySelector('#oasis-assistant-delete-all');
 
+    let userQuestionSeq = 0;
+
+    const rebuildQuestionIndex = function () {
+        const nav = panel.querySelector('#oasis-assistant-q-index');
+        if (!nav || !logEl) {
+            return;
+        }
+        DashboardApp._clearElement(nav);
+        let qn = 0;
+        DashboardApp._assistantConversation.forEach(function (m) {
+            if (m.role !== 'user') {
+                return;
+            }
+            qn += 1;
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'oasis-assistant-index-btn';
+            const raw = typeof m.content === 'string' ? m.content : '';
+            const snippetMd = DashboardApp._truncateAssistantLabel(raw, 72);
+            const numHtml =
+                '<span class="oasis-assistant-index-num">' +
+                DashboardApp._escapeHtml(String(qn)) +
+                '.</span>';
+            btn.innerHTML =
+                numHtml +
+                DashboardApp.renderUserMessageMarkdownHtml(snippetMd, { variant: 'index' });
+            btn.setAttribute(
+                'aria-label',
+                txt('jumpToQuestion', 'Jump to question') +
+                    ' ' +
+                    qn +
+                    ': ' +
+                    snippetMd.replace(/\s+/g, ' ').trim()
+            );
+            (function (idNum) {
+                btn.addEventListener('click', function () {
+                    const target = document.getElementById('oasis-assistant-q-' + idNum);
+                    if (target && logEl) {
+                        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        target.classList.add('oasis-assistant-msg--highlight');
+                        window.setTimeout(function () {
+                            target.classList.remove('oasis-assistant-msg--highlight');
+                        }, 1400);
+                    }
+                });
+            })(qn);
+            nav.appendChild(btn);
+        });
+    };
+
     const appendUserMsg = function (text) {
+        userQuestionSeq += 1;
         const row = document.createElement('div');
         row.className = 'oasis-assistant-msg oasis-assistant-msg--user';
-        row.textContent = text;
+        row.id = 'oasis-assistant-q-' + userQuestionSeq;
+        const hd = document.createElement('div');
+        hd.className = 'oasis-assistant-msg-hd';
+        hd.textContent = txt('msgLabelUser', 'You');
+        const body = document.createElement('div');
+        body.className = 'oasis-assistant-msg-body oasis-assistant-msg-body--rich';
+        body.innerHTML = DashboardApp.renderUserMessageMarkdownHtml(text);
+        row.appendChild(hd);
+        row.appendChild(body);
         logEl.appendChild(row);
         logEl.scrollTop = logEl.scrollHeight;
+        wireMdCodeCopy();
     };
 
     const appendAssistantMsg = function (payload) {
         const row = document.createElement('div');
         row.className = 'oasis-assistant-msg oasis-assistant-msg--assistant';
-        row.innerHTML = DashboardApp.renderAssistantMessageHtml(payload);
+        const hd = document.createElement('div');
+        hd.className = 'oasis-assistant-msg-hd';
+        hd.textContent = txt('msgLabelAssistant', 'Assistant');
+        const body = document.createElement('div');
+        body.className = 'oasis-assistant-msg-body oasis-assistant-msg-body--rich';
+        body.innerHTML = DashboardApp.renderAssistantMessageHtml(payload);
+        row.appendChild(hd);
+        row.appendChild(body);
         logEl.appendChild(row);
         logEl.scrollTop = logEl.scrollHeight;
+        wireMdCodeCopy();
     };
 
     const renderLog = function () {
+        userQuestionSeq = 0;
         DashboardApp._clearElement(logEl);
         DashboardApp._assistantConversation.forEach(function (m) {
             if (m.role === 'user') {
@@ -381,6 +624,7 @@ DashboardApp.mountReportAssistantPanel = function () {
                 appendAssistantMsg(m);
             }
         });
+        rebuildQuestionIndex();
     };
 
     const populateSessionSelect = function (rows, selectedId) {
@@ -414,10 +658,18 @@ DashboardApp.mountReportAssistantPanel = function () {
             });
     };
 
+    let cachedSortedChatModels = [];
+    let reportPreferredModelStr = '';
+
     const startNewChat = function () {
         DashboardApp._assistantConversation = [];
         DashboardApp._assistantSessionId = DashboardApp._newAssistantSessionId();
+        userQuestionSeq = 0;
         DashboardApp._clearElement(logEl);
+        rebuildQuestionIndex();
+        if (chatModelSelect && cachedSortedChatModels.length) {
+            applyAssistantChatModelSeed(cachedSortedChatModels, reportPreferredModelStr);
+        }
         refreshSessionList(DashboardApp._assistantSessionId);
     };
 
@@ -425,18 +677,26 @@ DashboardApp.mountReportAssistantPanel = function () {
         if (!chatModelSelect) {
             return;
         }
-        let ls = '';
+        let lsScoped = '';
+        let lsLegacy = '';
         try {
-            ls = window.localStorage.getItem(CHAT_MODEL_LS) || '';
+            lsScoped = window.localStorage.getItem(chatModelLsKey) || '';
         } catch (e) {
-            ls = '';
+            lsScoped = '';
+        }
+        try {
+            lsLegacy = window.localStorage.getItem('oasis_assistant_chat_model') || '';
+        } catch (e) {
+            lsLegacy = '';
         }
         const seed = typeof seedPreferred === 'string' ? seedPreferred.trim() : '';
         let pick = '';
         if (seed && sortedNames.indexOf(seed) >= 0) {
             pick = seed;
-        } else if (ls && sortedNames.indexOf(ls) >= 0) {
-            pick = ls;
+        } else if (lsScoped && sortedNames.indexOf(lsScoped) >= 0) {
+            pick = lsScoped;
+        } else if (lsLegacy && sortedNames.indexOf(lsLegacy) >= 0) {
+            pick = lsLegacy;
         } else if (sortedNames.length > 0) {
             pick = sortedNames[0];
         }
@@ -546,10 +806,19 @@ DashboardApp.mountReportAssistantPanel = function () {
             });
     });
 
-    const gatherFindingIndices = function () {
-        const fi = document.getElementById('oasis-assistant-fi');
-        const ci = document.getElementById('oasis-assistant-ci');
-        const gi = document.getElementById('oasis-assistant-gi');
+    const gatherFindingIndices = function (panelRoot) {
+        if (!panelRoot) {
+            return {
+                finding_scope_report_path: '',
+                file_index: null,
+                chunk_index: null,
+                finding_index: null,
+            };
+        }
+        const vi = panelRoot.querySelector('#oasis-assistant-vi');
+        const fi = panelRoot.querySelector('#oasis-assistant-fi');
+        const ci = panelRoot.querySelector('#oasis-assistant-ci');
+        const gi = panelRoot.querySelector('#oasis-assistant-gi');
         const num = function (el) {
             const v = el && el.value;
             if (v === '' || v === undefined || v === null) {
@@ -558,7 +827,10 @@ DashboardApp.mountReportAssistantPanel = function () {
             const n = Number(v);
             return Number.isFinite(n) ? n : null;
         };
+        const scopeRel =
+            vi && typeof vi.value === 'string' && vi.value.trim() ? vi.value.trim() : '';
         return {
+            finding_scope_report_path: scopeRel,
             file_index: num(fi),
             chunk_index: num(ci),
             finding_index: num(gi),
@@ -579,10 +851,11 @@ DashboardApp.mountReportAssistantPanel = function () {
         DashboardApp._assistantConversation = DashboardApp._trimAssistantMessages(
             DashboardApp._assistantConversation
         );
+        rebuildQuestionIndex();
 
-        const ragEl = document.getElementById('oasis-assistant-rag');
-        const expandEl = document.getElementById('oasis-assistant-expand');
-        const indices = gatherFindingIndices();
+        const ragEl = panel.querySelector('#oasis-assistant-rag');
+        const expandEl = panel.querySelector('#oasis-assistant-expand');
+        const indices = gatherFindingIndices(panel);
         const payload = {
             messages: DashboardApp._assistantMessagesForApi(),
             report_path: reportPath,
@@ -608,8 +881,11 @@ DashboardApp.mountReportAssistantPanel = function () {
         if (ragEl && !ragEl.checked) {
             payload.rag_disabled = true;
         }
-        if (showFindingSelectors) {
+        if (showFindingSelectors || execSummary) {
             Object.assign(payload, indices);
+            if (!indices.finding_scope_report_path) {
+                delete payload.finding_scope_report_path;
+            }
         }
 
         sendBtn.disabled = true;
@@ -668,9 +944,7 @@ DashboardApp.mountReportAssistantPanel = function () {
         typeof DashboardApp.fetchReportJsonPayload === 'function'
             ? DashboardApp.fetchReportJsonPayload(reportPath)
                   .then(function (payload) {
-                      return payload && typeof payload.model_name === 'string'
-                          ? payload.model_name.trim()
-                          : '';
+                      return DashboardApp.preferredChatModelFromReportPayload(payload);
                   })
                   .catch(function () {
                       return '';
@@ -695,6 +969,9 @@ DashboardApp.mountReportAssistantPanel = function () {
                 return Promise.resolve();
             }
 
+            cachedSortedChatModels = [];
+            reportPreferredModelStr = reportMn;
+
             DashboardApp._clearElement(chatModelSelect);
             const sorted = models.slice().sort(function (a, b) {
                 return String(a).localeCompare(String(b));
@@ -705,6 +982,7 @@ DashboardApp.mountReportAssistantPanel = function () {
                 opt.textContent = name;
                 chatModelSelect.appendChild(opt);
             });
+            cachedSortedChatModels = sorted.slice();
             if (sorted.length === 0) {
                 const optEmpty = document.createElement('option');
                 optEmpty.value = '';
@@ -713,10 +991,10 @@ DashboardApp.mountReportAssistantPanel = function () {
             }
 
             let seed = '';
-            if (rows.length && rows[0].model && String(rows[0].model).trim()) {
-                seed = String(rows[0].model).trim();
-            } else if (reportMn) {
+            if (reportMn) {
                 seed = reportMn;
+            } else if (rows.length && rows[0].model && String(rows[0].model).trim()) {
+                seed = String(rows[0].model).trim();
             }
             applyAssistantChatModelSeed(sorted, seed);
 

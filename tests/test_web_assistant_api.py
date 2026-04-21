@@ -227,6 +227,11 @@ class TestExecutiveAndAssistantMetaRoutes(unittest.TestCase):
             self.assertEqual(data.get("severity_counts", {}).get("critical"), 1)
             self.assertEqual(data.get("severity_counts", {}).get("high"), 2)
             self.assertEqual(data.get("vulnerability_report_files"), 1)
+            vr = data.get("vulnerability_reports")
+            self.assertIsInstance(vr, list)
+            self.assertEqual(len(vr), 1)
+            self.assertEqual(vr[0].get("relative_path"), "run_a/json/vuln.json")
+            self.assertEqual(vr[0].get("label"), "X")
 
     def test_assistant_chat_aggregate_executive_summary(self):
         with tempfile.TemporaryDirectory() as td:
@@ -281,6 +286,154 @@ class TestExecutiveAndAssistantMetaRoutes(unittest.TestCase):
             self.assertEqual(data.get("message"), "aggregate-reply")
             self.assertTrue(data.get("assistant_aggregate"))
             self.assertEqual(data.get("system_budget_chars"), server._ASSISTANT_MAX_TOTAL_REPORT_CHARS)
+
+    def test_assistant_chat_aggregate_finding_scope_adds_selected_finding_json(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            run_json = sec / "run_c" / "json"
+            run_json.mkdir(parents=True)
+            exec_js = {
+                "report_type": "executive_summary",
+                "schema_version": 1,
+                "model_name": "agg-model",
+                "title": "exec",
+            }
+            vuln_js = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "v",
+                "generated_at": "2026-01-01",
+                "model_name": "agg-model",
+                "vulnerability_name": "ScopedVuln",
+                "files": [
+                    {
+                        "file_path": "scan_root/app.py",
+                        "chunk_analyses": [
+                            {
+                                "start_line": 1,
+                                "end_line": 2,
+                                "findings": [{"title": "InjectionBug", "severity": "High"}],
+                            }
+                        ],
+                    }
+                ],
+                "stats": {"total_findings": 1},
+            }
+            (run_json / "_executive_summary.json").write_text(json.dumps(exec_js), encoding="utf-8")
+            (run_json / "scoped.json").write_text(json.dumps(vuln_js), encoding="utf-8")
+
+            mock_om = MagicMock()
+            mock_om.chat.return_value = {"message": {"content": "aggregate-reply"}}
+            mock_om.get_effective_context_token_count.return_value = None
+            mock_om.list_chat_model_names.return_value = ["agg-model"]
+            server._get_assistant_ollama_manager = lambda: mock_om
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            rel = "run_c/json/_executive_summary.json"
+            scope_rel = "run_c/json/scoped.json"
+            resp = client.post(
+                "/api/assistant/chat",
+                data=json.dumps(
+                    {
+                        "messages": [{"role": "user", "content": "Focus"}],
+                        "report_path": rel,
+                        "aggregate_model_json": True,
+                        "finding_scope_report_path": scope_rel,
+                        "file_index": 0,
+                        "chunk_index": 0,
+                        "finding_index": 0,
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            mock_om.chat.assert_called_once()
+            full_messages = mock_om.chat.call_args[0][1]
+            system_prompt = full_messages[0]["content"]
+            self.assertIn("SELECTED_FINDING_JSON", system_prompt)
+            self.assertIn("InjectionBug", system_prompt)
+
+    def test_report_json_synthetic_when_executive_json_file_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            run_json = sec / "run_nomdjson" / "json"
+            run_md = sec / "run_nomdjson" / "md"
+            run_json.mkdir(parents=True)
+            run_md.mkdir(parents=True)
+            vuln_js = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "model_name": "from-vuln",
+                "vulnerability_name": "V",
+                "files": [],
+                "stats": {},
+            }
+            (run_json / "only_vuln.json").write_text(json.dumps(vuln_js), encoding="utf-8")
+            (run_md / "_executive_summary.md").write_text("# Executive\n", encoding="utf-8")
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            rel = "run_nomdjson/json/_executive_summary.json"
+            resp = client.get(f"/api/report-json/{rel}")
+            self.assertEqual(resp.status_code, 200)
+            data = json.loads(resp.get_data(as_text=True))
+            self.assertEqual(data.get("report_type"), "executive_summary")
+            self.assertEqual(data.get("model_name"), "from-vuln")
+
+    def test_assistant_chat_aggregate_without_executive_json_on_disk(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            run_json = sec / "run_aggmd" / "json"
+            run_md = sec / "run_aggmd" / "md"
+            run_json.mkdir(parents=True)
+            run_md.mkdir(parents=True)
+            vuln_js = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "model_name": "agg-md",
+                "vulnerability_name": "Z",
+                "files": [],
+                "stats": {},
+            }
+            (run_json / "v.json").write_text(json.dumps(vuln_js), encoding="utf-8")
+            (run_md / "_executive_summary.md").write_text("# Executive\n", encoding="utf-8")
+
+            mock_om = MagicMock()
+            mock_om.chat.return_value = {"message": {"content": "ok-md"}}
+            mock_om.get_effective_context_token_count.return_value = None
+            mock_om.list_chat_model_names.return_value = ["agg-md"]
+            server._get_assistant_ollama_manager = lambda: mock_om
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            rel = "run_aggmd/json/_executive_summary.json"
+            resp = client.post(
+                "/api/assistant/chat",
+                data=json.dumps(
+                    {
+                        "messages": [{"role": "user", "content": "Hi"}],
+                        "report_path": rel,
+                        "aggregate_model_json": True,
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            data = json.loads(resp.get_data(as_text=True))
+            self.assertEqual(data.get("message"), "ok-md")
 
 
 class TestResolveAssistantOllamaUrl(unittest.TestCase):

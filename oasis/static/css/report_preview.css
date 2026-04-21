@@ -62,6 +62,10 @@
     background-color: var(--light-sand);
 }
 
+#report-modal-content .html-content-container .report-toc-icon {
+    font-style: normal;
+}
+
 #report-modal-content .html-content-container .report-stats-summary-list {
     margin: 0.6em 0;
     display: flex;
@@ -213,7 +217,20 @@
 
 #report-modal-content .html-content-container .report-assistant-lead {
     margin: 0.35rem 0 0;
-    max-width: 52rem;
+    max-width: min(100%, 80rem);
+}
+
+/* Synthetic assistant block (executive MD / paths without vulnerability template) */
+#report-modal-content .html-content-container .report-assistant-section.oasis-assistant-synthetic-wrap .report-assistant-lead {
+    margin-top: 0;
+    margin-bottom: 0.65rem;
+    font-size: 0.95rem;
+    line-height: 1.45;
+    color: var(--dark-blue-2);
+}
+
+#report-modal-content .html-content-container .report-assistant-section.oasis-assistant-synthetic-wrap > h2:first-of-type {
+    margin-top: 1.35rem;
 }
 
 #report-modal-content .html-content-container .oasis-assistant-mount {

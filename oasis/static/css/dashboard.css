@@ -2106,8 +2106,8 @@ h1 {
     background: white;
     border-radius: 5px;
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
-    width: min(92vw, 960px);
-    max-width: 90%;
+    width: min(96vw, clamp(560px, 85vw, 1520px));
+    max-width: min(96vw, 1520px);
     max-height: calc(100vh - min(10vh, 96px));
     height: auto;
     min-height: 0;
@@ -2317,25 +2317,192 @@ body.modal-open {
     box-sizing: border-box;
     font-family: inherit;
 }
+.oasis-assistant-convo-row {
+    display: grid;
+    grid-template-columns: minmax(168px, 240px) minmax(0, 1fr);
+    gap: 0.75rem 1rem;
+    align-items: start;
+    margin-top: 0.5rem;
+}
+.oasis-assistant-log-column {
+    min-width: 0;
+}
+.oasis-assistant-log-column .oasis-assistant-log {
+    margin-top: 0;
+}
+.oasis-assistant-index-column {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    max-height: min(840px, 62vh);
+    overflow-y: auto;
+    padding: 0.4rem 0.5rem;
+    border-radius: 6px;
+    background: var(--white);
+    border: 1px solid var(--border-color, #dee2e6);
+    box-sizing: border-box;
+}
+.oasis-assistant-index-heading {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary, #5a6a75);
+    margin: 0 0 0.45rem;
+}
+.oasis-assistant-q-index-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+.oasis-assistant-index-btn {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.35rem;
+    width: 100%;
+    margin: 0;
+    padding: 0.35rem 0.45rem;
+    text-align: left;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    font-family: inherit;
+    color: var(--dark-blue-2);
+    background: var(--light-gray);
+    border: 1px solid var(--border-color, #dee2e6);
+    border-radius: 5px;
+    cursor: pointer;
+    box-sizing: border-box;
+    word-break: break-word;
+}
+.oasis-assistant-index-num {
+    flex-shrink: 0;
+    font-weight: 700;
+    color: var(--text-secondary, #5a6a75);
+    margin-top: 0.05rem;
+}
+.oasis-assistant-index-btn .oasis-assistant-md--index {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.78rem;
+    line-height: 1.35;
+}
+.oasis-assistant-md--index h1,
+.oasis-assistant-md--index h2,
+.oasis-assistant-md--index h3,
+.oasis-assistant-md--index h4,
+.oasis-assistant-md--index h5,
+.oasis-assistant-md--index h6 {
+    font-size: 0.85em;
+    font-weight: 600;
+    margin: 0.15em 0;
+    line-height: 1.3;
+}
+.oasis-assistant-md--index p {
+    margin: 0;
+}
+.oasis-assistant-md--index p + p {
+    margin-top: 0.35em;
+}
+.oasis-assistant-md--index ul,
+.oasis-assistant-md--index ol {
+    margin: 0.2em 0;
+    padding-left: 1.15em;
+}
+.oasis-assistant-md--index pre {
+    max-height: 4.5rem;
+    margin: 0.25em 0;
+    font-size: 0.72rem;
+}
+.oasis-assistant-index-btn a {
+    pointer-events: none;
+    color: inherit;
+    text-decoration: underline;
+}
+.oasis-assistant-index-btn:hover {
+    border-color: rgba(56, 178, 172, 0.55);
+    background: rgba(56, 178, 172, 0.08);
+}
+.oasis-assistant-index-btn:focus-visible {
+    outline: 2px solid var(--turquoise);
+    outline-offset: 2px;
+}
+@media (max-width: 768px) {
+    .oasis-assistant-convo-row {
+        grid-template-columns: 1fr;
+    }
+    .oasis-assistant-index-column {
+        position: relative;
+        max-height: min(11rem, 28vh);
+        order: -1;
+    }
+}
 .oasis-assistant-log {
-    max-height: 840px;
+    max-height: 540px;
     overflow-y: auto;
     background: var(--light-gray);
-    padding: 0.5rem;
-    border-radius: 4px;
+    padding: 0.65rem 0.5rem;
+    border-radius: 6px;
     margin-top: 0.5rem;
     font-size: 0.9rem;
     white-space: normal;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
 }
-.oasis-assistant-msg--user {
-    margin: 0.25rem 0;
+.oasis-assistant-msg {
+    box-sizing: border-box;
+    max-width: min(100%, 44rem);
+    padding: 0.55rem 0.65rem 0.65rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color, #dee2e6);
+    box-shadow: 0 1px 2px rgba(14, 31, 43, 0.06);
+}
+.oasis-assistant-msg-hd {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary, #5a6a75);
+    margin: 0 0 0.4rem;
+    line-height: 1.2;
+}
+.oasis-assistant-msg-body {
+    margin: 0;
     color: var(--dark-blue-2);
     white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.45;
+}
+.oasis-assistant-msg-body--rich {
+    white-space: normal;
+}
+.oasis-assistant-msg--user {
+    align-self: flex-end;
+    margin-left: 1.25rem;
+    background: rgba(56, 178, 172, 0.12);
+    border-color: rgba(56, 178, 172, 0.35);
+    scroll-margin-top: 5px;
+}
+.oasis-assistant-msg--user .oasis-assistant-msg-hd {
+    color: rgba(14, 31, 43, 0.65);
+    text-align: right;
+}
+.oasis-assistant-msg--user .oasis-assistant-msg-body--rich .oasis-assistant-md {
+    text-align: left;
 }
 .oasis-assistant-msg--assistant {
-    margin: 0.25rem 0;
-    border-left: 3px solid var(--turquoise);
-    padding-left: 0.5rem;
+    align-self: flex-start;
+    margin-right: 1.25rem;
+    background: var(--white);
+    border-left: 4px solid var(--turquoise);
+    padding-left: 0.7rem;
+}
+.oasis-assistant-msg--highlight {
+    box-shadow: 0 0 0 2px var(--turquoise);
+    transition: box-shadow 0.2s ease;
+}
+.oasis-assistant-log-column .oasis-assistant-msg {
+    max-width: min(100%, 56rem);
 }
 .oasis-assistant-session-bar {
     display: flex;
@@ -2361,11 +2528,30 @@ body.modal-open {
     white-space: pre-wrap;
     word-break: break-word;
 }
+.oasis-md-code-wrap {
+    margin: 0.35rem 0;
+    min-width: 0;
+}
+.oasis-md-code-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    margin-bottom: 0.2rem;
+}
+.oasis-md-code-copy {
+    padding: 0.15rem 0.5rem;
+    font-size: 0.72rem;
+    line-height: 1.25;
+    font-weight: 600;
+}
 .oasis-assistant-md pre {
     background: rgba(14, 31, 43, 0.06);
     padding: 0.35rem 0.5rem;
     border-radius: 4px;
     overflow-x: auto;
+}
+.oasis-md-code-wrap > pre {
+    margin: 0;
 }
 .oasis-assistant-md p:first-child {
     margin-top: 0;

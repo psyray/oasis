@@ -80,7 +80,7 @@ from .helpers.path_containment import is_path_within_root
 from .helpers.assistant_api_validate import (
     coerce_finding_indices,
     normalize_report_rel_query_arg,
-    resolve_assistant_report_json_path,
+    resolve_assistant_primary_payload,
     validate_assistant_messages,
 )
 from .helpers.assistant_persistence import (
@@ -100,11 +100,15 @@ from .helpers.assistant_scan_aggregate import (
     first_vulnerability_payload_from_paths,
     iter_json_report_paths_in_model_dir,
     model_directory_from_security_report_file,
-    resolve_canonical_json_for_markdown_report,
     union_file_paths_from_vulnerability_payloads,
 )
 from .helpers.executive_dashboard_preview import augment_executive_markdown_preview_html
 from .helpers.executive_modal_chart_meta import rollup_severity_counts_from_model_dir
+from .helpers.executive_assistant_scope import (
+    resolve_aggregate_finding_scope_payload,
+    synthetic_executive_primary_payload,
+    vulnerability_reports_for_executive_assistant,
+)
 from .tools import parse_iso_date, parse_report_date
 
 logger = logging.getLogger(__name__)
@@ -780,7 +784,15 @@ class WebServer:
 
                 if not is_path_within_root(resolved_path, security_root):
                     return jsonify({'error': 'Invalid path'}), 403
-                if not resolved_path.exists() or resolved_path.suffix != '.json':
+                if resolved_path.suffix.lower() != '.json':
+                    return jsonify({'error': 'File not found or not JSON'}), 404
+                if not resolved_path.exists():
+                    if resolved_path.stem.lower() == '_executive_summary':
+                        md_only = resolved_path.parent.parent / 'md' / '_executive_summary.md'
+                        if md_only.is_file():
+                            md_dir = model_directory_from_security_report_file(security_root, md_only)
+                            if md_dir is not None:
+                                return jsonify(synthetic_executive_primary_payload(md_dir))
                     return jsonify({'error': 'File not found or not JSON'}), 404
                 if is_executive_summary_progress_sidecar(resolved_path):
                     return jsonify(
@@ -839,6 +851,9 @@ class WebServer:
                 if model_dir is None:
                     return jsonify({'error': 'Could not resolve model directory'}), 400
                 meta = rollup_severity_counts_from_model_dir(model_dir)
+                meta['vulnerability_reports'] = vulnerability_reports_for_executive_assistant(
+                    model_dir, security_root
+                )
                 return jsonify(meta)
             except Exception:
                 return self._report_preview_error_response("Error while building executive preview meta")
@@ -881,15 +896,9 @@ class WebServer:
                 return jsonify({'error': 'report_path required'}), 400
 
             security_root = self.security_dir.resolve()
-            abs_candidate = (self.security_dir / report_rel_raw).resolve(strict=False)
-            if abs_candidate.is_file() and abs_candidate.suffix.lower() == '.md':
-                js_sibling = resolve_canonical_json_for_markdown_report(abs_candidate)
-                if js_sibling is not None:
-                    report_rel_raw = str(js_sibling.relative_to(security_root)).replace('\\', '/')
-
-            resolved_report, path_err = resolve_assistant_report_json_path(
-                report_rel_raw,
+            resolved_report, primary_synthetic, path_err = resolve_assistant_primary_payload(
                 self.security_dir,
+                report_rel_raw,
             )
             if path_err is not None:
                 err_body, status = path_err
@@ -904,19 +913,23 @@ class WebServer:
                     }
                 ), 400
 
-            try:
-                with open(resolved_report, 'r', encoding='utf-8') as rf:
-                    primary_payload = json.load(rf)
-            except Exception:
-                return jsonify({'error': 'Could not read report'}), 500
+            if primary_synthetic is not None:
+                primary_payload = primary_synthetic
+            else:
+                try:
+                    with open(resolved_report, 'r', encoding='utf-8') as rf:
+                        primary_payload = json.load(rf)
+                except Exception:
+                    return jsonify({'error': 'Could not read report'}), 500
             if not isinstance(primary_payload, dict):
                 return jsonify({'error': 'Invalid report'}), 422
 
-            report_rel = report_rel_raw
+            report_rel = str(resolved_report.relative_to(security_root)).replace('\\', '/')
 
             json_paths_for_union: List[Path] = []
             extra_rag_paths: Optional[List[str]] = None
             rag_source_payload: Dict[str, Any] = primary_payload
+            md_obj: Optional[Path] = None
 
             if aggregate_mode:
                 md_obj = model_directory_from_security_report_file(security_root, resolved_report)
@@ -994,6 +1007,25 @@ class WebServer:
                     gi,
                     max_chars=finding_max,
                 )
+            elif aggregate_mode:
+                scope_raw = data.get('finding_scope_report_path')
+                if isinstance(scope_raw, str) and scope_raw.strip():
+                    scope_payload, scope_err = resolve_aggregate_finding_scope_payload(
+                        scope_raw.strip(),
+                        security_root=security_root,
+                        executive_report_path=resolved_report,
+                        model_dir=md_obj,
+                    )
+                    if scope_err is not None:
+                        return jsonify({'error': scope_err}), 400
+                    if scope_payload is not None:
+                        finding_json = json_finding_slice(
+                            scope_payload,
+                            fi,
+                            ci,
+                            gi,
+                            max_chars=finding_max,
+                        )
 
             use_rag = self.web_assistant_rag and not bool(data.get('rag_disabled'))
             rag_block = ''

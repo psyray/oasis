@@ -53,9 +53,27 @@ def resolve_report_json(security_root: Path, report_rel: str) -> Optional[Path]:
     root = security_root.resolve()
     if not is_path_within_root(candidate, root):
         return None
-    if not candidate.is_file() or candidate.suffix.lower() != ".json":
-        return None
-    return candidate
+    if candidate.is_file() and candidate.suffix.lower() == ".json":
+        return candidate
+    rel_path = Path(rel)
+    # Executive assistant anchor: missing json/_executive_summary.json but md exists (same chat dir layout).
+    if (
+        candidate.suffix.lower() == ".json"
+        and rel_path.stem.lower() == "_executive_summary"
+        and not candidate.is_file()
+    ):
+        md_path = candidate.parent.parent / "md" / "_executive_summary.md"
+        if md_path.is_file():
+            return candidate
+    if (
+        candidate.is_file()
+        and candidate.suffix.lower() == ".md"
+        and rel_path.stem.lower() == "_executive_summary"
+    ):
+        anchor = candidate.parent.parent / "json" / "_executive_summary.json"
+        if is_path_within_root(anchor.resolve(strict=False), root):
+            return anchor.resolve(strict=False)
+    return None
 
 
 def list_chat_sessions(
