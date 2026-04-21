@@ -571,6 +571,27 @@ DashboardApp.fetchReportJsonPayload = function (reportPath) {
     });
 };
 
+/**
+ * Call the finding-validation endpoint. Payload mirrors the POST body
+ * accepted by ``/api/assistant/investigate`` in ``oasis.web``; callers pass
+ * ``{ report_path, file_index, chunk_index, finding_index, vulnerability_name?, scan_root?, budget_seconds? }``.
+ */
+DashboardApp.postAssistantInvestigate = function (payload) {
+    return fetch('/api/assistant/investigate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload || {}),
+    }).then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const err = data && data.error ? data.error : `HTTP ${response.status}`;
+            throw new Error(err);
+        }
+        return data;
+    });
+};
+
 DashboardApp.deleteAllAssistantSessions = function (reportPath) {
     return fetch('/api/assistant/sessions', {
         method: 'DELETE',

@@ -1,3 +1,15 @@
+## 🚀 [0.5.1] - 2026-04-21
+
+### ✨ Added
+- 🛡️ **Assistant validation of findings** (`POST /api/assistant/investigate`): a deterministic, code-driven agent that classifies each vulnerability into one of three families (**flow**, **access**, **config**) and assembles a verdict (`confirmed_exploitable` / `likely_exploitable` / `needs_review` / `not_exploitable`) with confidence and full citations. It discovers framework-specific **entry points**, traces **call paths** to the sink, detects **taint flows** (source → sink inside the enclosing function), identifies **nullifying mitigations** (parameterized SQL, path normalizers, sanitizers, ORMs, etc.), verifies **required controls** (auth/CSRF/session/JWT/CORS), and runs **config/secret/crypto/log-leak** audits. Orchestrated with **LangGraph** when available, with a pure-Python fallback. Dashboard exposes a **Validate this finding** button and a verdict panel rendering every piece of collected evidence.
+- 📝 **Validation LLM narrative** (`oasis/helpers/assistant_investigation_synth.py`): after the deterministic verdict, the server optionally calls the dashboard **chat model** (same Ollama endpoint as `/api/assistant/chat`) to produce `narrative_markdown` that explains the evidence without overriding `status` / `confidence` / `summary`. JSON field `synthesize_narrative` defaults to true; pass `model` or rely on the report’s `model_name`.
+- 🧩 **Validation helpers** (`oasis/helpers/assistant_entrypoints.py`, `assistant_trace.py`, `assistant_taint.py`, `assistant_mitigations.py`, `assistant_authz.py`, `assistant_controls.py`, `assistant_config_audit.py`, `assistant_secret_scan.py`, `assistant_crypto_scan.py`, `assistant_log_filter.py`, `assistant_verdict.py`, `assistant_scan_utils.py`, `validation_patterns.py`, `vuln_taxonomy.py`): single-source-of-truth regex catalog for entry points / sources / sinks / mitigations / controls, ripgrep-accelerated scanning with a pure-Python fallback, and a taxonomy registry covering the 25 OASIS vulnerability types
+- 📐 **Validation schemas** (`oasis/schemas/analysis.py`): `EntryPointHit`, `CallHop`, `ExecutionPath`, `TaintFlow`, `MitigationHit`, `AuthzCheckHit`, `ControlCheck`, `ConfigFinding`, `AssistantInvestigationResult`
+- ✅ **Tests** `tests/test_assistant_validation.py`: per-helper units (entry-points, trace, taint, mitigations, authz, config/secrets/crypto/logs, verdict), end-to-end invocation scenarios (SQLi, IDOR, debug/secrets), and schema roundtrip
+
+### 🐛 Fixed
+- 🖼️ Dashboard HTML preview: render **Executive Summary** canonical JSON payloads (`report_type: executive_summary`) instead of raising `Unsupported canonical report type`
+
 ## 🚀 [0.5.0] - 2026-04-20
 
 ### Breaking

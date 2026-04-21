@@ -1147,6 +1147,192 @@ class WebServer:
                 }
             )
 
+        @app.route('/api/assistant/investigate', methods=['POST'])
+        @login_required
+        def assistant_investigate():
+            from oasis.agent.assistant_invoke import (
+                coerce_investigation_budget,
+                invoke_assistant_validation,
+            )
+            from oasis.helpers.vuln_taxonomy import ALL_VULN_NAMES
+            from oasis.schemas.analysis import InvestigationScope
+
+            try:
+                data = request.get_json(silent=True)
+            except Exception:
+                data = None
+            if not isinstance(data, dict):
+                return jsonify({'error': 'Invalid JSON'}), 400
+
+            report_rel_raw = str(data.get('report_path') or '').strip()
+            if not report_rel_raw:
+                return jsonify({'error': 'report_path required'}), 400
+
+            security_root = self.security_dir.resolve()
+            resolved_report, primary_synthetic, path_err = resolve_assistant_primary_payload(
+                self.security_dir,
+                report_rel_raw,
+            )
+            if path_err is not None:
+                err_body, status = path_err
+                return jsonify(err_body), status
+            assert resolved_report is not None
+
+            if primary_synthetic is not None:
+                primary_payload = primary_synthetic
+            else:
+                try:
+                    with open(resolved_report, 'r', encoding='utf-8') as rf:
+                        primary_payload = json.load(rf)
+                except Exception:
+                    return jsonify({'error': 'Could not read report'}), 500
+            if not isinstance(primary_payload, dict):
+                return jsonify({'error': 'Invalid report'}), 422
+
+            vulnerability_name = str(data.get('vulnerability_name') or '').strip()
+            if not vulnerability_name:
+                vulnerability_name = str(primary_payload.get('vulnerability_name') or '').strip()
+            if vulnerability_name not in ALL_VULN_NAMES:
+                return jsonify({'error': 'Unknown vulnerability_name'}), 400
+
+            # Candidate scan roots, in priority order:
+            #   1. explicit ``scan_root`` from the request payload
+            #   2. ``analysis_root`` stored inside the report JSON (may be stale if
+            #      the report was generated on another machine / path)
+            #   3. the scan root currently served by this WebServer instance
+            scan_root_candidates: List[str] = []
+            for raw in (
+                data.get('scan_root'),
+                primary_payload.get('analysis_root'),
+                str(self.input_path_absolute) if getattr(self, 'input_path_absolute', None) else None,
+            ):
+                if isinstance(raw, str) and raw.strip():
+                    scan_root_candidates.append(raw.strip())
+
+            scan_root: Optional[Path] = None
+            for candidate_raw in scan_root_candidates:
+                candidate = Path(candidate_raw).expanduser().resolve(strict=False)
+                if candidate.exists() and candidate.is_dir():
+                    scan_root = candidate
+                    break
+
+            if scan_root is None:
+                if not scan_root_candidates:
+                    return jsonify({'error': 'scan_root required (pass scan_root or ensure report has analysis_root)'}), 400
+                return jsonify({'error': 'scan_root does not exist'}), 404
+
+            fi, ci, gi = coerce_finding_indices(data)
+            sink_file: Optional[Path] = None
+            sink_line: Optional[int] = None
+            try:
+                if fi is not None and isinstance(primary_payload.get('files'), list):
+                    file_entry = primary_payload['files'][fi] if fi < len(primary_payload['files']) else None
+                    if isinstance(file_entry, dict):
+                        fp = file_entry.get('file_path')
+                        if isinstance(fp, str) and fp.strip():
+                            candidate = (scan_root / fp).resolve(strict=False)
+                            if is_path_within_root(candidate, scan_root) and candidate.is_file():
+                                sink_file = candidate
+                        chunks = file_entry.get('chunk_analyses') or []
+                        if ci is not None and ci < len(chunks) and isinstance(chunks[ci], dict):
+                            chunk = chunks[ci]
+                            findings = chunk.get('findings') or []
+                            if gi is not None and gi < len(findings) and isinstance(findings[gi], dict):
+                                line_val = findings[gi].get('snippet_start_line') or chunk.get('start_line')
+                                if isinstance(line_val, int) and line_val > 0:
+                                    sink_line = line_val
+            except Exception:
+                sink_file = None
+                sink_line = None
+
+            # Client-provided sink_file / sink_line hints take precedence when
+            # they resolve inside scan_root; useful when indices refer to a
+            # synthesized scope (executive aggregate) or when the report JSON
+            # is incomplete.
+            client_sink_file_raw = data.get('sink_file')
+            if isinstance(client_sink_file_raw, str) and client_sink_file_raw.strip():
+                hint = Path(client_sink_file_raw.strip())
+                candidate = hint if hint.is_absolute() else (scan_root / hint)
+                candidate = candidate.resolve(strict=False)
+                if is_path_within_root(candidate, scan_root) and candidate.is_file():
+                    sink_file = candidate
+            client_sink_line_raw = data.get('sink_line')
+            if isinstance(client_sink_line_raw, int) and client_sink_line_raw > 0:
+                sink_line = client_sink_line_raw
+
+            budget_seconds = coerce_investigation_budget(data.get('budget_seconds'))
+
+            try:
+                result = invoke_assistant_validation(
+                    vulnerability_name=vulnerability_name,
+                    scan_root=scan_root,
+                    sink_file=sink_file,
+                    sink_line=sink_line,
+                    budget_seconds=budget_seconds,
+                )
+            except Exception as exc:
+                return jsonify({'error': f'investigation failed: {exc}'}), 500
+
+            # Expose the resolved investigation scope so the dashboard can show
+            # exactly which file/line was analysed (avoids ambiguity when only
+            # zero-based indices are sent over the wire).
+            try:
+                sink_file_rel: Optional[str] = None
+                if sink_file is not None:
+                    try:
+                        sink_file_rel = str(sink_file.relative_to(scan_root))
+                    except ValueError:
+                        sink_file_rel = str(sink_file)
+                result.scope = InvestigationScope(
+                    scan_root=str(scan_root),
+                    sink_file=sink_file_rel,
+                    sink_line=sink_line,
+                    vulnerability_name=vulnerability_name,
+                    family=result.family,
+                )
+            except Exception:
+                pass
+
+            synthesize_raw = data.get('synthesize_narrative')
+            if synthesize_raw is None:
+                synthesize_narrative = True
+            else:
+                synthesize_narrative = bool(synthesize_raw)
+
+            if synthesize_narrative:
+                chat_model_inv = data.get('model')
+                if isinstance(chat_model_inv, str) and chat_model_inv.strip():
+                    chat_model_inv = chat_model_inv.strip()
+                else:
+                    mn_inv = primary_payload.get('model_name')
+                    chat_model_inv = (
+                        mn_inv.strip() if isinstance(mn_inv, str) and mn_inv.strip() else ''
+                    )
+                if chat_model_inv:
+                    try:
+                        from oasis.helpers.assistant_investigation_synth import (
+                            enrich_investigation_with_llm_narrative,
+                        )
+
+                        result = enrich_investigation_with_llm_narrative(
+                            result,
+                            ollama_manager=self._get_assistant_ollama_manager(),
+                            chat_model=chat_model_inv,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            'Investigation narrative enrichment failed: %s',
+                            type(exc).__name__,
+                            exc_info=True,
+                        )
+                        result = result.model_copy(
+                            update={
+                                'synthesis_error': f'{type(exc).__name__}: {exc}',
+                            }
+                        )
+
+            return jsonify(result.model_dump())
+
         @app.route('/api/assistant/sessions', methods=['GET'])
         @login_required
         def assistant_sessions():

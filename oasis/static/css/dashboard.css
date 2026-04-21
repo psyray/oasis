@@ -2585,3 +2585,441 @@ pre.http-raw {
     padding: 0.35rem;
     overflow-x: auto;
 }
+
+.oasis-assistant-validate-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin: 0.5rem 0 0.6rem;
+}
+.oasis-assistant-validate-row > #oasis-assistant-validate-btn {
+    align-self: flex-start;
+}
+
+/* ==========================================================================
+   Assistant — Finding validation panel (deterministic verdict renderer).
+   Palette anchored on --turquoise / --dark-blue / --light-sand so the panel
+   reads as part of the assistant column while keeping status colors distinct.
+   ========================================================================== */
+.oasis-assistant-validate-panel {
+    margin-top: 0.5rem;
+    padding: 0.85rem 1rem;
+    background: var(--white);
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--turquoise);
+    border-radius: 6px;
+    font-size: 0.88rem;
+    line-height: 1.45;
+    color: var(--dark-blue);
+    box-shadow: 0 1px 3px rgba(14, 31, 43, 0.05);
+}
+.oasis-assistant-validate-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    padding-bottom: 0.55rem;
+    border-bottom: 1px solid var(--border-color);
+}
+.oasis-assistant-validate-head-left {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    min-width: 0;
+}
+.oasis-assistant-validate-head-right {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.oasis-assistant-validate-title {
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: var(--dark-blue);
+}
+.oasis-assistant-validate-vuln {
+    font-weight: 500;
+    color: var(--dark-blue-2);
+    font-size: 0.82rem;
+    padding: 0.1rem 0.5rem;
+    background: var(--light-sand);
+    border-radius: 10px;
+    white-space: nowrap;
+    max-width: 24rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.oasis-assistant-validate-status {
+    display: inline-block;
+    padding: 0.2rem 0.55rem;
+    border-radius: 12px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border: 1px solid transparent;
+}
+.oasis-assistant-validate-status--danger {
+    background: #fde8e8;
+    color: #8b1538;
+    border-color: #f5c2c7;
+}
+.oasis-assistant-validate-status--warn {
+    background: #fff3dd;
+    color: #a0540d;
+    border-color: #f2d197;
+}
+.oasis-assistant-validate-status--ok {
+    background: #eefbf0;
+    color: #1a7f37;
+    border-color: #aceebb;
+}
+.oasis-assistant-validate-status--muted {
+    background: var(--light-sand);
+    color: var(--medium-gray);
+    border-color: var(--border-color);
+}
+.oasis-assistant-validate-family {
+    display: inline-block;
+    padding: 0.15rem 0.45rem;
+    border-radius: 10px;
+    background: rgba(64, 180, 196, 0.12);
+    color: var(--dark-blue-2);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.oasis-assistant-validate-panel--danger {
+    border-left-color: #d73a49;
+}
+.oasis-assistant-validate-panel--warn {
+    border-left-color: #e0a94a;
+}
+.oasis-assistant-validate-panel--ok {
+    border-left-color: #1a7f37;
+}
+.oasis-assistant-validate-panel--muted {
+    border-left-color: var(--medium-gray);
+}
+.oasis-assistant-validate-gauge {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.55rem 0;
+    font-size: 0.78rem;
+    color: var(--dark-blue-2);
+}
+.oasis-assistant-validate-gauge-label {
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.68rem;
+    color: var(--medium-gray);
+}
+.oasis-assistant-validate-gauge-track {
+    position: relative;
+    height: 6px;
+    background: var(--light-sand);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.oasis-assistant-validate-gauge-fill {
+    display: block;
+    height: 100%;
+    border-radius: 4px;
+    background: var(--turquoise);
+    transition: width 0.25s ease;
+}
+.oasis-assistant-validate-gauge--danger .oasis-assistant-validate-gauge-fill {
+    background: #d73a49;
+}
+.oasis-assistant-validate-gauge--warn .oasis-assistant-validate-gauge-fill {
+    background: #e0a94a;
+}
+.oasis-assistant-validate-gauge--ok .oasis-assistant-validate-gauge-fill {
+    background: #1a7f37;
+}
+.oasis-assistant-validate-gauge--muted .oasis-assistant-validate-gauge-fill {
+    background: var(--medium-gray);
+}
+.oasis-assistant-validate-gauge-value {
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    color: var(--dark-blue);
+    min-width: 2.5rem;
+    text-align: right;
+}
+.oasis-assistant-validate-narrative {
+    margin: 0.35rem 0 0.6rem;
+    color: var(--dark-blue-2);
+    font-size: 0.85rem;
+}
+.oasis-assistant-validate-llm-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem 0.6rem;
+    margin: 0.5rem 0 0.25rem;
+}
+.oasis-assistant-validate-llm-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--medium-gray);
+}
+.oasis-assistant-validate-llm-model {
+    font-size: 0.72rem;
+    font-family: ui-monospace, monospace;
+    color: var(--dark-blue);
+    background: var(--light-sand);
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    border: 1px solid var(--border-color);
+}
+.oasis-assistant-validate-llm-body {
+    margin: 0 0 0.65rem;
+    padding: 0.45rem 0.55rem;
+    background: #fff;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    font-size: 0.84rem;
+    max-height: 22rem;
+    overflow: auto;
+}
+.oasis-assistant-validate-synthesis-error {
+    margin: 0.35rem 0 0.6rem;
+    font-size: 0.8rem;
+    color: var(--warning-red, #a44);
+}
+.oasis-assistant-validate-scope {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+    padding: 0.5rem 0.6rem;
+    background: var(--light-sand);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    margin: 0.5rem 0 0.7rem;
+    font-size: 0.82rem;
+}
+.oasis-assistant-validate-scope-row {
+    display: grid;
+    grid-template-columns: 6.5rem 1fr;
+    align-items: baseline;
+    gap: 0.5rem;
+}
+.oasis-assistant-validate-scope-key {
+    color: var(--medium-gray);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.oasis-assistant-validate-scope-val {
+    color: var(--dark-blue);
+    word-break: break-all;
+}
+.oasis-assistant-validate-scope-val--mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+}
+.oasis-assistant-validate-scope-val--muted {
+    color: var(--medium-gray);
+    font-style: italic;
+}
+.oasis-assistant-validate-evidence {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0.2rem;
+}
+.oasis-assistant-validate-group {
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--white);
+    overflow: hidden;
+}
+.oasis-assistant-validate-group[open] {
+    box-shadow: 0 1px 2px rgba(14, 31, 43, 0.05);
+}
+.oasis-assistant-validate-group-head {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.4rem 0.6rem;
+    background: var(--light-sand);
+    font-weight: 600;
+    color: var(--dark-blue);
+    font-size: 0.82rem;
+    user-select: none;
+}
+.oasis-assistant-validate-group-head::-webkit-details-marker {
+    display: none;
+}
+.oasis-assistant-validate-group-head::before {
+    content: '▸';
+    margin-right: 0.4rem;
+    color: var(--turquoise);
+    font-size: 0.7rem;
+    transition: transform 0.15s ease;
+    display: inline-block;
+}
+.oasis-assistant-validate-group[open] .oasis-assistant-validate-group-head::before {
+    transform: rotate(90deg);
+}
+.oasis-assistant-validate-group-name {
+    flex: 1;
+}
+.oasis-assistant-validate-group-count {
+    background: var(--turquoise);
+    color: var(--white);
+    padding: 0.05rem 0.45rem;
+    border-radius: 9px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+.oasis-assistant-validate-scroll {
+    max-height: 14rem;
+    overflow-y: auto;
+    padding: 0.25rem 0.25rem 0.3rem;
+    background: var(--white);
+}
+.oasis-assistant-validate-scroll--entries {
+    max-height: 18rem;
+}
+.oasis-assistant-validate-scroll::-webkit-scrollbar {
+    width: 8px;
+}
+.oasis-assistant-validate-scroll::-webkit-scrollbar-track {
+    background: var(--light-sand);
+}
+.oasis-assistant-validate-scroll::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 4px;
+}
+.oasis-assistant-validate-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--medium-gray);
+}
+.oasis-assistant-validate-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.oasis-assistant-validate-item {
+    padding: 0.25rem 0.45rem;
+    border-bottom: 1px dashed var(--border-color);
+    font-size: 0.8rem;
+    line-height: 1.4;
+    word-break: break-word;
+}
+.oasis-assistant-validate-item:last-child {
+    border-bottom: none;
+}
+.oasis-assistant-validate-item code {
+    background: rgba(14, 31, 43, 0.06);
+    padding: 0.05rem 0.3rem;
+    border-radius: 3px;
+    font-size: 0.76rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.oasis-assistant-validate-tag {
+    display: inline-block;
+    padding: 0.05rem 0.4rem;
+    border-radius: 3px;
+    background: rgba(64, 180, 196, 0.18);
+    color: var(--dark-blue-2);
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: 0.25rem;
+    vertical-align: middle;
+}
+.oasis-assistant-validate-route {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--dark-blue-2);
+    font-size: 0.78rem;
+}
+.oasis-assistant-validate-citation {
+    color: var(--medium-gray);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.74rem;
+    margin-left: 0.25rem;
+}
+.oasis-assistant-validate-sep {
+    color: var(--turquoise);
+    font-weight: 700;
+    padding: 0 0.15rem;
+}
+.oasis-assistant-validate-null {
+    color: #1a7f37;
+    font-weight: 700;
+    margin-left: 0.25rem;
+}
+.oasis-assistant-validate-ctrl {
+    display: inline-block;
+    padding: 0 0.4rem;
+    border-radius: 8px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.oasis-assistant-validate-ctrl--ok {
+    background: #eefbf0;
+    color: #1a7f37;
+}
+.oasis-assistant-validate-ctrl--missing {
+    background: #fde8e8;
+    color: #8b1538;
+}
+.oasis-assistant-validate-sev {
+    display: inline-block;
+    padding: 0 0.4rem;
+    border-radius: 8px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.oasis-assistant-validate-sev--critical {
+    background: #f3e5f5;
+    color: #7b1fa2;
+}
+.oasis-assistant-validate-sev--high {
+    background: #fde8e8;
+    color: #8b1538;
+}
+.oasis-assistant-validate-sev--medium {
+    background: #fff3dd;
+    color: #a0540d;
+}
+.oasis-assistant-validate-sev--low,
+.oasis-assistant-validate-sev--info {
+    background: #eefbf0;
+    color: #1a7f37;
+}
+.oasis-assistant-validate-none {
+    color: var(--medium-gray);
+    font-style: italic;
+}
+.oasis-assistant-validate-errors {
+    margin-top: 0.6rem;
+    padding: 0.5rem 0.6rem;
+    background: #fde8e8;
+    border: 1px solid #f5c2c7;
+    border-radius: 4px;
+    color: #8b1538;
+    font-size: 0.82rem;
+}
+.oasis-assistant-validate-errors ul {
+    margin: 0.25rem 0 0;
+    padding-left: 1.1rem;
+}

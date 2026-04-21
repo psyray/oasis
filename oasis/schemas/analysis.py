@@ -148,11 +148,157 @@ class VulnerabilityReportDocument(BaseModel):
     )
 
 
+class Citation(BaseModel):
+    """Source citation used by validation helpers to point at concrete code."""
+
+    file_path: str
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    snippet: str = ""
+
+
+class EntryPointHit(BaseModel):
+    """One detected entry point (web route, CLI command, task handler)."""
+
+    framework: str
+    label: str = Field(default="", description="Short classifier tag (e.g. flask_route)")
+    route: str = Field(default="", description="Path, URL or CLI token, if available")
+    citation: Citation
+
+
+class CallHop(BaseModel):
+    """One step in a call chain from entry point to sink."""
+
+    symbol: str
+    citation: Citation
+
+
+class ExecutionPath(BaseModel):
+    """Ordered call chain from an entry point to a vulnerable sink."""
+
+    entry_point: Optional[EntryPointHit] = None
+    hops: List[CallHop] = Field(default_factory=list)
+    reached_sink: bool = False
+
+
+class TaintFlow(BaseModel):
+    """Source → sink taint linkage used for the flow family."""
+
+    source_kind: str
+    sink_kind: str
+    source_citation: Citation
+    sink_citation: Citation
+
+
+class MitigationHit(BaseModel):
+    """Mitigation detected on the exploitation path."""
+
+    kind: str
+    citation: Citation
+    nullifies: bool = Field(
+        default=False,
+        description="True when this mitigation is strong enough to neutralise the finding on its own.",
+    )
+
+
+class AuthzCheckHit(BaseModel):
+    """Authentication / authorization control observed near the finding."""
+
+    kind: str
+    citation: Citation
+
+
+class ControlCheck(BaseModel):
+    """Result of testing whether a required control is present."""
+
+    kind: str
+    present: bool
+    citations: List[Citation] = Field(default_factory=list)
+
+
+class ConfigFinding(BaseModel):
+    """Observation produced by the config / content-based family."""
+
+    kind: str
+    severity: Literal["info", "low", "medium", "high", "critical"] = "medium"
+    citation: Citation
+
+
+AssistantInvestigationStatus = Literal[
+    "confirmed_exploitable",
+    "likely_exploitable",
+    "partial_mitigation",
+    "fully_mitigated",
+    "unreachable",
+    "insufficient_signal",
+    "error",
+]
+
+
+class InvestigationScope(BaseModel):
+    """Resolved context used by the validation agent for a given request.
+
+    Surfaced to the client so the verdict panel can show exactly which source
+    file / line was analysed (the answer is otherwise opaque when indices alone
+    are sent from the dashboard).
+    """
+
+    scan_root: str
+    sink_file: Optional[str] = None
+    sink_line: Optional[int] = None
+    vulnerability_name: str
+    family: Literal["flow", "access", "config"]
+
+
+class AssistantInvestigationResult(BaseModel):
+    """Deterministic verdict produced by the assistant validation LangGraph."""
+
+    schema_version: int = Field(default=ANALYSIS_SCHEMA_VERSION)
+    vulnerability_name: str
+    family: Literal["flow", "access", "config"]
+    status: AssistantInvestigationStatus
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    summary: str = ""
+    scope: Optional[InvestigationScope] = None
+    entry_points: List[EntryPointHit] = Field(default_factory=list)
+    execution_paths: List[ExecutionPath] = Field(default_factory=list)
+    taint_flows: List[TaintFlow] = Field(default_factory=list)
+    mitigations: List[MitigationHit] = Field(default_factory=list)
+    authz_checks: List[AuthzCheckHit] = Field(default_factory=list)
+    control_checks: List[ControlCheck] = Field(default_factory=list)
+    config_findings: List[ConfigFinding] = Field(default_factory=list)
+    citations: List[Citation] = Field(default_factory=list)
+    budget_exhausted: bool = False
+    errors: List[str] = Field(default_factory=list)
+    narrative_markdown: str = Field(
+        default="",
+        description="Optional LLM-authored Markdown; must not override deterministic status.",
+    )
+    synthesis_model: Optional[str] = Field(
+        default=None,
+        description="Chat model used for narrative_markdown when synthesis succeeded.",
+    )
+    synthesis_error: Optional[str] = Field(
+        default=None,
+        description="Set when narrative synthesis was requested but failed or was skipped.",
+    )
+
+
 ScanVerdict.model_rebuild()
 VulnerabilityFinding.model_rebuild()
 ChunkDeepAnalysis.model_rebuild()
 FileReportEntry.model_rebuild()
 VulnerabilityReportDocument.model_rebuild()
+Citation.model_rebuild()
+EntryPointHit.model_rebuild()
+CallHop.model_rebuild()
+ExecutionPath.model_rebuild()
+TaintFlow.model_rebuild()
+MitigationHit.model_rebuild()
+AuthzCheckHit.model_rebuild()
+ControlCheck.model_rebuild()
+ConfigFinding.model_rebuild()
+AssistantInvestigationResult.model_rebuild()
 
 
 def build_dashboard_stats(files: List[FileReportEntry]) -> DashboardStats:

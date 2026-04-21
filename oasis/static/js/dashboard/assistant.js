@@ -8,6 +8,401 @@ DashboardApp.resetAssistantConversation = function () {
     DashboardApp._assistantSessionId = '';
 };
 
+/**
+ * Render the ``AssistantInvestigationResult`` payload returned by
+ * ``/api/assistant/investigate`` inside a plain container. Layout is
+ * intentionally lightweight (dl + lists) so it composes cleanly in both
+ * the assistant panel and any future modal/aside embedding.
+ */
+DashboardApp._validateStatusTone = function (status) {
+    switch (String(status || '').toLowerCase()) {
+        case 'confirmed_exploitable':
+            return 'danger';
+        case 'likely_exploitable':
+        case 'partial_mitigation':
+            return 'warn';
+        case 'fully_mitigated':
+            return 'ok';
+        case 'unreachable':
+        case 'insufficient_signal':
+            return 'muted';
+        case 'error':
+            return 'danger';
+        default:
+            return 'muted';
+    }
+};
+
+DashboardApp._validateShortenPath = function (value, keep) {
+    const s = String(value == null ? '' : value);
+    const k = typeof keep === 'number' && keep > 0 ? keep : 3;
+    const parts = s.split('/');
+    if (parts.length <= k + 1) {
+        return s;
+    }
+    return '…/' + parts.slice(-k).join('/');
+};
+
+/**
+ * Render the ``AssistantInvestigationResult`` payload returned by
+ * ``/api/assistant/investigate`` with the dashboard charter. Layout is
+ * compact (verdict header + scope card + collapsible evidence sections)
+ * and the entry-points list is rendered inside a bounded, scrollable
+ * container so every hit stays reachable regardless of volume.
+ */
+DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
+    if (!container) {
+        return;
+    }
+    const esc = DashboardApp._escapeHtml || function (s) {
+        return String(s == null ? '' : s);
+    };
+    const label = function (key, fallback) {
+        return typeof txt === 'function' ? txt(key, fallback) : fallback;
+    };
+    const shortPath = DashboardApp._validateShortenPath;
+    while (container.firstChild) {
+        container.removeChild(container.firstChild);
+    }
+    if (!result || typeof result !== 'object') {
+        container.textContent = label('validateEmpty', 'No evidence recorded.');
+        return;
+    }
+    container.classList.add('oasis-assistant-validate-panel');
+
+    const tone = DashboardApp._validateStatusTone(result.status);
+    // Drop previous tone classes if the panel is being re-rendered.
+    ['danger', 'warn', 'ok', 'muted'].forEach(function (t) {
+        container.classList.remove('oasis-assistant-validate-panel--' + t);
+    });
+    container.classList.add('oasis-assistant-validate-panel--' + tone);
+    const confidencePct =
+        typeof result.confidence === 'number'
+            ? Math.max(0, Math.min(100, Math.round(result.confidence * 100)))
+            : null;
+    const statusText = String(result.status || '—').replace(/_/g, ' ');
+    const familyText = String(result.family || '—');
+    const vulnName =
+        (result.scope && result.scope.vulnerability_name) || result.vulnerability_name || '';
+
+    // Header: title + status badge + confidence gauge — single compact row.
+    const head = document.createElement('div');
+    head.className = 'oasis-assistant-validate-head oasis-assistant-validate-head--' + tone;
+    const headLeft = document.createElement('div');
+    headLeft.className = 'oasis-assistant-validate-head-left';
+    const title = document.createElement('span');
+    title.className = 'oasis-assistant-validate-title';
+    title.textContent = label('validateHeader', 'Finding validation');
+    headLeft.appendChild(title);
+    if (vulnName) {
+        const vname = document.createElement('span');
+        vname.className = 'oasis-assistant-validate-vuln';
+        vname.textContent = vulnName;
+        headLeft.appendChild(vname);
+    }
+    head.appendChild(headLeft);
+
+    const headRight = document.createElement('div');
+    headRight.className = 'oasis-assistant-validate-head-right';
+    const statusBadge = document.createElement('span');
+    statusBadge.className = 'oasis-assistant-validate-status oasis-assistant-validate-status--' + tone;
+    statusBadge.textContent = statusText;
+    headRight.appendChild(statusBadge);
+    const familyPill = document.createElement('span');
+    familyPill.className = 'oasis-assistant-validate-family';
+    familyPill.textContent = familyText;
+    headRight.appendChild(familyPill);
+    head.appendChild(headRight);
+    container.appendChild(head);
+
+    if (confidencePct !== null) {
+        const gauge = document.createElement('div');
+        gauge.className = 'oasis-assistant-validate-gauge oasis-assistant-validate-gauge--' + tone;
+        const gLabel = document.createElement('span');
+        gLabel.className = 'oasis-assistant-validate-gauge-label';
+        gLabel.textContent = label('validateConfidenceLabel', 'Confidence');
+        const gTrack = document.createElement('span');
+        gTrack.className = 'oasis-assistant-validate-gauge-track';
+        const gFill = document.createElement('span');
+        gFill.className = 'oasis-assistant-validate-gauge-fill';
+        gFill.style.width = confidencePct + '%';
+        gTrack.appendChild(gFill);
+        const gValue = document.createElement('span');
+        gValue.className = 'oasis-assistant-validate-gauge-value';
+        gValue.textContent = confidencePct + '%';
+        gauge.appendChild(gLabel);
+        gauge.appendChild(gTrack);
+        gauge.appendChild(gValue);
+        container.appendChild(gauge);
+    }
+
+    if (result.summary) {
+        const narrative = document.createElement('p');
+        narrative.className = 'oasis-assistant-validate-narrative';
+        narrative.textContent = result.summary;
+        container.appendChild(narrative);
+    }
+
+    const llmMd =
+        result.narrative_markdown && String(result.narrative_markdown).trim()
+            ? String(result.narrative_markdown).trim()
+            : '';
+    if (llmMd) {
+        const llmHead = document.createElement('div');
+        llmHead.className = 'oasis-assistant-validate-llm-head';
+        const llmTitle = document.createElement('span');
+        llmTitle.className = 'oasis-assistant-validate-llm-title';
+        llmTitle.textContent = label('validateLlmNarrativeTitle', 'LLM narrative');
+        llmHead.appendChild(llmTitle);
+        if (result.synthesis_model) {
+            const llmModel = document.createElement('span');
+            llmModel.className = 'oasis-assistant-validate-llm-model';
+            llmModel.textContent = String(result.synthesis_model);
+            llmHead.appendChild(llmModel);
+        }
+        container.appendChild(llmHead);
+        const llmBody = document.createElement('div');
+        llmBody.className = 'oasis-assistant-validate-llm-body oasis-assistant-md';
+        let mdHtml = '';
+        if (typeof DashboardApp.convertMarkdownToHtml === 'function') {
+            mdHtml = DashboardApp.convertMarkdownToHtml(llmMd);
+        } else {
+            mdHtml = '<p>' + esc(llmMd) + '</p>';
+        }
+        llmBody.innerHTML =
+            typeof DashboardApp._sanitizeHtml === 'function'
+                ? DashboardApp._sanitizeHtml(mdHtml)
+                : mdHtml;
+        container.appendChild(llmBody);
+        if (typeof DashboardApp.wireMarkdownCodeCopyButtons === 'function') {
+            DashboardApp.wireMarkdownCodeCopyButtons(llmBody, {
+                copyCode: label('assistantCopyCode', 'Copy'),
+                copiedCode: label('assistantCopiedCode', 'Copied'),
+            });
+        }
+    } else if (result.synthesis_error && String(result.synthesis_error).trim()) {
+        const synErr = document.createElement('p');
+        synErr.className = 'oasis-assistant-validate-synthesis-error';
+        synErr.textContent =
+            label('validateSynthesisErrorPrefix', 'Narrative synthesis: ') +
+            String(result.synthesis_error).trim();
+        container.appendChild(synErr);
+    }
+
+    // Scope card — compact mono-space with truncation hint for long paths.
+    if (result.scope && typeof result.scope === 'object') {
+        const scope = document.createElement('div');
+        scope.className = 'oasis-assistant-validate-scope';
+        const scopeRows = [
+            {
+                key: 'scanroot',
+                label: label('validateScopeRootLabel', 'Scan root'),
+                full: result.scope.scan_root || '',
+                short: shortPath(result.scope.scan_root, 3),
+                mono: true,
+            },
+            {
+                key: 'sink',
+                label: label('validateScopeSinkLabel', 'Sink'),
+                full: result.scope.sink_file
+                    ? result.scope.sink_file + (result.scope.sink_line ? ':' + result.scope.sink_line : '')
+                    : '',
+                short: result.scope.sink_file
+                    ? shortPath(result.scope.sink_file, 2) +
+                      (result.scope.sink_line ? ':' + result.scope.sink_line : '')
+                    : label('validateScopeNoSink', '(no sink file resolved)'),
+                mono: !!result.scope.sink_file,
+                muted: !result.scope.sink_file,
+            },
+        ];
+        scopeRows.forEach(function (row) {
+            const item = document.createElement('div');
+            item.className = 'oasis-assistant-validate-scope-row';
+            const k = document.createElement('span');
+            k.className = 'oasis-assistant-validate-scope-key';
+            k.textContent = row.label;
+            const v = document.createElement('span');
+            v.className =
+                'oasis-assistant-validate-scope-val' +
+                (row.mono ? ' oasis-assistant-validate-scope-val--mono' : '') +
+                (row.muted ? ' oasis-assistant-validate-scope-val--muted' : '');
+            v.textContent = row.short || '—';
+            if (row.full && row.full !== row.short) {
+                v.title = row.full;
+            }
+            item.appendChild(k);
+            item.appendChild(v);
+            scope.appendChild(item);
+        });
+        container.appendChild(scope);
+    }
+
+    const citationLabel = function (cit) {
+        if (!cit || typeof cit !== 'object') {
+            return '';
+        }
+        const p = cit.file_path || '';
+        const start = cit.start_line || '';
+        const full = p + (start ? ':' + start : '');
+        const short = shortPath(p, 2) + (start ? ':' + start : '');
+        return '<span class="oasis-assistant-validate-citation" title="' + esc(full) + '">' + esc(short) + '</span>';
+    };
+
+    // Evidence section builder — each group gets a <details> so the user can
+    // collapse long lists while still being able to reach every hit via a
+    // bounded, scrollable inner container.
+    const evidenceWrap = document.createElement('div');
+    evidenceWrap.className = 'oasis-assistant-validate-evidence';
+
+    const appendGroup = function (groupKey, titleText, items, render, opts) {
+        if (!Array.isArray(items) || items.length === 0) {
+            return;
+        }
+        const options = opts || {};
+        const details = document.createElement('details');
+        details.className =
+            'oasis-assistant-validate-group oasis-assistant-validate-group--' + groupKey;
+        if (options.open !== false) {
+            details.open = true;
+        }
+        const summary = document.createElement('summary');
+        summary.className = 'oasis-assistant-validate-group-head';
+        const hName = document.createElement('span');
+        hName.className = 'oasis-assistant-validate-group-name';
+        hName.textContent = titleText;
+        const hCount = document.createElement('span');
+        hCount.className = 'oasis-assistant-validate-group-count';
+        hCount.textContent = String(items.length);
+        summary.appendChild(hName);
+        summary.appendChild(hCount);
+        details.appendChild(summary);
+
+        const scroll = document.createElement('div');
+        scroll.className =
+            'oasis-assistant-validate-scroll oasis-assistant-validate-scroll--' + groupKey;
+        const list = document.createElement('ul');
+        list.className = 'oasis-assistant-validate-list';
+        items.forEach(function (item) {
+            const li = document.createElement('li');
+            li.className = 'oasis-assistant-validate-item';
+            li.innerHTML = render(item, esc);
+            list.appendChild(li);
+        });
+        scroll.appendChild(list);
+        details.appendChild(scroll);
+        evidenceWrap.appendChild(details);
+    };
+
+    appendGroup(
+        'entries',
+        label('validateEntryPointsLabel', 'Entry points'),
+        result.entry_points,
+        function (ep) {
+            const tag = '<span class="oasis-assistant-validate-tag">' + esc(ep.framework || '') + '</span>';
+            const kind = esc(ep.label || '');
+            const route = ep.route
+                ? ' <span class="oasis-assistant-validate-route">' + esc(ep.route) + '</span>'
+                : '';
+            return tag + ' <code>' + kind + '</code>' + route + ' ' + citationLabel(ep.citation);
+        }
+    );
+    appendGroup(
+        'paths',
+        label('validatePathsLabel', 'Execution paths'),
+        result.execution_paths,
+        function (path) {
+            const hops = Array.isArray(path.hops) ? path.hops.length : 0;
+            const entry = path.entry_point
+                ? esc(path.entry_point.route || path.entry_point.label || '')
+                : '<em class="oasis-assistant-validate-none">no entry</em>';
+            return entry + ' <span class="oasis-assistant-validate-sep">→</span> ' + esc(hops) + ' hop(s)';
+        }
+    );
+    appendGroup(
+        'flows',
+        label('validateFlowsLabel', 'Taint flows'),
+        result.taint_flows,
+        function (flow) {
+            return (
+                '<code>' +
+                esc(flow.source_kind || '') +
+                '</code> <span class="oasis-assistant-validate-sep">→</span> <code>' +
+                esc(flow.sink_kind || '') +
+                '</code> ' +
+                citationLabel(flow.sink_citation)
+            );
+        }
+    );
+    appendGroup(
+        'mitigations',
+        label('validateMitigationsLabel', 'Mitigations'),
+        result.mitigations,
+        function (m) {
+            const mark = m.nullifies
+                ? '<span class="oasis-assistant-validate-null" title="nullifies the finding">✓</span>'
+                : '';
+            return '<code>' + esc(m.kind || '') + '</code>' + mark + ' ' + citationLabel(m.citation);
+        }
+    );
+    appendGroup(
+        'controls',
+        label('validateControlsLabel', 'Access controls'),
+        result.control_checks,
+        function (c) {
+            const cls = c.present
+                ? 'oasis-assistant-validate-ctrl--ok'
+                : 'oasis-assistant-validate-ctrl--missing';
+            return (
+                '<code>' +
+                esc(c.kind || '') +
+                '</code> <span class="oasis-assistant-validate-ctrl ' +
+                cls +
+                '">' +
+                (c.present ? 'present' : 'missing') +
+                '</span>'
+            );
+        }
+    );
+    appendGroup(
+        'config',
+        label('validateConfigLabel', 'Config findings'),
+        result.config_findings,
+        function (f) {
+            const sev = String(f.severity || '').toLowerCase();
+            return (
+                '<code>' +
+                esc(f.kind || '') +
+                '</code> <span class="oasis-assistant-validate-sev oasis-assistant-validate-sev--' +
+                esc(sev || 'info') +
+                '">' +
+                esc(sev || 'info') +
+                '</span> ' +
+                citationLabel(f.citation)
+            );
+        }
+    );
+
+    if (evidenceWrap.childNodes.length > 0) {
+        container.appendChild(evidenceWrap);
+    }
+
+    if (Array.isArray(result.errors) && result.errors.length) {
+        const errBox = document.createElement('div');
+        errBox.className = 'oasis-assistant-validate-errors';
+        const h = document.createElement('strong');
+        h.textContent = label('validateErrorsLabel', 'Errors');
+        errBox.appendChild(h);
+        const ul = document.createElement('ul');
+        result.errors.forEach(function (e) {
+            const li = document.createElement('li');
+            li.textContent = String(e);
+            ul.appendChild(li);
+        });
+        errBox.appendChild(ul);
+        container.appendChild(errBox);
+    }
+};
+
 /** Drop assistant DOM and in-memory state when navigating to another report or format. */
 DashboardApp.resetAssistantPanelForModalNavigation = function () {
     DashboardApp.resetAssistantConversation();
@@ -131,6 +526,7 @@ DashboardApp.populateAssistantFindingSelectorsFromPayload = function (panelRoot,
     const files =
         payload && typeof payload === 'object' && Array.isArray(payload.files) ? payload.files : [];
     panelRoot._oasisAssistantFiles = files;
+    panelRoot._oasisAssistantPayload = payload && typeof payload === 'object' ? payload : null;
     resetSelect(selFi);
     resetSelect(selCi);
     resetSelect(selGi);
@@ -420,6 +816,10 @@ DashboardApp.mountReportAssistantPanel = function () {
                             <select id="oasis-assistant-gi" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingFinding', 'Finding'))}"></select>
                         </label>
                     </div>
+                </div>
+                <div class="oasis-assistant-validate-row">
+                    <button type="button" class="btn btn-secondary" id="oasis-assistant-validate-btn">${DashboardApp._escapeHtml(txt('validateButton', 'Validate this finding'))}</button>
+                    <div id="oasis-assistant-validate-panel" class="oasis-assistant-validate-panel" hidden></div>
                 </div>
                 <div class="oasis-assistant-chips">
                     <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryFalsePositive', ''))}">${DashboardApp._escapeHtml(txt('chipFalsePositive', ''))}</button>
@@ -836,6 +1236,99 @@ DashboardApp.mountReportAssistantPanel = function () {
             finding_index: num(gi),
         };
     };
+
+    const validateBtn = panel.querySelector('#oasis-assistant-validate-btn');
+    const validatePanel = panel.querySelector('#oasis-assistant-validate-panel');
+    if (validateBtn && validatePanel) {
+        validateBtn.addEventListener('click', function () {
+            const indices = gatherFindingIndices(panel);
+            // Resolve the selected file/chunk/finding locally so the request
+            // is self-contained (visible in Network tab) and the server can
+            // cross-check indices against the declared sink hints.
+            const files = Array.isArray(panel._oasisAssistantFiles) ? panel._oasisAssistantFiles : [];
+            let sinkFilePath = null;
+            let sinkLineHint = null;
+            if (
+                Number.isFinite(indices.file_index) &&
+                indices.file_index >= 0 &&
+                indices.file_index < files.length
+            ) {
+                const fileEntry = files[indices.file_index] || {};
+                if (typeof fileEntry.file_path === 'string' && fileEntry.file_path.trim()) {
+                    sinkFilePath = fileEntry.file_path.trim();
+                }
+                const chunks = Array.isArray(fileEntry.chunk_analyses) ? fileEntry.chunk_analyses : [];
+                if (
+                    Number.isFinite(indices.chunk_index) &&
+                    indices.chunk_index >= 0 &&
+                    indices.chunk_index < chunks.length
+                ) {
+                    const chunk = chunks[indices.chunk_index] || {};
+                    const findings = Array.isArray(chunk.findings) ? chunk.findings : [];
+                    if (
+                        Number.isFinite(indices.finding_index) &&
+                        indices.finding_index >= 0 &&
+                        indices.finding_index < findings.length
+                    ) {
+                        const finding = findings[indices.finding_index] || {};
+                        const candidate =
+                            typeof finding.snippet_start_line === 'number' && finding.snippet_start_line > 0
+                                ? finding.snippet_start_line
+                                : typeof chunk.start_line === 'number' && chunk.start_line > 0
+                                ? chunk.start_line
+                                : null;
+                        sinkLineHint = candidate;
+                    } else if (typeof chunk.start_line === 'number' && chunk.start_line > 0) {
+                        sinkLineHint = chunk.start_line;
+                    }
+                }
+            }
+            const payloadPreview = panel._oasisAssistantPayload;
+            const payloadVulnName =
+                payloadPreview && typeof payloadPreview.vulnerability_name === 'string'
+                    ? payloadPreview.vulnerability_name.trim()
+                    : '';
+            const validatePayload = {
+                report_path: reportPath,
+                file_index: indices.file_index,
+                chunk_index: indices.chunk_index,
+                finding_index: indices.finding_index,
+            };
+            if (payloadVulnName) {
+                validatePayload.vulnerability_name = payloadVulnName;
+            }
+            if (sinkFilePath) {
+                validatePayload.sink_file = sinkFilePath;
+            }
+            if (sinkLineHint != null) {
+                validatePayload.sink_line = sinkLineHint;
+            }
+            const validateModel =
+                chatModelSelect && chatModelSelect.value
+                    ? String(chatModelSelect.value).trim()
+                    : '';
+            if (validateModel) {
+                validatePayload.model = validateModel;
+            }
+            const originalLabel = validateBtn.textContent;
+            validateBtn.disabled = true;
+            validateBtn.textContent = txt('validateRunning', 'Validating…');
+            validatePanel.hidden = false;
+            validatePanel.textContent = txt('validateRunning', 'Validating…');
+            DashboardApp.postAssistantInvestigate(validatePayload)
+                .then(function (result) {
+                    DashboardApp.renderAssistantVerdictPanel(validatePanel, result, txt);
+                })
+                .catch(function (err) {
+                    const msg = DashboardApp._errorMessage(err) || 'unknown error';
+                    validatePanel.textContent = txt('validateErrorPrefix', 'Validation failed: ') + msg;
+                })
+                .finally(function () {
+                    validateBtn.disabled = false;
+                    validateBtn.textContent = originalLabel;
+                });
+        });
+    }
 
     const sendQuestion = function (text) {
         const q = String(text || '').trim();
