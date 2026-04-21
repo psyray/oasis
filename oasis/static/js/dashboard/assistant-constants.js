@@ -29,4 +29,9 @@ DashboardApp.ASSISTANT_UI = {
     sessionMetaSuffix: ' msg',
     confirmDeleteSession: 'Delete this chat session from disk?',
     confirmDeleteAll: 'Delete all chat sessions for this report?',
+    chatModelLabel: 'Chat model',
+    contextSingleVuln: 'Context: single vulnerability report',
+    contextExecutiveAggregate: 'Context: full scan (aggregate JSON)',
+    budgetHintPrefix: 'System prompt budget ~',
+    chatModelsUnavailable: '(models unavailable)',
 };

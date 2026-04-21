@@ -220,6 +220,21 @@
     min-height: 0;
 }
 
+/* Executive summary preview: Chart.js severity rollup (injected by executive-preview.js) */
+#report-modal-content .executive-preview .executive-preview-charts {
+    box-sizing: border-box;
+    margin: 0.75rem 0 1rem;
+    padding: 10px 12px;
+    max-height: 280px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--white);
+    position: relative;
+}
+#report-modal-content .executive-preview .executive-preview-charts canvas {
+    max-height: 240px;
+}
+
 /* Footer from report_template.html is moved after the assistant panel in JS; normalize print-oriented rules. */
 #report-modal-content > footer.report-footer {
     position: static;

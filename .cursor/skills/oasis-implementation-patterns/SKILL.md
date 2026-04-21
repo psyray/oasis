@@ -29,6 +29,17 @@ Apply the code organization and delivery style repeatedly used in OASIS commits.
 6. For reporting changes, treat canonical JSON schema as the source of truth and keep Jinja templates synchronized.
 7. Before considering the task done: verify **no duplicated logic** remains (same rule in two places, mirrored constants, near-copy functions). Refactor into a single canonical implementation and import it everywhere it is needed.
 
+### Dashboard report modals (shared architecture)
+
+When changing **any** report preview inside `#report-modal` (vulnerability, executive summary, audit report, future canonical types), follow the **single** architecture described in `.cursor/rules/oasis-dashboard-js-patterns.mdc` (**Report modal architecture**):
+
+- **Compact layout** + **TOC / section jumps** + **optional Chart.js** blocks, scoped CSS in `report_preview.css` under `#report-modal-content`.
+- **One** post-render initializer path from `modal.js` (`_finalizeReportModalView`) for kind detection (stem, path, or `report_type`) — no scattered one-off branches.
+- **Assistant**: one `mountReportAssistantPanel` pipeline with **variants** (finding selectors only for vuln JSON; aggregated or report-scoped chat for executive/audit as designed) — duplicate chat stacks per report type are not acceptable.
+- **Server**: meta/preview endpoints and parsing live in `web.py` + `oasis/helpers/`; extend shared helpers instead of copying aggregation logic for each modal.
+
+Treat **audit** modal work as reusing this spine when aligning with the vulnerability/executive experience, not as a greenfield duplicate UI stack.
+
 ### LangGraph layout (canonical analysis pipeline)
 
 - **Product path**: `AnalysisType.GRAPH` in `oasis/enums.py` is the only orchestration mode; on-disk chunk caches live under `graph/deep` and `graph/scan` (see `oasis/cache.py`).

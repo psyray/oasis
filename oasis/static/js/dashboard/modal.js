@@ -177,6 +177,10 @@ DashboardApp._finalizeReportModalView = function(restoreScrollTop) {
     if (typeof restoreScrollTop === 'number' && !Number.isNaN(restoreScrollTop)) {
         DashboardApp._restoreReportModalScrollTop(restoreScrollTop);
     }
+    const curPath = DashboardApp.ensureReportModalState().currentPath || '';
+    if (typeof DashboardApp.setupExecutivePreviewCharts === 'function') {
+        DashboardApp.setupExecutivePreviewCharts(curPath);
+    }
     if (typeof DashboardApp.mountReportAssistantPanel === 'function') {
         DashboardApp.mountReportAssistantPanel();
     }
@@ -581,6 +585,10 @@ DashboardApp.closeReportModal = function() {
     }
 
     DashboardApp.reportModalState.pdfEmbedInfo = null;
+
+    if (typeof DashboardApp.teardownExecutivePreviewCharts === 'function') {
+        DashboardApp.teardownExecutivePreviewCharts();
+    }
 
     DashboardApp.reportModalState.stack.length = 0;
     if (typeof DashboardApp._syncReportModalBackButton === 'function') {

@@ -485,6 +485,43 @@ DashboardApp.fetchAssistantSession = function (reportPath, sessionId) {
     });
 };
 
+DashboardApp.fetchAssistantChatModels = function () {
+    return fetch('/api/assistant/chat-models', {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+    }).then(async function (response) {
+        const data = await response.json().catch(function () {
+            return {};
+        });
+        if (!response.ok) {
+            const err = data && data.error ? data.error : `HTTP ${response.status}`;
+            throw new Error(err);
+        }
+        const models = data.models;
+        return Array.isArray(models) ? models : [];
+    });
+};
+
+DashboardApp.fetchExecutivePreviewMeta = function (reportPath) {
+    const rel = String(reportPath || '').trim();
+    if (!rel) {
+        return Promise.reject(new Error('missing report path'));
+    }
+    const url = `/api/executive-preview-meta?path=${encodeURIComponent(rel)}`;
+    return fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } }).then(
+        async function (response) {
+            const data = await response.json().catch(function () {
+                return {};
+            });
+            if (!response.ok) {
+                const err = data && data.error ? data.error : `HTTP ${response.status}`;
+                throw new Error(err);
+            }
+            return data;
+        }
+    );
+};
+
 DashboardApp.postAssistantChat = function (payload) {
     return fetch('/api/assistant/chat', {
         method: 'POST',

@@ -192,6 +192,7 @@ const DashboardApp = {
                 'views.js',
                 'api.js',
                 'modal.js',
+                'executive-preview.js',
                 'assistant-constants.js',
                 'assistant.js',
                 'interactions.js'

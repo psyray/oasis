@@ -32,6 +32,8 @@ class TestWebAssistantRoutes(unittest.TestCase):
         server = WebServer(report, web_password="x", web_assistant_rag=False)
         mock_om = MagicMock()
         mock_om.chat.return_value = {"message": {"content": "assistant-reply"}}
+        mock_om.get_effective_context_token_count.return_value = None
+        mock_om.list_chat_model_names.return_value = []
         server._get_assistant_ollama_manager = lambda: mock_om
         return server, base
 
@@ -129,6 +131,7 @@ class TestWebAssistantRoutes(unittest.TestCase):
             mock_om.chat.return_value = {
                 "message": {"content": "<think>plan</think>\nFinal."}
             }
+            mock_om.get_effective_context_token_count.return_value = None
             server._get_assistant_ollama_manager = lambda: mock_om
 
             app = Flask(__name__)
@@ -146,6 +149,138 @@ class TestWebAssistantRoutes(unittest.TestCase):
             data = json.loads(resp.get_data(as_text=True))
             self.assertEqual(data.get("visible_markdown"), "Final.")
             self.assertEqual(data.get("thought_segments"), ["plan"])
+
+
+class TestExecutiveAndAssistantMetaRoutes(unittest.TestCase):
+    @staticmethod
+    def _no_auth(f):
+        return f
+
+    def _make_server(self, base: Path):
+        inp = base / "scan_root"
+        inp.mkdir()
+        report = Report(str(inp), ["json"])
+        server = WebServer(report, web_password="x", web_assistant_rag=False)
+        mock_om = MagicMock()
+        mock_om.chat.return_value = {"message": {"content": "ok"}}
+        mock_om.get_effective_context_token_count.return_value = None
+        mock_om.list_chat_model_names.return_value = ["alpha", "beta"]
+        server._get_assistant_ollama_manager = lambda: mock_om
+        return server, base
+
+    def test_chat_models_lists_tags(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            resp = client.get("/api/assistant/chat-models")
+            self.assertEqual(resp.status_code, 200)
+            data = json.loads(resp.get_data(as_text=True))
+            self.assertEqual(data.get("models"), ["alpha", "beta"])
+
+    def test_executive_preview_meta_rolls_up_severity(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            run_json = sec / "run_a" / "json"
+            run_md = sec / "run_a" / "md"
+            run_json.mkdir(parents=True)
+            run_md.mkdir(parents=True)
+            exec_js = {
+                "report_type": "executive_summary",
+                "schema_version": 1,
+                "model_name": "m-exec",
+                "title": "exec",
+            }
+            vuln_js = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "v",
+                "generated_at": "2026-01-01",
+                "model_name": "m1",
+                "vulnerability_name": "X",
+                "files": [{"file_path": "app.py"}],
+                "stats": {
+                    "critical_risk": 1,
+                    "high_risk": 2,
+                    "medium_risk": 1,
+                    "low_risk": 0,
+                    "total_findings": 4,
+                },
+            }
+            (run_json / "_executive_summary.json").write_text(json.dumps(exec_js), encoding="utf-8")
+            (run_json / "vuln.json").write_text(json.dumps(vuln_js), encoding="utf-8")
+            (run_md / "_executive_summary.md").write_text("# Executive\n", encoding="utf-8")
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            rel = "run_a/md/_executive_summary.md"
+            resp = client.get(f"/api/executive-preview-meta?path={rel}")
+            self.assertEqual(resp.status_code, 200)
+            data = json.loads(resp.get_data(as_text=True))
+            self.assertEqual(data.get("severity_counts", {}).get("critical"), 1)
+            self.assertEqual(data.get("severity_counts", {}).get("high"), 2)
+            self.assertEqual(data.get("vulnerability_report_files"), 1)
+
+    def test_assistant_chat_aggregate_executive_summary(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            run_json = sec / "run_b" / "json"
+            run_json.mkdir(parents=True)
+            exec_js = {
+                "report_type": "executive_summary",
+                "schema_version": 1,
+                "model_name": "agg-model",
+                "title": "exec",
+            }
+            vuln_js = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "v",
+                "generated_at": "2026-01-01",
+                "model_name": "agg-model",
+                "vulnerability_name": "Y",
+                "files": [{"file_path": "scan_root/app.py"}],
+                "stats": {"total_findings": 1},
+            }
+            (run_json / "_executive_summary.json").write_text(json.dumps(exec_js), encoding="utf-8")
+            (run_json / "vuln.json").write_text(json.dumps(vuln_js), encoding="utf-8")
+
+            mock_om = MagicMock()
+            mock_om.chat.return_value = {"message": {"content": "aggregate-reply"}}
+            mock_om.get_effective_context_token_count.return_value = None
+            mock_om.list_chat_model_names.return_value = ["agg-model"]
+            server._get_assistant_ollama_manager = lambda: mock_om
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            rel = "run_b/json/_executive_summary.json"
+            resp = client.post(
+                "/api/assistant/chat",
+                data=json.dumps(
+                    {
+                        "messages": [{"role": "user", "content": "Summarize"}],
+                        "report_path": rel,
+                        "aggregate_model_json": True,
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            data = json.loads(resp.get_data(as_text=True))
+            self.assertEqual(data.get("message"), "aggregate-reply")
+            self.assertTrue(data.get("assistant_aggregate"))
+            self.assertEqual(data.get("system_budget_chars"), server._ASSISTANT_MAX_TOTAL_REPORT_CHARS)
 
 
 class TestResolveAssistantOllamaUrl(unittest.TestCase):

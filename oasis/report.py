@@ -787,13 +787,13 @@ class Report:
         similarity_groups = self._executive_summary_similarity_groups(all_results)
         self._extend_executive_summary_similarity_sections(report, similarity_groups)
 
-        report.extend([
-            "\n---",
-            f"Report generated on: {generate_timestamp()}",
-            f"Deep model: {deep_model_name}",
-            f"Small model: {scan_model_name or 'N/A'}",
-            f"Embedding model: {embedding_model_name or 'N/A'}",
-        ])
+        meta_line = (
+            f"Report generated on: {generate_timestamp()} · "
+            f"Deep model: {deep_model_name or 'N/A'} · "
+            f"Small model: {scan_model_name or 'N/A'} · "
+            f"Embedding model: {embedding_model_name or 'N/A'}"
+        )
+        report.extend(["\n---", meta_line])
 
         self._generate_and_save_report(output_files, report, report_type='Executive Summary')
 

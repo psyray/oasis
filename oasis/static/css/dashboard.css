@@ -2211,6 +2211,44 @@ body.modal-open {
 }
 
 /* Report modal assistant — embedded in #oasis-assistant-mount (JSON preview) or appended at modal end */
+.oasis-assistant-meta-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.88rem;
+    color: var(--dark-blue-2);
+}
+.oasis-assistant-context-badge {
+    font-weight: 600;
+    max-width: 100%;
+}
+.oasis-assistant-model-field {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 0.5rem;
+    font-weight: 600;
+    min-width: 0;
+}
+.oasis-assistant-model-field select {
+    min-width: 10rem;
+    max-width: min(24rem, 100%);
+    padding: 0.25rem 0.4rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+    box-sizing: border-box;
+}
+.oasis-assistant-budget-hint {
+    font-size: 0.82rem;
+    color: var(--text-secondary, #5a6a75);
+    font-style: italic;
+    min-width: 0;
+}
+.oasis-assistant-finding-ref--hidden {
+    display: none !important;
+}
 .oasis-assistant-panel {
     flex-shrink: 0;
     margin-top: 1rem;

@@ -94,6 +94,17 @@ from .helpers.assistant_persistence import (
     validate_session_id,
 )
 from .helpers.assistant_think_parse import enrich_messages_for_response, parse_assistant_think
+from .helpers.assistant_context_budget import assistant_total_system_budget_chars
+from .helpers.assistant_scan_aggregate import (
+    build_aggregate_assistant_document,
+    first_vulnerability_payload_from_paths,
+    iter_json_report_paths_in_model_dir,
+    model_directory_from_security_report_file,
+    resolve_canonical_json_for_markdown_report,
+    union_file_paths_from_vulnerability_payloads,
+)
+from .helpers.executive_dashboard_preview import augment_executive_markdown_preview_html
+from .helpers.executive_modal_chart_meta import rollup_severity_counts_from_model_dir
 from .tools import parse_iso_date, parse_report_date
 
 logger = logging.getLogger(__name__)
@@ -540,6 +551,11 @@ class WebServer:
         r = int(total * 0.25)
         return max(512, min(4096, r))
 
+    @staticmethod
+    def _assistant_reserved_chars_for_total_budget(total_budget: int) -> int:
+        r = int(max(1, total_budget) * 0.25)
+        return max(512, min(4096, r))
+
     def _assistant_run_rag_retrieval(
         self,
         *,
@@ -547,6 +563,7 @@ class WebServer:
         report_payload: Dict[str, Any],
         report_rel: str,
         rag_expand_project: bool,
+        extra_report_file_paths: Optional[List[str]] = None,
     ) -> Tuple[str, bool]:
         """Return ``(rag_block, rag_unavailable)`` for assistant context."""
         em_model = self._embed_model_for_assistant(report_payload)
@@ -606,6 +623,7 @@ class WebServer:
                 query_embedding=qe,
                 top_k=5,
                 expand_project_wide=rag_expand_project,
+                extra_report_file_paths=extra_report_file_paths,
                 stats_out=rag_stats,
                 cache_path=cache_path,
                 embed_model=em_model,
@@ -746,6 +764,8 @@ class WebServer:
                     )
                 html_content = self.report.read_and_convert_markdown(resolved_path)
                 html_content = rewrite_report_preview_anchor_hrefs(html_content, resolved_path, security_root)
+                if resolved_path.stem.lower() == "_executive_summary" and resolved_path.suffix.lower() == ".md":
+                    html_content = augment_executive_markdown_preview_html(html_content)
                 return jsonify({'content': html_content})
             except Exception:
                 return self._report_preview_error_response("Error while generating markdown report preview")
@@ -801,6 +821,37 @@ class WebServer:
             chunk = lines[start_line - 1 : end_line]
             return jsonify({'lines': chunk, 'start_line': start_line, 'end_line': end_line, 'path': rel})
 
+        @app.route('/api/executive-preview-meta', methods=['GET'])
+        @login_required
+        def executive_preview_meta():
+            rel = request.args.get('path', '').strip()
+            if not rel:
+                return jsonify({'error': 'path required'}), 400
+            try:
+                file_path = self.security_dir / rel
+                security_root = self.security_dir.resolve()
+                resolved = file_path.resolve(strict=False)
+                if not is_path_within_root(resolved, security_root):
+                    return jsonify({'error': 'Invalid path'}), 403
+                if not resolved.is_file():
+                    return jsonify({'error': 'File not found'}), 404
+                model_dir = model_directory_from_security_report_file(security_root, resolved)
+                if model_dir is None:
+                    return jsonify({'error': 'Could not resolve model directory'}), 400
+                meta = rollup_severity_counts_from_model_dir(model_dir)
+                return jsonify(meta)
+            except Exception:
+                return self._report_preview_error_response("Error while building executive preview meta")
+
+        @app.route('/api/assistant/chat-models', methods=['GET'])
+        @login_required
+        def assistant_chat_models():
+            try:
+                names = self._get_assistant_ollama_manager().list_chat_model_names()
+            except Exception:
+                names = []
+            return jsonify({'models': names})
+
         @app.route('/api/assistant/chat', methods=['POST'])
         @login_required
         def assistant_chat():
@@ -821,8 +872,23 @@ class WebServer:
                 return jsonify(err_body), status
             assert messages is not None
 
+            approx_msg_chars = sum(
+                len(str(m.get('content') or '')) for m in messages if isinstance(m, dict)
+            )
+
+            report_rel_raw = str(data.get('report_path') or '').strip()
+            if not report_rel_raw:
+                return jsonify({'error': 'report_path required'}), 400
+
+            security_root = self.security_dir.resolve()
+            abs_candidate = (self.security_dir / report_rel_raw).resolve(strict=False)
+            if abs_candidate.is_file() and abs_candidate.suffix.lower() == '.md':
+                js_sibling = resolve_canonical_json_for_markdown_report(abs_candidate)
+                if js_sibling is not None:
+                    report_rel_raw = str(js_sibling.relative_to(security_root)).replace('\\', '/')
+
             resolved_report, path_err = resolve_assistant_report_json_path(
-                data.get('report_path'),
+                report_rel_raw,
                 self.security_dir,
             )
             if path_err is not None:
@@ -830,31 +896,83 @@ class WebServer:
                 return jsonify(err_body), status
             assert resolved_report is not None
 
+            aggregate_mode = bool(data.get('aggregate_model_json'))
+            if aggregate_mode and resolved_report.stem.lower() != '_executive_summary':
+                return jsonify(
+                    {
+                        'error': 'aggregate_model_json requires json/_executive_summary.json (or its md sibling)',
+                    }
+                ), 400
+
             try:
                 with open(resolved_report, 'r', encoding='utf-8') as rf:
-                    report_payload = json.load(rf)
+                    primary_payload = json.load(rf)
             except Exception:
                 return jsonify({'error': 'Could not read report'}), 500
-            if not isinstance(report_payload, dict):
+            if not isinstance(primary_payload, dict):
                 return jsonify({'error': 'Invalid report'}), 422
 
-            report_rel = str(data.get('report_path', '')).strip()
+            report_rel = report_rel_raw
+
+            json_paths_for_union: List[Path] = []
+            extra_rag_paths: Optional[List[str]] = None
+            rag_source_payload: Dict[str, Any] = primary_payload
+
+            if aggregate_mode:
+                md_obj = model_directory_from_security_report_file(security_root, resolved_report)
+                if md_obj is None:
+                    return jsonify({'error': 'Could not resolve model directory for aggregate assistant'}), 400
+                json_paths_for_union = iter_json_report_paths_in_model_dir(md_obj)
+                if not json_paths_for_union:
+                    return jsonify({'error': 'No JSON reports found for aggregate assistant'}), 404
+                vp = first_vulnerability_payload_from_paths(json_paths_for_union)
+                rag_source_payload = vp if vp is not None else primary_payload
+                extra_rag_paths = union_file_paths_from_vulnerability_payloads(json_paths_for_union)
 
             chat_model = data.get('model')
             if isinstance(chat_model, str) and chat_model.strip():
                 chat_model = chat_model.strip()
             else:
-                mn = report_payload.get('model_name')
+                mn = primary_payload.get('model_name')
                 chat_model = mn.strip() if isinstance(mn, str) and mn.strip() else ''
+                if not chat_model and aggregate_mode:
+                    for jp in json_paths_for_union:
+                        try:
+                            jd = json.loads(jp.read_text(encoding='utf-8'))
+                        except Exception:
+                            continue
+                        if isinstance(jd, dict):
+                            mnx = jd.get('model_name')
+                            if isinstance(mnx, str) and mnx.strip():
+                                chat_model = mnx.strip()
+                                break
+                if not chat_model:
+                    mn2 = rag_source_payload.get('model_name')
+                    chat_model = mn2.strip() if isinstance(mn2, str) and mn2.strip() else ''
             if not chat_model:
                 return jsonify({'error': 'model required (pass model or ensure report has model_name)'}), 400
 
-            total_budget = self._ASSISTANT_MAX_TOTAL_REPORT_CHARS
-            reserved_extras = self._assistant_reserved_chars_for_extras()
+            total_budget, _budget_meta = assistant_total_system_budget_chars(
+                fallback_total=self._ASSISTANT_MAX_TOTAL_REPORT_CHARS,
+                ollama_manager=self._get_assistant_ollama_manager(),
+                chat_model=chat_model,
+                approx_message_chars_in_request=approx_msg_chars,
+            )
+            reserved_extras = self._assistant_reserved_chars_for_total_budget(total_budget)
             excerpt_budget = max(total_budget - reserved_extras, 0)
 
-            excerpt = json.dumps(report_payload, ensure_ascii=False)
             excerpt_truncated = False
+            if aggregate_mode:
+                report_payload, _agg_meta = build_aggregate_assistant_document(
+                    json_paths_for_union,
+                    security_root,
+                    total_char_budget=excerpt_budget,
+                )
+                excerpt_truncated = bool(_agg_meta.get('truncated'))
+            else:
+                report_payload = primary_payload
+
+            excerpt = json.dumps(report_payload, ensure_ascii=False)
             if excerpt_budget > 0 and len(excerpt) > excerpt_budget:
                 excerpt = excerpt[:excerpt_budget] + '\n…(truncated)…'
                 excerpt_truncated = True
@@ -867,13 +985,15 @@ class WebServer:
             remaining_for_prompt = max(0, total_budget - used_after_excerpt)
             finding_header_len = len('\n\nSELECTED_FINDING_JSON:\n')
             finding_max = max(0, min(12000, remaining_for_prompt - finding_header_len - 200))
-            finding_json = json_finding_slice(
-                report_payload,
-                fi,
-                ci,
-                gi,
-                max_chars=finding_max,
-            )
+            finding_json = ''
+            if not aggregate_mode:
+                finding_json = json_finding_slice(
+                    primary_payload,
+                    fi,
+                    ci,
+                    gi,
+                    max_chars=finding_max,
+                )
 
             use_rag = self.web_assistant_rag and not bool(data.get('rag_disabled'))
             rag_block = ''
@@ -888,9 +1008,10 @@ class WebServer:
                 if last_user.strip():
                     rag_block, rag_unavailable = self._assistant_run_rag_retrieval(
                         last_user=last_user,
-                        report_payload=report_payload,
+                        report_payload=rag_source_payload,
                         report_rel=report_rel,
                         rag_expand_project=bool(data.get('rag_expand_project')),
+                        extra_report_file_paths=extra_rag_paths,
                     )
 
             prompt_chunks: List[str] = [self._ASSISTANT_SYSTEM_INTRO_PREFIX + excerpt]
@@ -964,8 +1085,11 @@ class WebServer:
                 mc['at'] = att.strip() if isinstance(att, str) and att.strip() else ts
                 persist_msgs.append(mc)
             persist_msgs.append({'role': 'assistant', 'content': raw if isinstance(raw, str) else '', 'at': ts})
-            vn = report_payload.get('vulnerability_name')
-            vuln_label = vn.strip() if isinstance(vn, str) else ''
+            if aggregate_mode:
+                vuln_label = 'Executive summary (aggregate)'
+            else:
+                vn = primary_payload.get('vulnerability_name')
+                vuln_label = vn.strip() if isinstance(vn, str) else ''
             try:
                 save_chat_session(
                     self.security_dir,
@@ -986,6 +1110,8 @@ class WebServer:
                     'session_id': sess_id,
                     'model': chat_model,
                     'rag_unavailable': bool(rag_unavailable),
+                    'system_budget_chars': total_budget,
+                    'assistant_aggregate': aggregate_mode,
                 }
             )
 

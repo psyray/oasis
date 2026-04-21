@@ -22,3 +22,14 @@ alwaysApply: false
 - Modal preview: **`json`** uses `/api/report-json/...`; **`md`** uses `/api/report-content/...` only for legacy reports (no sibling `json/<stem>.json`).
 - **Model filtering UX**: Model-tag filtering is multi-select; persist selection state on the card dataset (`selectedModels`), reuse shared model helpers from `utils.js`, and keep date chips + audit comparison table filtered consistently.
 - **Audit comparison contract**: Audit card comparison rows depend on parsed `audit_metrics` from `/api/reports`; when changing metrics keys (`count`, `avg_score`, `median_score`, `max_score`, `min_score`, `high`, `medium`, `low`), update `web.py` extraction and dashboard table rendering together.
+
+## Report modal architecture (canonical — all report types)
+
+**Goal**: Every report opened in `#report-modal` (vulnerability JSON preview, executive MD/HTML, audit MD/HTML, future canonical JSON types) follows **one** UX/code architecture: compact body, **section navigation** (TOC buttons or equivalent with **stable** anchor IDs), **optional Chart.js** summaries fed by structured data or a small read-only meta endpoint, and **one** assistant integration path with **mode variants** (e.g. file/chunk/finding selectors only for vulnerability JSON; scan-wide vs single-report context for executive / audit) — avoid parallel modal pipelines per report kind.
+
+- **CSS**: Scope under `#report-modal-content`; extend [`oasis/static/css/report_preview.css`](oasis/static/css/report_preview.css) and reuse shared classes (`report-toc`, chart wrappers, section spacing) before adding unrelated class names in [`dashboard.css`](oasis/static/css/dashboard.css).
+- **JS**: Report “kind” detection and one-shot setup (TOC wiring, chart init, which assistant variant to show) live in **one** initializer invoked from [`modal.js`](oasis/static/js/dashboard/modal.js) (`_finalizeReportModalView` path) — do not scatter stem/`report_type` checks across unrelated modules.
+- **Server**: HTML preview composition and meta endpoints belong in [`oasis/web.py`](oasis/web.py) with parsing/helpers under [`oasis/helpers/`](oasis/helpers/) so executive, audit, and vulnerability stay DRY unless a genuinely different document shape requires a separate template.
+- **Assistant**: Any new request field or UI mode is implemented in [`assistant.js`](oasis/static/js/dashboard/assistant.js), [`api.js`](oasis/static/js/dashboard/api.js), and [`web.py`](oasis/web.py) together; copy strings and labels go through [`assistant-constants.js`](oasis/static/js/dashboard/assistant-constants.js).
+
+**Audit (and future modals)** should adopt this same skeleton when brought in line — reuse TOC/chart/assistant patterns rather than cloning a second modal stack.

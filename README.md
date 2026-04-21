@@ -37,7 +37,7 @@
 
 ## 🌟 Features
 
-- 🤖 **Dashboard assistant**: For canonical **JSON** reports, an in-modal AI assistant triages findings with optional **RAG** over the local embedding cache, **Markdown** replies, persisted **chat sessions** beside each report, and configurable Ollama/RAG flags (`--web-ollama-url`, `--web-embed-model`, `--web-assistant-rag`)
+- 🤖 **Dashboard assistant**: In the report modal, the AI assistant triages **single-vulnerability JSON** reports or **executive / scan-wide** mode (aggregated JSON under the run) with optional **RAG** over the local embedding cache, a **chat model** selector (Ollama tags), **Markdown** replies, persisted **chat sessions** keyed by the canonical report path, and configurable Ollama/RAG flags (`--web-ollama-url`, `--web-embed-model`, `--web-assistant-rag`)
 - 🔍 **Multi-Model Analysis**: Leverage multiple Ollama models for comprehensive security scanning
 - 🔄 **Two-Phase Scanning**: Use lightweight models for initial scanning and powerful models for deep analysis
 - 🧠 **LangGraph Orchestration**: Single pipeline (discover → scan → expand → deep → verify → report, optional PoC assist) with bounded context-expand retries

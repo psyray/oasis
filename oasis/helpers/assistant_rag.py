@@ -83,6 +83,22 @@ def _match_cache_key(cache_keys: Sequence[str], report_path: str) -> Optional[st
     return None
 
 
+def _merged_unique_paths(
+    primary: Sequence[str],
+    extra: Optional[Sequence[str]],
+) -> List[str]:
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for seq in (primary, extra or []):
+        for fp in seq:
+            if isinstance(fp, str):
+                key = fp.strip()
+                if key and key not in seen:
+                    seen.add(key)
+                    ordered.append(key)
+    return ordered
+
+
 def retrieve_relevant_snippets(
     *,
     code_base: Dict[str, Any],
@@ -91,6 +107,7 @@ def retrieve_relevant_snippets(
     top_k: int = 5,
     max_chars_per_file: int = 6000,
     expand_project_wide: bool = False,
+    extra_report_file_paths: Optional[Sequence[str]] = None,
     stats_out: Optional[RAGStats] = None,
     cache_path: Optional[Path] = None,
     embed_model: str = "",
@@ -98,7 +115,8 @@ def retrieve_relevant_snippets(
     """
     Rank files by cosine similarity of file-level embedding to query; return text snippets.
 
-    When expand_project_wide is False, only report_file_paths are considered.
+    When expand_project_wide is False, only ``report_file_paths`` (plus optional
+    ``extra_report_file_paths``) are considered for cache key matching.
     """
     stats: RAGStats = {
         "query_dimension": 0,
@@ -127,7 +145,7 @@ def retrieve_relevant_snippets(
         candidates = list(code_base.keys())
     else:
         cache_keys = list(code_base.keys())
-        for fp in report_file_paths:
+        for fp in _merged_unique_paths(report_file_paths, extra_report_file_paths):
             mk = _match_cache_key(cache_keys, fp)
             if mk:
                 candidates.append(mk)
