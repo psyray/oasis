@@ -348,19 +348,43 @@ class Report:
         template = self.template_env.get_template("reports/vulnerability_export.md.j2")
         return template.render(document=doc.model_dump(mode="json"))
 
+    def _render_executive_summary_inner_html(self, payload: Dict[str, Any]) -> str:
+        vuln_summary = payload.get("vulnerability_summary")
+        tier_counts = payload.get("similarity_tier_counts")
+        safe_payload = {
+            "title": str(payload.get("title") or "Executive Summary"),
+            "generated_at": str(payload.get("generated_at") or "N/A"),
+            "deep_model": str(payload.get("deep_model") or payload.get("model_name") or "N/A"),
+            "small_model": str(payload.get("small_model") or "N/A"),
+            "embedding_model": str(payload.get("embedding_model") or "N/A"),
+            "vulnerability_summary": (
+                sorted(vuln_summary.items(), key=lambda item: str(item[0]).lower())
+                if isinstance(vuln_summary, dict)
+                else []
+            ),
+            "similarity_tier_counts": (
+                sorted(tier_counts.items(), key=lambda item: str(item[0]).lower())
+                if isinstance(tier_counts, dict)
+                else []
+            ),
+        }
+        template = self.template_env.get_template("reports/executive_summary_from_json.html.j2")
+        return template.render(payload=safe_payload)
+
     def render_report_html_from_json_payload(self, payload: Dict) -> str:
         """
         Render report HTML directly from canonical JSON payload.
         """
         report_type = payload.get("report_type")
-        if report_type != "vulnerability":
-            raise ValueError(f"Unsupported canonical report type: {report_type}")
-
-        doc = VulnerabilityReportDocument.model_validate(payload)
-        # Keep JSON payload and template rendering aligned on one stats helper.
-        doc.stats = self._compute_document_stats(doc.files)
-        inner_html = self._render_vulnerability_inner_html(doc)
-        return self.render_template(inner_html)
+        if report_type == "vulnerability":
+            doc = VulnerabilityReportDocument.model_validate(payload)
+            # Keep JSON payload and template rendering aligned on one stats helper.
+            doc.stats = self._compute_document_stats(doc.files)
+            inner_html = self._render_vulnerability_inner_html(doc)
+            return self.render_template(inner_html)
+        if report_type == "executive_summary":
+            return self.render_template(self._render_executive_summary_inner_html(payload))
+        raise ValueError(f"Unsupported canonical report type: {report_type}")
 
     def generate_vulnerability_report(
         self, vulnerability: Dict, results: List[Dict], model_name: str
@@ -771,12 +795,13 @@ class Report:
             tier_id: len(similarity_groups.get(tier_id) or [])
             for tier_id, _ in EXEC_SUMMARY_EMBEDDING_TIER_ORDER
         }
-        primary_model = deep_model_name.strip() or str(model_name or "").strip()
+        deep_model = str(deep_model_name or "").strip()
+        primary_model = deep_model or str(model_name or "").strip()
         return {
             "report_type": "executive_summary",
             "schema_version": 1,
             "model_name": primary_model,
-            "deep_model": deep_model_name,
+            "deep_model": deep_model,
             "small_model": scan_model_name,
             "embedding_model": embedding_model_name,
             "title": "Executive Summary",
