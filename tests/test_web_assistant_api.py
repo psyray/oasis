@@ -33,6 +33,7 @@ class TestWebAssistantRoutes(unittest.TestCase):
         mock_om = MagicMock()
         mock_om.chat.return_value = {"message": {"content": "assistant-reply"}}
         mock_om.get_effective_context_token_count.return_value = None
+        mock_om.get_effective_context_token_count_with_source.return_value = (None, "")
         mock_om.list_chat_model_names.return_value = []
         server._get_assistant_ollama_manager = lambda: mock_om
         return server, base
@@ -502,7 +503,9 @@ class TestWebAssistantRoutes(unittest.TestCase):
             client = app.test_client()
             mock_om = server._get_assistant_ollama_manager()
 
-            with patch("oasis.web.append_validation_then_balance_rag", side_effect=RuntimeError("boom")):
+            with patch(
+                "oasis.web.load_chat_session", side_effect=RuntimeError("boom")
+            ):
                 resp = client.post(
                     "/api/assistant/chat",
                     data=json.dumps(
@@ -510,6 +513,7 @@ class TestWebAssistantRoutes(unittest.TestCase):
                             "messages": [{"role": "user", "content": "hello"}],
                             "report_path": rel,
                             "model": "m1",
+                            "session_id": "abcd1234abcd1234abcd1234abcd1234",
                         }
                     ),
                     content_type="application/json",
@@ -530,6 +534,7 @@ class TestWebAssistantRoutes(unittest.TestCase):
             mock_om = MagicMock()
             mock_om.chat.return_value = {"message": {"content": "assistant-reply"}}
             mock_om.get_effective_context_token_count.return_value = None
+            mock_om.get_effective_context_token_count_with_source.return_value = (None, "")
             mock_om.list_chat_model_names.return_value = []
             server._get_assistant_ollama_manager = lambda: mock_om
 
@@ -701,6 +706,7 @@ class TestWebAssistantRoutes(unittest.TestCase):
                 "message": {"content": "<think>plan</think>\nFinal."}
             }
             mock_om.get_effective_context_token_count.return_value = None
+            mock_om.get_effective_context_token_count_with_source.return_value = (None, "")
             server._get_assistant_ollama_manager = lambda: mock_om
 
             app = Flask(__name__)
@@ -733,6 +739,7 @@ class TestExecutiveAndAssistantMetaRoutes(unittest.TestCase):
         mock_om = MagicMock()
         mock_om.chat.return_value = {"message": {"content": "ok"}}
         mock_om.get_effective_context_token_count.return_value = None
+        mock_om.get_effective_context_token_count_with_source.return_value = (None, "")
         mock_om.list_chat_model_names.return_value = ["alpha", "beta"]
         server._get_assistant_ollama_manager = lambda: mock_om
         return server, base
@@ -831,6 +838,7 @@ class TestExecutiveAndAssistantMetaRoutes(unittest.TestCase):
             mock_om = MagicMock()
             mock_om.chat.return_value = {"message": {"content": "aggregate-reply"}}
             mock_om.get_effective_context_token_count.return_value = None
+            mock_om.get_effective_context_token_count_with_source.return_value = (None, "")
             mock_om.list_chat_model_names.return_value = ["agg-model"]
             server._get_assistant_ollama_manager = lambda: mock_om
 
@@ -896,6 +904,7 @@ class TestExecutiveAndAssistantMetaRoutes(unittest.TestCase):
             mock_om = MagicMock()
             mock_om.chat.return_value = {"message": {"content": "aggregate-reply"}}
             mock_om.get_effective_context_token_count.return_value = None
+            mock_om.get_effective_context_token_count_with_source.return_value = (None, "")
             mock_om.list_chat_model_names.return_value = ["agg-model"]
             server._get_assistant_ollama_manager = lambda: mock_om
 
@@ -981,6 +990,7 @@ class TestExecutiveAndAssistantMetaRoutes(unittest.TestCase):
             mock_om = MagicMock()
             mock_om.chat.return_value = {"message": {"content": "ok-md"}}
             mock_om.get_effective_context_token_count.return_value = None
+            mock_om.get_effective_context_token_count_with_source.return_value = (None, "")
             mock_om.list_chat_model_names.return_value = ["agg-md"]
             server._get_assistant_ollama_manager = lambda: mock_om
 

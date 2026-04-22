@@ -1,4 +1,13 @@
-"""Pure helpers for building dashboard assistant chat context (web.py)."""
+"""Pure helpers for building dashboard assistant chat context (web.py).
+
+These functions cover the steps that happen *before* the final system-prompt
+assembly (see :func:`oasis.helpers.assistant_chat_context.assemble_verdict_first_prompt`):
+
+- Resolving paths and payloads for single-report and executive-aggregate modes.
+- Picking the chat model.
+- Slicing the selected finding JSON.
+- Building the payload that feeds the compact report summary.
+"""
 
 from __future__ import annotations
 
@@ -23,30 +32,6 @@ from .assistant_scan_aggregate import (
     union_file_paths_from_vulnerability_payloads,
 )
 from .executive_assistant_scope import resolve_aggregate_finding_scope_payload
-
-# Finding JSON block sizing: must stay aligned with ``build_assistant_prompt_core`` layout
-# (excerpt, then ``\\n\\nSELECTED_FINDING_JSON:\\n``, then the finding body).
-ASSISTANT_FINDING_PROMPT_SECTION_HEADER = "\n\nSELECTED_FINDING_JSON:\n"
-ASSISTANT_FINDING_JSON_BODY_MAX_CHARS = 12_000
-ASSISTANT_FINDING_JSON_BUDGET_BUFFER_CHARS = 200
-
-
-def compute_assistant_finding_json_max_chars(
-    *,
-    total_budget: int,
-    system_intro_prefix_len: int,
-    excerpt_len: int,
-) -> int:
-    """Char budget for ``json_finding_slice`` given total system prompt budget."""
-    used_after_excerpt = system_intro_prefix_len + excerpt_len
-    remaining_for_prompt = max(0, total_budget - used_after_excerpt)
-    finding_header_len = len(ASSISTANT_FINDING_PROMPT_SECTION_HEADER)
-    finding_budget = (
-        remaining_for_prompt
-        - finding_header_len
-        - ASSISTANT_FINDING_JSON_BUDGET_BUFFER_CHARS
-    )
-    return max(0, min(ASSISTANT_FINDING_JSON_BODY_MAX_CHARS, finding_budget))
 
 
 def resolve_assistant_chat_model(
@@ -80,20 +65,6 @@ def resolve_assistant_chat_model(
     return chat_model
 
 
-def json_excerpt_for_assistant_prompt(
-    report_payload: Dict[str, Any],
-    excerpt_budget: int,
-    excerpt_truncated: bool,
-) -> Tuple[str, bool]:
-    """Serialize report JSON for the system prompt and apply excerpt budget."""
-    excerpt = json.dumps(report_payload, ensure_ascii=False)
-    if excerpt_budget > 0 and len(excerpt) > excerpt_budget:
-        return excerpt[:excerpt_budget] + "\n…(truncated)…", True
-    if excerpt_budget <= 0:
-        return "", True
-    return excerpt, excerpt_truncated
-
-
 def prepare_aggregate_branch_paths(
     security_root: Path,
     resolved_report: Path,
@@ -124,42 +95,34 @@ def prepare_aggregate_branch_paths(
     return md_obj, json_paths, rag_source, extra, None
 
 
-def build_report_excerpt_for_chat_context(
+def build_report_summary_payload(
     *,
     aggregate_mode: bool,
     json_paths_for_union: List[Path],
     security_root: Path,
     primary_payload: Dict[str, Any],
-    excerpt_budget: int,
-    excerpt_truncated: bool,
-) -> Tuple[str, bool]:
-    """Build JSON excerpt string and truncation flag for the system prompt."""
+    aggregate_char_budget: int,
+) -> Tuple[Dict[str, Any], bool]:
+    """
+    Return the dict to feed into :func:`compact_report_excerpt`.
+
+    In aggregate mode, merges per-model canonical JSON reports into one
+    assistant-facing document (``assistant_aggregate=True``). ``aggregate_char_budget``
+    is the merge-phase cap (web passes ``report_summary subbudget`` ×
+    :data:`oasis.helpers.assistant_prompt_tuning.REPORT_SUMMARY_AGGREGATE_MERGE_BUDGET_FACTOR`);
+    the string shown in the system prompt is then capped separately by
+    :func:`compact_report_excerpt` to the *actual* subbudget. Otherwise returns
+    the primary report payload untouched. The boolean is ``True`` when the
+    aggregate document had to truncate per-file payloads.
+    """
     if aggregate_mode:
         report_payload, agg_meta = build_aggregate_assistant_document(
             json_paths_for_union,
             security_root,
-            total_char_budget=excerpt_budget,
+            total_char_budget=max(0, int(aggregate_char_budget)),
         )
-        excerpt_truncated = excerpt_truncated or bool(agg_meta.get("truncated"))
-    else:
-        report_payload = primary_payload
-    return json_excerpt_for_assistant_prompt(
-        report_payload,
-        excerpt_budget,
-        excerpt_truncated,
-    )
-
-
-def build_assistant_prompt_core(
-    system_intro_prefix: str,
-    excerpt: str,
-    finding_json: str,
-) -> str:
-    """Assemble prompt text up to (optional) finding JSON slice."""
-    chunks: List[str] = [system_intro_prefix + excerpt]
-    if finding_json:
-        chunks.extend(["", "SELECTED_FINDING_JSON:", finding_json])
-    return "\n".join(chunks)
+        return report_payload, bool(agg_meta.get("truncated"))
+    return primary_payload, False
 
 
 def build_assistant_finding_json_prompt_block(
@@ -216,33 +179,6 @@ def build_assistant_finding_json_prompt_block(
                 None,
             )
     return "", None
-
-
-def apply_user_finding_labels_to_system_content(
-    core_so_far: str,
-    labels_note: Any,
-    total_budget: int,
-) -> str:
-    """Append capped user triage notes when present."""
-    labels_header = "\n\nUSER_LOCAL_TRIAGE_NOTES:\n"
-    labels_cap = max(0, total_budget - len(core_so_far) - len(labels_header))
-    system_content = core_so_far
-    if isinstance(labels_note, str) and labels_note.strip():
-        note = labels_note.strip()
-        if labels_cap > 0 and len(note) > labels_cap:
-            note = note[:labels_cap] + "\n…(truncated)…"
-        elif labels_cap <= 0:
-            note = ""
-        if note:
-            system_content = core_so_far + "\n\nUSER_LOCAL_TRIAGE_NOTES:\n" + note
-    return system_content
-
-
-def truncate_system_prompt_to_char_budget(system_content: str, total_budget: int) -> str:
-    """Hard-cap system prompt length."""
-    if len(system_content) <= total_budget:
-        return system_content
-    return system_content[:total_budget] + "\n…(truncated)…"
 
 
 def full_messages_from_system_and_dialogue(

@@ -83,7 +83,14 @@ from .helpers.assistant_api_validate import (
     resolve_assistant_primary_payload,
     validate_assistant_messages,
 )
-from .helpers.assistant_chat_context import append_validation_then_balance_rag
+from .helpers.assistant_chat_context import (
+    assemble_verdict_first_prompt,
+    compute_verdict_first_subbudgets,
+    shrink_rag_block,
+    shrink_user_labels_block,
+)
+from .helpers.assistant_prompt_tuning import REPORT_SUMMARY_AGGREGATE_MERGE_BUDGET_FACTOR
+from .helpers.assistant_report_excerpt import compact_report_excerpt
 from .helpers.assistant_http_contract import (
     ERR_AGGREGATE_REQUIRES_EXECUTIVE,
     ERR_CHAT_MODEL_REQUIRED,
@@ -97,16 +104,12 @@ from .helpers.assistant_http_contract import (
     assistant_http_error,
 )
 from .helpers.assistant_web_prepare import (
-    apply_user_finding_labels_to_system_content,
     build_assistant_finding_json_prompt_block,
-    build_assistant_prompt_core,
-    build_report_excerpt_for_chat_context,
-    compute_assistant_finding_json_max_chars,
+    build_report_summary_payload,
     extract_last_user_message_text,
     full_messages_from_system_and_dialogue,
     prepare_aggregate_branch_paths,
     resolve_assistant_chat_model,
-    truncate_system_prompt_to_char_budget,
 )
 from .helpers.assistant_persistence import (
     delete_all_chat_sessions,
@@ -178,10 +181,25 @@ class WebServer:
     _ASSISTANT_MAX_MESSAGES = 40
     _ASSISTANT_MAX_MESSAGE_CHARS = 12000
     _ASSISTANT_SYSTEM_INTRO_PREFIX = (
-        'You are a defensive security assistant helping triage static-analysis findings '
-        'and understand code context. Only provide guidance for authorized testing. '
-        'Prefer citing file paths from REPORT_JSON_EXCERPT or RETRIEVAL_CONTEXT.\n\n'
-        'REPORT_JSON_EXCERPT:\n'
+        "You are a defensive security assistant helping triage static-analysis findings "
+        "and understand code context. Only provide guidance for authorized testing.\n"
+        "\n"
+        "Authoritative sources (strict):\n"
+        "- Treat FINDING_VALIDATION_JSON as the ground-truth verdict. Never contradict its "
+        "`status`, `confidence`, `family`, `vulnerability_name`, or `summary` fields. "
+        "If those fields mark the finding as `confirmed_exploitable`, do NOT call it a "
+        "false positive; if marked `false_positive`, do not call it exploitable.\n"
+        "- When FINDING_VALIDATION_JSON is absent, say so explicitly instead of inventing a verdict.\n"
+        "- Cite only file paths and line numbers that appear in FINDING_VALIDATION_JSON, "
+        "SELECTED_FINDING_JSON, RETRIEVAL_CONTEXT, or REPORT_SUMMARY. Never fabricate paths, "
+        "line numbers, or frameworks.\n"
+        "\n"
+        "Output requirements:\n"
+        "- Reply in concise Markdown (3–6 short paragraphs, optional bullet lists). "
+        "No JSON, no code fences wrapping the whole answer.\n"
+        "- Do not emit internal channel tokens (e.g. `<|channel>`, `<bos>`, `<|turn|>`), "
+        "reasoning tags, or raw tokenizer artifacts.\n"
+        "- Stay in English unless the user writes in another language first.\n"
     )
 
     def __init__(
@@ -236,14 +254,20 @@ class WebServer:
 
     def _assistant_llm_debug_payload(self, prep: Dict[str, Any]) -> Dict[str, Any]:
         """Structured metadata logged alongside Ollama messages when ``self.debug`` is True."""
+        sl = prep.get("section_lengths")
+        if sl is not None and hasattr(sl, "to_dict"):
+            sl = sl.to_dict()  # VerdictSectionLengths
         return {
             "chat_model": prep.get("chat_model"),
             "report_rel": prep.get("report_rel"),
             "session_id_hint": prep.get("session_id_hint"),
             "aggregate_mode": prep.get("aggregate_mode"),
             "total_budget": prep.get("total_budget"),
+            "runtime_num_ctx": prep.get("runtime_num_ctx"),
+            "context_source": prep.get("context_source"),
             "excerpt_truncated": prep.get("excerpt_truncated"),
             "rag_unavailable": prep.get("rag_unavailable"),
+            "section_lengths": sl,
             "validated_dialogue_messages": prep.get("messages"),
         }
 
@@ -610,15 +634,22 @@ class WebServer:
                 return em.strip()
         return str(DEFAULT_ARGS.get("EMBED_MODEL") or "nomic-embed-text")
 
-    def _assistant_reserved_chars_for_extras(self) -> int:
-        total = self._ASSISTANT_MAX_TOTAL_REPORT_CHARS
-        r = int(total * 0.25)
-        return max(512, min(4096, r))
+    def _assistant_chat_options(
+        self, prep: Dict[str, Any], *, temperature: float
+    ) -> Dict[str, Any]:
+        """
+        Build Ollama chat ``options`` dict.
 
-    @staticmethod
-    def _assistant_reserved_chars_for_total_budget(total_budget: int) -> int:
-        r = int(max(1, total_budget) * 0.25)
-        return max(512, min(4096, r))
+        When the resolved runtime ``num_ctx`` is known (via ``ps()`` or
+        ``Modelfile``), it is forwarded so Ollama is asked to honor the same
+        context window the budget calculation assumes. Falls back to just
+        ``temperature`` when the runtime window cannot be determined.
+        """
+        options: Dict[str, Any] = {'temperature': temperature}
+        runtime_num_ctx = prep.get('runtime_num_ctx')
+        if isinstance(runtime_num_ctx, int) and runtime_num_ctx > 0:
+            options['num_ctx'] = runtime_num_ctx
+        return options
 
     def _assistant_run_rag_retrieval(
         self,
@@ -787,22 +818,27 @@ class WebServer:
         if not chat_model:
             return assistant_http_error(ERR_CHAT_MODEL_REQUIRED, HTTP_BAD_REQUEST)
 
-        total_budget, _budget_meta = assistant_total_system_budget_chars(
+        total_budget, budget_meta = assistant_total_system_budget_chars(
             fallback_total=self._ASSISTANT_MAX_TOTAL_REPORT_CHARS,
             ollama_manager=self._get_assistant_ollama_manager(),
             chat_model=chat_model,
             approx_message_chars_in_request=approx_msg_chars,
         )
-        reserved_extras = self._assistant_reserved_chars_for_total_budget(total_budget)
-        excerpt_budget = max(total_budget - reserved_extras, 0)
-
-        excerpt, excerpt_truncated = build_report_excerpt_for_chat_context(
+        subbudgets = compute_verdict_first_subbudgets(total_budget)
+        report_sum_budget = subbudgets["report_summary"]
+        # Merge aggregate JSON with extra headroom; final system prompt size is
+        # capped by ``compact_report_excerpt`` to ``report_sum_budget`` (see tuning doc).
+        merge_budget = report_sum_budget * REPORT_SUMMARY_AGGREGATE_MERGE_BUDGET_FACTOR
+        report_summary_payload, excerpt_truncated = build_report_summary_payload(
             aggregate_mode=aggregate_mode,
             json_paths_for_union=json_paths_for_union,
             security_root=security_root,
             primary_payload=primary_payload,
-            excerpt_budget=excerpt_budget,
-            excerpt_truncated=False,
+            aggregate_char_budget=merge_budget,
+        )
+        report_summary_text = compact_report_excerpt(
+            report_summary_payload,
+            max_chars=report_sum_budget,
         )
 
         fi, ci, gi = coerce_finding_indices(data)
@@ -817,11 +853,6 @@ class WebServer:
             ci,
             gi,
         )
-        finding_max = compute_assistant_finding_json_max_chars(
-            total_budget=total_budget,
-            system_intro_prefix_len=len(self._ASSISTANT_SYSTEM_INTRO_PREFIX),
-            excerpt_len=len(excerpt),
-        )
         finding_json, finding_scope_err = build_assistant_finding_json_prompt_block(
             aggregate_mode=aggregate_mode,
             primary_payload=primary_payload,
@@ -832,7 +863,7 @@ class WebServer:
             fi=fi,
             ci=ci,
             gi=gi,
-            finding_max=finding_max,
+            finding_max=subbudgets['selected_finding'],
         )
         if finding_scope_err is not None:
             return assistant_http_error(finding_scope_err, HTTP_BAD_REQUEST)
@@ -851,12 +882,15 @@ class WebServer:
                     rag_expand_project=bool(data.get('rag_expand_project')),
                     extra_report_file_paths=extra_rag_paths,
                 )
+        if rag_block and len(rag_block) > subbudgets['rag']:
+            rag_block = shrink_rag_block(rag_block, subbudgets['rag'])
 
-        prompt_core = build_assistant_prompt_core(
-            self._ASSISTANT_SYSTEM_INTRO_PREFIX,
-            excerpt,
-            finding_json,
-        )
+        labels_note = data.get('user_finding_labels')
+        user_labels = ''
+        if isinstance(labels_note, str) and labels_note.strip():
+            user_labels = shrink_user_labels_block(
+                labels_note.strip(), subbudgets['user_labels']
+            )
 
         finding_validation_for_prompt: Optional[Dict[str, Any]] = None
         sid_ctx = data.get('session_id')
@@ -870,44 +904,57 @@ class WebServer:
                     chat_model,
                     finding_key_for_prompt,
                 )
-            core_so_far = append_validation_then_balance_rag(
-                prompt_core=prompt_core,
-                finding_validation=finding_validation_for_prompt,
-                rag_block=rag_block,
-                total_budget=total_budget,
-            )
         except Exception:
             logger.warning(
                 'Assistant chat context build failed; continuing without persisted finding validation',
                 exc_info=True,
             )
-            rag_fallback = ''
-            if rag_block:
-                rag_fallback = '\n\nRETRIEVAL_CONTEXT:\n' + rag_block
-            core_so_far = prompt_core + rag_fallback
+            finding_validation_for_prompt = None
 
-        labels_note = data.get('user_finding_labels')
-        system_content = apply_user_finding_labels_to_system_content(
-            core_so_far,
-            labels_note,
-            total_budget,
+        system_content, section_lengths = assemble_verdict_first_prompt(
+            system_intro=self._ASSISTANT_SYSTEM_INTRO_PREFIX,
+            finding_validation=finding_validation_for_prompt,
+            selected_finding_json=finding_json,
+            rag_block=rag_block,
+            report_summary=report_summary_text,
+            user_labels=user_labels,
+            total_budget=total_budget,
         )
-        if len(system_content) > total_budget:
+
+        runtime_num_ctx: Optional[int] = None
+        context_source = budget_meta.context_source or ""
+        try:
+            runtime_num_ctx = budget_meta.ollama_runtime_num_ctx()
+            configured = budget_meta.effective_chars_per_token()
+            total_len = int(section_lengths["total"])
+            if (
+                runtime_num_ctx
+                and configured is not None
+                and total_len > runtime_num_ctx * configured
+            ):
+                prompt_chars_per_ctx_token = total_len / runtime_num_ctx
+                logger.warning(
+                    "Assistant system prompt larger than runtime context allows "
+                    "(prompt_chars=%s runtime_num_ctx=%s prompt_chars_per_ctx_token=%.2f "
+                    "configured_chars_per_token=%s context_source=%s budget=%s)",
+                    total_len,
+                    runtime_num_ctx,
+                    prompt_chars_per_ctx_token,
+                    configured,
+                    context_source,
+                    total_budget,
+                )
+        except Exception:
+            logger.warning(
+                "Assistant budget/section length diagnostic failed; skipping ctx-size warning",
+                exc_info=True,
+            )
+        if excerpt_truncated:
             logger.info(
-                "Assistant system prompt capped (chars=%s budget=%s excerpt_truncated=%s)",
-                len(system_content),
-                total_budget,
-                excerpt_truncated,
+                "Assistant aggregate report summary inputs truncated (budget=%s)",
+                report_sum_budget,
             )
-            system_content = truncate_system_prompt_to_char_budget(
-                system_content, total_budget
-            )
-        elif excerpt_truncated:
-            logger.info(
-                "Assistant report JSON excerpt truncated (budget=%s reserved_extras=%s)",
-                excerpt_budget,
-                reserved_extras,
-            )
+
         full_messages = full_messages_from_system_and_dialogue(system_content, messages)
 
         return {
@@ -919,7 +966,10 @@ class WebServer:
             'aggregate_mode': aggregate_mode,
             'rag_unavailable': bool(rag_unavailable),
             'total_budget': total_budget,
+            'runtime_num_ctx': runtime_num_ctx,
+            'context_source': context_source,
             'excerpt_truncated': excerpt_truncated,
+            'section_lengths': section_lengths,
             'session_id_hint': data.get('session_id'),
         }
 
@@ -961,7 +1011,7 @@ class WebServer:
         thinking = ''.join(thinking_parts).strip()
         if not raw and not thinking:
             return
-        stored = raw if raw else thinking
+        stored = raw or thinking
         self._persist_assistant_reply(prep, stored, sess_id)
 
     def _finalize_assistant_chat_response(self, prep: Dict[str, Any], raw: str) -> Dict[str, Any]:
@@ -988,7 +1038,7 @@ class WebServer:
 
         def event_stream():
             sess_id = self._resolve_assistant_session_id(prep.get('session_id_hint'))
-            stream_opts = {'temperature': 0.2}
+            stream_opts = self._assistant_chat_options(prep, temperature=0.2)
             self._log_assistant_llm_debug(
                 'POST /api/assistant/chat-stream ollama_request',
                 {
@@ -1341,7 +1391,7 @@ class WebServer:
                 err_body, status = prep
                 return jsonify(err_body), status
 
-            chat_opts = {'temperature': 0.2}
+            chat_opts = self._assistant_chat_options(prep, temperature=0.2)
             self._log_assistant_llm_debug(
                 'POST /api/assistant/chat ollama_request',
                 {
@@ -2137,10 +2187,6 @@ class WebServer:
                 label, status, prog_cell = cells[0], cells[1], cells[2]
                 pair = parse_phase_counts_from_progress_cell(prog_cell)
                 if pair is None:
-                    logger.debug(
-                        "Skipping pipeline phase row without parseable counts: %s",
-                        line[:120],
-                    )
                     continue
                 c, t = pair
                 phases.append(

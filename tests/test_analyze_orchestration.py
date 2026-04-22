@@ -187,7 +187,8 @@ class TestAnalyzeOrchestration(unittest.TestCase):
             ]
         }
         analyzer.langgraph_poc_assist(args, all_results)
-        prompt = analyzer.ollama_manager.chat.call_args[0][1][0]["content"]
+        kwargs = analyzer.ollama_manager.chat.call_args.kwargs
+        prompt = kwargs["messages"][0]["content"]
         self.assertIn("USER_ADDITIONAL_INSTRUCTIONS", prompt)
         self.assertIn("curl", prompt)
 

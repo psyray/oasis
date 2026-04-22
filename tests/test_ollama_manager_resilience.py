@@ -5,6 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
+from ollama import RequestError
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -261,6 +264,236 @@ class TestParameterCountNumeric(unittest.TestCase):
 
     def test_unknown_returns_zero(self):
         self.assertEqual(OllamaManager._parameter_count_numeric({}), 0.0)
+
+
+class TestEffectiveContextSource(unittest.TestCase):
+    """``ps()`` must win over Modelfile and GGUF sources for runtime num_ctx."""
+
+    def _manager_with_fake_client(self, ps_response):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        fake_client = MagicMock()
+        fake_client.ps.return_value = ps_response
+        mgr.get_client = MagicMock(return_value=fake_client)
+        return mgr
+
+    def test_ps_response_takes_priority_over_modelinfo(self):
+        ps_response = {
+            "models": [
+                {"name": "other-model:latest", "context_length": 4096},
+                {
+                    "name": "bugtraceai-apex-q4:latest",
+                    "model": "bugtraceai-apex-q4:latest",
+                    "context_length": 64000,
+                },
+            ]
+        }
+        mgr = self._manager_with_fake_client(ps_response)
+        mgr._get_model_info = MagicMock(
+            return_value={"modelinfo": {"gemma4.context_length": 262144}}
+        )
+        tokens, source = mgr.get_effective_context_token_count_with_source(
+            "bugtraceai-apex-q4:latest"
+        )
+        self.assertEqual(tokens, 64000)
+        self.assertEqual(source, "ps")
+
+    def test_ps_matches_tagless_model_alias(self):
+        ps_response = {
+            "models": [
+                {"name": "bugtraceai-apex-q4:latest", "context_length": 64000}
+            ]
+        }
+        mgr = self._manager_with_fake_client(ps_response)
+        tokens = mgr.get_running_num_ctx("bugtraceai-apex-q4")
+        self.assertEqual(tokens, 64000)
+
+    def test_falls_back_to_modelinfo_when_model_not_loaded(self):
+        mgr = self._manager_with_fake_client({"models": []})
+        mgr._get_model_info = MagicMock(
+            return_value={"modelinfo": {"gemma4.context_length": 262144}}
+        )
+        tokens, source = mgr.get_effective_context_token_count_with_source("cold-model")
+        self.assertEqual(tokens, 262144)
+        self.assertEqual(source, "modelinfo")
+
+    def test_ps_cache_avoids_second_client_call(self):
+        ps_response = {
+            "models": [{"name": "a:latest", "context_length": 32000}]
+        }
+        mgr = self._manager_with_fake_client(ps_response)
+        mgr.get_running_num_ctx("a:latest")
+        mgr.get_running_num_ctx("a:latest")
+        fake_client = mgr.get_client.return_value
+        self.assertEqual(fake_client.ps.call_count, 1)
+
+    def test_model_field_preferred_over_name_alias(self):
+        """When ``name`` and ``model`` differ (alias to a distinct canonical tag),
+        a lookup by the canonical ``model`` must win over any aliased ``name``
+        mapping to a different ctx value."""
+        ps_response = {
+            "models": [
+                {"name": "myalias", "model": "llama3:70b", "context_length": 64000},
+                {"name": "sibling:latest", "model": "sibling:latest", "context_length": 8000},
+            ]
+        }
+        mgr = self._manager_with_fake_client(ps_response)
+        self.assertEqual(mgr.get_running_num_ctx("llama3:70b"), 64000)
+        self.assertEqual(mgr.get_running_num_ctx("myalias"), 64000)
+        self.assertEqual(mgr.get_running_num_ctx("sibling"), 8000)
+
+    def test_ps_lookup_miss_emits_debug_log(self):
+        """Lookup that misses both the tag and the :latest alias is logged so
+        operators can investigate context-window resolution issues."""
+        ps_response = {"models": [{"name": "a:latest", "context_length": 32000}]}
+        mgr = self._manager_with_fake_client(ps_response)
+        with self.assertLogs("oasis", level="DEBUG") as captured:
+            result = mgr.get_running_num_ctx("unknown-model")
+        self.assertIsNone(result)
+        self.assertTrue(
+            any("cache miss for 'unknown-model'" in line for line in captured.output),
+            captured.output,
+        )
+
+    def test_invalidate_ps_cache_forces_refresh(self):
+        """Calling ``invalidate_ps_cache()`` must force the next lookup to
+        re-query ``client.ps()`` instead of waiting for the TTL."""
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        fake_client = MagicMock()
+        fake_client.ps.side_effect = [
+            {"models": [{"name": "a:latest", "context_length": 32000}]},
+            {"models": [{"name": "a:latest", "context_length": 65000}]},
+        ]
+        mgr.get_client = MagicMock(return_value=fake_client)
+        self.assertEqual(mgr.get_running_num_ctx("a:latest"), 32000)
+        mgr.invalidate_ps_cache()
+        self.assertEqual(mgr.get_running_num_ctx("a:latest"), 65000)
+        self.assertEqual(fake_client.ps.call_count, 2)
+
+    def test_invalidate_ps_cache_targets_single_model(self):
+        """Per-model invalidation drops the targeted entry *and* resets the
+        TTL so the next lookup refreshes the whole snapshot — the event that
+        triggered the invalidation (pull/unload) likely affected neighbours
+        too, so unrelated cached entries should not be trusted until a
+        re-query confirms them."""
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        fake_client = MagicMock()
+        fake_client.ps.side_effect = [
+            {
+                "models": [
+                    {"name": "a:latest", "context_length": 32000},
+                    {"name": "b:latest", "context_length": 8000},
+                ]
+            },
+            {
+                "models": [
+                    {"name": "b:latest", "context_length": 16000},
+                ]
+            },
+        ]
+        mgr.get_client = MagicMock(return_value=fake_client)
+        mgr.get_running_num_ctx("a:latest")
+        self.assertEqual(mgr.get_running_num_ctx("b:latest"), 8000)
+        mgr.invalidate_ps_cache("a")
+        with mgr._ps_cache_lock:
+            self.assertNotIn("a:latest", mgr._ps_cache_by_name)
+            # Targeted entry gone; the TTL reset forces a full re-query next.
+            self.assertEqual(mgr._ps_cache_expires_at, 0.0)
+        self.assertEqual(mgr.get_running_num_ctx("b:latest"), 16000)
+        self.assertEqual(fake_client.ps.call_count, 2)
+
+    def test_invalidate_ps_cache_uses_same_tag_normalization_as_lookups(self):
+        """Invalidation by short name or case must still drop ``name:latest`` cache rows."""
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        fake_client = MagicMock()
+        fake_client.ps.return_value = {
+            "models": [
+                {"name": "a:latest", "context_length": 32000},
+                {"name": "b:latest", "context_length": 8000},
+            ]
+        }
+        mgr.get_client = MagicMock(return_value=fake_client)
+        mgr.get_running_num_ctx("a:latest")
+        mgr.get_running_num_ctx("b:latest")
+        mgr.invalidate_ps_cache("A")
+        with mgr._ps_cache_lock:
+            self.assertNotIn("a:latest", mgr._ps_cache_by_name)
+            self.assertIn("b:latest", mgr._ps_cache_by_name)
+            self.assertEqual(mgr._ps_cache_expires_at, 0.0)
+
+    def test_clear_model_cache_also_invalidates_ps_cache(self):
+        """The model-info cache purge must cascade to the ps() cache so a
+        post-pull lookup observes the freshly loaded context length."""
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        fake_client = MagicMock()
+        fake_client.ps.return_value = {
+            "models": [{"name": "a:latest", "context_length": 32000}]
+        }
+        mgr.get_client = MagicMock(return_value=fake_client)
+        mgr.get_running_num_ctx("a:latest")
+        mgr.clear_model_cache()
+        with mgr._ps_cache_lock:
+            self.assertEqual(mgr._ps_cache_by_model, {})
+            self.assertEqual(mgr._ps_cache_by_name, {})
+            self.assertEqual(mgr._ps_cache_expires_at, 0.0)
+
+    def test_ps_failure_does_not_break_fallback(self):
+        """Transport-style failures (SDK / httpx) are treated as a cold ps() cache."""
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        fake_client = MagicMock()
+        # Must be a recognised transient (not bare Exception); see _refresh_ps_cache.
+        fake_client.ps.side_effect = RequestError("transport")
+        mgr.get_client = MagicMock(return_value=fake_client)
+        mgr._get_model_info = MagicMock(
+            return_value={"parameters": {"num_ctx": 8192}}
+        )
+        with self.assertLogs("oasis", level="WARNING") as captured:
+            tokens, source = mgr.get_effective_context_token_count_with_source("any")
+        self.assertEqual(tokens, 8192)
+        self.assertEqual(source, "parameters")
+        self.assertTrue(
+            any(
+                "Failed to refresh Ollama ps() cache" in line
+                for line in captured.output
+            ),
+            captured.output,
+        )
+
+    def test_ps_httpx_connect_error_treated_as_transient(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        fake_client = MagicMock()
+        fake_client.ps.side_effect = httpx.ConnectError("refused", request=MagicMock())
+        mgr.get_client = MagicMock(return_value=fake_client)
+        mgr._get_model_info = MagicMock(
+            return_value={"parameters": {"num_ctx": 4096}}
+        )
+        with self.assertLogs("oasis", level="WARNING"):
+            tokens, source = mgr.get_effective_context_token_count_with_source("m")
+        self.assertEqual(tokens, 4096)
+        self.assertEqual(source, "parameters")
+
+    def test_ps_unexpected_error_from_client_ps_propagates(self):
+        """Non-transient errors from ``ps()`` are logged and re-raised (not hidden)."""
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        fake_client = MagicMock()
+        fake_client.ps.side_effect = TypeError("programmer bug")
+        mgr.get_client = MagicMock(return_value=fake_client)
+        with self.assertLogs("oasis", level="ERROR") as captured:
+            with self.assertRaisesRegex(TypeError, "programmer bug"):
+                mgr.get_running_num_ctx("m")
+        self.assertTrue(
+            any(
+                "Unexpected exception from Ollama client.ps()" in line
+                for line in captured.output
+            ),
+            captured.output,
+        )
+
+    def test_unexpected_ps_path_error_is_not_silently_masked(self):
+        """Programming regressions in ps() resolution must propagate."""
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr.get_running_num_ctx = MagicMock(side_effect=ValueError("bad-state"))
+        with self.assertRaisesRegex(ValueError, "bad-state"):
+            mgr.get_effective_context_token_count_with_source("any")
 
 
 if __name__ == "__main__":
