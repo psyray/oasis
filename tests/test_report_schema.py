@@ -295,6 +295,50 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(restored.schema_version, doc.schema_version)
         self.assertEqual(restored.stats.files_analyzed, doc.stats.files_analyzed)
 
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_render_report_html_from_json_payload_supports_executive_summary(self):
+        report = Report(input_path=".", output_format=["md"])
+        payload = {
+            "report_type": "executive_summary",
+            "title": "Executive Summary",
+            "generated_at": "2026-01-01T00:00:00Z",
+            "model_name": "deep-model",
+            "deep_model": "deep-model",
+            "small_model": "scan-model",
+            "embedding_model": "embed-model",
+            "vulnerability_summary": {"SQL Injection": 2, "XSS": 1},
+            "similarity_tier_counts": {"strong": 2, "moderate": 1, "weak": 0},
+        }
+
+        html = report.render_report_html_from_json_payload(payload)
+
+        self.assertIn("Executive Summary", html)
+        self.assertIn("deep-model", html)
+        self.assertIn("SQL Injection", html)
+        self.assertIn("strong", html)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_build_executive_summary_json_document_handles_none_deep_model_name(self):
+        report = Report.__new__(Report)
+
+        payload = report._build_executive_summary_json_document(
+            all_results={},
+            model_name="fallback-model",
+            deep_model_name=None,
+            scan_model_name="scan-model",
+            embedding_model_name="embed-model",
+            similarity_groups={},
+        )
+
+        self.assertEqual(payload["model_name"], "fallback-model")
+        self.assertEqual(payload["deep_model"], "")
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_render_report_html_from_json_payload_rejects_unknown_report_type(self):
+        report = Report(input_path=".", output_format=["md"])
+        with self.assertRaises(ValueError):
+            report.render_report_html_from_json_payload({"report_type": "unknown"})
+
     def test_scan_verdict_accepts_error_value(self):
         verdict = ScanVerdict.model_validate({"verdict": "ERROR"})
         self.assertEqual(verdict.verdict, "ERROR")
