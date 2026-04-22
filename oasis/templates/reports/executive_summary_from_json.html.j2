@@ -1,0 +1,30 @@
+<article class="report-executive-summary">
+  <h1>{{ payload.title }}</h1>
+  <p><strong>Generated at:</strong> {{ payload.generated_at }}</p>
+  <h2>Models Used</h2>
+  <ul>
+    <li><strong>Deep model:</strong> {{ payload.deep_model }}</li>
+    <li><strong>Small model:</strong> {{ payload.small_model }}</li>
+    <li><strong>Embedding model:</strong> {{ payload.embedding_model }}</li>
+  </ul>
+  <h2>Vulnerability Summary</h2>
+  <ul>
+    {% if payload.vulnerability_summary %}
+    {% for name, count in payload.vulnerability_summary %}
+    <li><strong>{{ name }}</strong>: {{ count }}</li>
+    {% endfor %}
+    {% else %}
+    <li>No vulnerability summary available.</li>
+    {% endif %}
+  </ul>
+  <h2>Similarity Tier Counts</h2>
+  <ul>
+    {% if payload.similarity_tier_counts %}
+    {% for tier, count in payload.similarity_tier_counts %}
+    <li><strong>{{ tier }}</strong>: {{ count }}</li>
+    {% endfor %}
+    {% else %}
+    <li>No similarity tier data available.</li>
+    {% endif %}
+  </ul>
+</article>

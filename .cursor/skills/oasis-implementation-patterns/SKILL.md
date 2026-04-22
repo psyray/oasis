@@ -53,7 +53,7 @@ Treat **audit** modal work as reusing this spine when aligning with the vulnerab
   - `oasis/helpers/langgraph_counts.py` — canonical vuln-type totals for LangGraph (`embedding_tasks_vuln_types_total`, `deep_payload_vuln_types_total`).
   - `oasis/helpers/langgraph_console.py` — numbered phases, tqdm-safe logging, post-pipeline / report-delivery banners (also used from `report.py`).
   - `oasis/helpers/scan_progress_md.py` — normalize scan progress JSON / markdown sections (keep in sync with report-side progress).
-  - `oasis/helpers/context_expand.py` — pure line-window expansion around suspicious spans; defaults from `oasis/config.py` (`CONTEXT_EXPAND_*`).
+  - `oasis/helpers/context/expand.py` — pure line-window expansion around suspicious spans; defaults from `oasis/config.py` (`CONTEXT_EXPAND_*`).
   - `oasis/helpers/poc_digest.py` — compact findings digest JSON for `--poc-assist`.
   - `oasis/helpers/poc_pipeline.py` — PoC budgets (re-export from config), hints markdown (`build_poc_hints_markdown`), chat options (`poc_assist_chat_options`), stage DEBUG logging (`maybe_debug_log_poc_stage_output`).
 - **CLI** (extend `README.md` when behavior changes): `--langgraph-max-expand` (`langgraph_max_expand_iterations`), `--poc-hints`, `--poc-assist`.

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from oasis.helpers.path_containment import is_path_within_root
+from oasis.helpers.context.path_containment import is_path_within_root
 
 
 class TestPathContainment(unittest.TestCase):

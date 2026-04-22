@@ -308,7 +308,7 @@ OLLAMA_SLOW_CALL_WARNING_SEC = _parse_env_float(
 #   ``oasis/helpers/poc.py`` (digest into LLM prompts,
 #   optional hints markdown, DEBUG truncation for stage logs).
 # Context expansion windows (CONTEXT_EXPAND_*) are separate but share the same token budget;
-# see ``oasis/helpers/context_expand.py`` (``expand_suspicious_chunk_records``).
+# see ``oasis/helpers/context/expand.py`` (``expand_suspicious_chunk_records``).
 # Defaults target consumer GPUs; env var names are on each constant below.
 
 # =============================================================================
@@ -754,7 +754,10 @@ EXTRACT_FUNCTIONS = {
 # Report configuration
 # Intentionally computed at import time: executive-summary tiers are static constants for a process run.
 # If tiers become runtime-configurable later, move this interpolation to report-generation time.
-from .helpers.exec_summary_tiers import executive_summary_tiers_inline_text, executive_summary_tiers_markdown_bullets
+from .helpers.dashboard.exec_summary_tiers import (
+    executive_summary_tiers_inline_text,
+    executive_summary_tiers_markdown_bullets,
+)
 
 _EXEC_SUMMARY_TIERS_BULLETS_MD = executive_summary_tiers_markdown_bullets()
 _EXEC_SUMMARY_TIERS_INLINE_TEXT = executive_summary_tiers_inline_text()

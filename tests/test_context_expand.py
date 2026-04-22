@@ -1,8 +1,8 @@
-"""Tests for oasis.helpers.context_expand."""
+"""Tests for oasis.helpers.context.expand."""
 
 import unittest
 
-from oasis.helpers.context_expand import expand_line_window
+from oasis.helpers.context.expand import expand_line_window
 
 
 class TestExpandLineWindow(unittest.TestCase):
