@@ -10,28 +10,28 @@ from oasis.agent.assistant_invoke import (
     coerce_investigation_budget,
     invoke_assistant_validation,
 )
-from oasis.helpers.assistant_authz import (
+from oasis.helpers.assistant.authz.authz import (
     authz_hits_in_root,
     evaluate_required_controls,
 )
-from oasis.helpers.assistant_config_audit import run_config_audit
-from oasis.helpers.assistant_crypto_scan import run_crypto_scan
-from oasis.helpers.assistant_entrypoints import discover_entry_points
-from oasis.helpers.assistant_log_filter import run_log_filter_scan
-from oasis.helpers.assistant_mitigations import find_mitigations_in_root
-from oasis.helpers import assistant_taint
-from oasis.helpers.assistant_secret_scan import run_secret_scan
-from oasis.helpers.assistant_trace import (
+from oasis.helpers.assistant.scan.config_audit import run_config_audit
+from oasis.helpers.assistant.scan.crypto_scan import run_crypto_scan
+from oasis.helpers.assistant.scan.entrypoints import discover_entry_points
+from oasis.helpers.assistant.scan.log_filter import run_log_filter_scan
+from oasis.helpers.assistant.scan.mitigations import find_mitigations_in_root
+import oasis.helpers.assistant.scan.taint as assistant_taint
+from oasis.helpers.assistant.scan.secret_scan import run_secret_scan
+from oasis.helpers.assistant.scan.trace import (
     enclosing_symbol,
     trace_to_entry_points,
 )
-from oasis.helpers.assistant_investigation_synth import (
+from oasis.helpers.assistant.think.investigation_synth import (
     compact_investigation_for_llm,
     enrich_investigation_with_llm_narrative,
 )
-from oasis.helpers.assistant_verdict import VerdictInputs, compute_verdict
-from oasis.helpers.validation_patterns import PATTERNS_VERSION
-from oasis.helpers.vuln_taxonomy import (
+from oasis.helpers.assistant.verdict.verdict import VerdictInputs, compute_verdict
+from oasis.helpers.vuln.validation_patterns import PATTERNS_VERSION
+from oasis.helpers.vuln.taxonomy import (
     ALL_VULN_NAMES,
     VulnFamily,
     get_descriptor,
@@ -141,11 +141,11 @@ class TestDotNetSinks(unittest.TestCase):
                 p, 4, ("sql_execute",), ("http_params",)
             )
             self.assertEqual(flows, [])
-            from oasis.helpers.assistant_scan_utils import (
+            from oasis.helpers.assistant.scan.scan_utils import (
                 compile_groups,
                 scan_patterns_best_effort,
             )
-            from oasis.helpers.validation_patterns import SINKS
+            from oasis.helpers.vuln.validation_patterns import SINKS
 
             compiled = compile_groups({"sql_execute": SINKS["sql_execute"]})
             hits = scan_patterns_best_effort(p.parent, compiled)

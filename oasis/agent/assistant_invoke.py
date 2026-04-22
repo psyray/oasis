@@ -30,8 +30,8 @@ from oasis.agent.assistant_nodes import (
     node_trace_execution,
 )
 from oasis.agent.assistant_state import AssistantGraphState
-from oasis.helpers.assistant_verdict import _normalize_validation_backend
-from oasis.helpers.vuln_taxonomy import VulnFamily
+from oasis.helpers.assistant.verdict.verdict import _normalize_validation_backend
+from oasis.helpers.vuln.taxonomy import VulnFamily
 from oasis.schemas.analysis import AssistantInvestigationResult
 
 

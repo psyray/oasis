@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, List, Optional, TypedDict
 
-from oasis.helpers.vuln_taxonomy import VulnDescriptor
+from oasis.helpers.vuln.taxonomy import VulnDescriptor
 
 
 class AssistantGraphState(TypedDict, total=False):

@@ -2,7 +2,7 @@
 
 import unittest
 
-from oasis.helpers.assistant_think_parse import (
+from oasis.helpers.assistant.think.think_parse import (
     enrich_assistant_message_dict,
     enrich_messages_for_response,
     parse_assistant_think,

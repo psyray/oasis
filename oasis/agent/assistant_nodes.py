@@ -16,20 +16,20 @@ from oasis.agent.assistant_labels import (
     ASSISTANT_ROUTE_FLOW,
 )
 from oasis.agent.assistant_state import AssistantGraphState
-from oasis.helpers.assistant_authz import (
+from oasis.helpers.assistant.authz.authz import (
     authz_hits_in_root,
     evaluate_required_controls,
 )
-from oasis.helpers.assistant_config_audit import run_config_audit
-from oasis.helpers.assistant_crypto_scan import run_crypto_scan
-from oasis.helpers.assistant_entrypoints import discover_entry_points
-from oasis.helpers.assistant_log_filter import run_log_filter_scan
-from oasis.helpers.assistant_mitigations import find_mitigations_in_root
-from oasis.helpers.assistant_secret_scan import run_secret_scan
-from oasis.helpers.assistant_taint import detect_flows_for_descriptor
-from oasis.helpers.assistant_trace import trace_to_entry_points
-from oasis.helpers.assistant_verdict import VerdictInputs, compute_verdict
-from oasis.helpers.vuln_taxonomy import VulnDescriptor, VulnFamily, get_descriptor
+from oasis.helpers.assistant.scan.config_audit import run_config_audit
+from oasis.helpers.assistant.scan.crypto_scan import run_crypto_scan
+from oasis.helpers.assistant.scan.entrypoints import discover_entry_points
+from oasis.helpers.assistant.scan.log_filter import run_log_filter_scan
+from oasis.helpers.assistant.scan.mitigations import find_mitigations_in_root
+from oasis.helpers.assistant.scan.secret_scan import run_secret_scan
+from oasis.helpers.assistant.scan.taint import detect_flows_for_descriptor
+from oasis.helpers.assistant.scan.trace import trace_to_entry_points
+from oasis.helpers.assistant.verdict.verdict import VerdictInputs, compute_verdict
+from oasis.helpers.vuln.taxonomy import VulnDescriptor, VulnFamily, get_descriptor
 
 
 def _ensure_descriptor(state: AssistantGraphState) -> VulnDescriptor:

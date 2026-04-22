@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock
 
-from oasis.helpers.assistant_chat_context import (
+from oasis.helpers.assistant.prompt.chat_context import (
     FINDING_VALIDATION_LABEL,
     REPORT_SUMMARY_LABEL,
     RETRIEVAL_CONTEXT_LABEL,
@@ -15,11 +15,11 @@ from oasis.helpers.assistant_chat_context import (
     compact_validation_for_chat,
     compute_verdict_first_subbudgets,
 )
-from oasis.helpers.assistant_verdict_validation import _fit_validation_to_budget
-from oasis.helpers.assistant_context_budget import (
+from oasis.helpers.assistant.verdict.verdict_validation import _fit_validation_to_budget
+from oasis.helpers.assistant.prompt.context_budget import (
     assistant_total_system_budget_chars,
 )
-from oasis.helpers.assistant_report_excerpt import compact_report_excerpt
+from oasis.helpers.assistant.prompt.report_excerpt import compact_report_excerpt
 
 
 class AssembleVerdictFirstPromptTests(unittest.TestCase):

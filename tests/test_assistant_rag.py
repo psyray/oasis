@@ -2,7 +2,7 @@
 
 import unittest
 
-from oasis.helpers.assistant_rag import retrieve_relevant_snippets
+from oasis.helpers.assistant.web.rag import retrieve_relevant_snippets
 
 
 class TestAssistantRag(unittest.TestCase):

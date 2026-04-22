@@ -70,28 +70,28 @@ from .helpers.dashboard import (
 from .helpers.progress import SCAN_PROGRESS_EXTENDED_KEYS, coerce_scan_progress_event_version
 from .report import Report, executive_summary_progress_sidecar_path, is_executive_summary_progress_sidecar
 from .ollama_manager import OllamaManager
-from .helpers.assistant_rag import (
+from .helpers.assistant.web.rag import (
     embedding_cache_file_path,
     load_embedding_code_base,
     resolve_assistant_cache_root,
     retrieve_relevant_snippets,
 )
-from .helpers.path_containment import is_path_within_root
-from .helpers.assistant_api_validate import (
+from .helpers.context.path_containment import is_path_within_root
+from .helpers.assistant.web.api_validate import (
     coerce_finding_indices,
     normalize_report_rel_query_arg,
     resolve_assistant_primary_payload,
     validate_assistant_messages,
 )
-from .helpers.assistant_chat_context import (
+from .helpers.assistant.prompt.chat_context import (
     assemble_verdict_first_prompt,
     compute_verdict_first_subbudgets,
     shrink_rag_block,
     shrink_user_labels_block,
 )
-from .helpers.assistant_prompt_tuning import REPORT_SUMMARY_AGGREGATE_MERGE_BUDGET_FACTOR
-from .helpers.assistant_report_excerpt import compact_report_excerpt
-from .helpers.assistant_http_contract import (
+from .helpers.assistant.prompt.prompt_tuning import REPORT_SUMMARY_AGGREGATE_MERGE_BUDGET_FACTOR
+from .helpers.assistant.prompt.report_excerpt import compact_report_excerpt
+from .helpers.assistant.web.http_contract import (
     ERR_AGGREGATE_REQUIRES_EXECUTIVE,
     ERR_CHAT_MODEL_REQUIRED,
     ERR_COULD_NOT_READ_REPORT,
@@ -103,7 +103,7 @@ from .helpers.assistant_http_contract import (
     HTTP_UNPROCESSABLE,
     assistant_http_error,
 )
-from .helpers.assistant_web_prepare import (
+from .helpers.assistant.web.web_prepare import (
     build_assistant_finding_json_prompt_block,
     build_report_summary_payload,
     extract_last_user_message_text,
@@ -111,7 +111,7 @@ from .helpers.assistant_web_prepare import (
     prepare_aggregate_branch_paths,
     resolve_assistant_chat_model,
 )
-from .helpers.assistant_persistence import (
+from .helpers.assistant.web.persistence import (
     delete_all_chat_sessions,
     delete_chat_session,
     ensure_session_views,
@@ -127,16 +127,16 @@ from .helpers.assistant_persistence import (
     utc_now_iso,
     validate_session_id,
 )
-from .helpers.assistant_think_parse import (
+from .helpers.assistant.think.think_parse import (
     AssistantThinkSplit,
     enrich_messages_for_response,
     parse_assistant_think,
 )
-from .helpers.assistant_context_budget import assistant_total_system_budget_chars
-from .helpers.assistant_scan_aggregate import model_directory_from_security_report_file
-from .helpers.executive_dashboard_preview import augment_executive_markdown_preview_html
-from .helpers.executive_modal_chart_meta import rollup_severity_counts_from_model_dir
-from .helpers.executive_assistant_scope import (
+from .helpers.assistant.prompt.context_budget import assistant_total_system_budget_chars
+from .helpers.assistant.scan.scan_aggregate import model_directory_from_security_report_file
+from .helpers.executive.dashboard_preview import augment_executive_markdown_preview_html
+from .helpers.executive.modal_chart_meta import rollup_severity_counts_from_model_dir
+from .helpers.executive.assistant_scope import (
     synthetic_executive_primary_payload,
     vulnerability_reports_for_executive_assistant,
 )
@@ -1439,7 +1439,7 @@ class WebServer:
                 coerce_investigation_budget,
                 invoke_assistant_validation,
             )
-            from oasis.helpers.vuln_taxonomy import ALL_VULN_NAMES
+            from oasis.helpers.vuln.taxonomy import ALL_VULN_NAMES
             from oasis.schemas.analysis import InvestigationScope
 
             try:
@@ -1597,7 +1597,7 @@ class WebServer:
                     )
                 if chat_model_inv:
                     try:
-                        from oasis.helpers.assistant_investigation_synth import (
+                        from oasis.helpers.assistant.think.investigation_synth import (
                             enrich_investigation_with_llm_narrative,
                         )
 

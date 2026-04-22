@@ -738,6 +738,77 @@ DashboardApp.preferredChatModelFromReportPayload = function (payload) {
 };
 
 /**
+ * Map a report / stored model name to one of the Ollama chat model option strings.
+ *
+ * ``optionValues`` entries are normalized with ``String`` once. Per-option ``toLowerCase()`` and
+ * family-tag parsing are precomputed so predicates do not repeat ``String`` / ``toLowerCase`` work.
+ * Returns ``''`` when nothing matches (public contract: always a string).
+ *
+ * Precedence (first hit wins):
+ *   1. Exact string match in the normalized option list
+ *   2. Case-insensitive exact match (returns the option’s canonical casing from the list)
+ *   3. Prefix match: option starts with ``seed``, or ``seed`` starts with option (rename drift)
+ *   4. Same tag before ``:`` as ``seed`` (model family), e.g. ``llama3`` vs ``llama3:8b``
+ *   5. Option string starts with the seed’s family prefix (lowercase)
+ *
+ * Used when localStorage is empty so the default matches the model that generated the report.
+ */
+DashboardApp.matchChatModelToOptions = function (reportModel, optionValues) {
+    if (!reportModel || typeof reportModel !== 'string' || !String(reportModel).trim()) {
+        return '';
+    }
+    const seed = String(reportModel).trim();
+    const opts = Array.isArray(optionValues) ? optionValues.map(String) : [];
+    const lower = seed.toLowerCase();
+    const fam = seed.indexOf(':') >= 0 ? seed.slice(0, seed.indexOf(':')).trim() : seed;
+    const famLower = fam.toLowerCase();
+
+    const optsLower = opts.map(function (s) {
+        return s.toLowerCase();
+    });
+    const optFamPrefix = opts.map(function (s) {
+        return s.indexOf(':') >= 0 ? s.slice(0, s.indexOf(':')).trim() : s;
+    });
+    const optFamPrefixLower = optFamPrefix.map(function (p) {
+        return p.toLowerCase();
+    });
+
+    let i;
+    let s;
+
+    // 1 — exact
+    if (opts.indexOf(seed) >= 0) {
+        return seed;
+    }
+    // 2 — case-insensitive exact (reuse optsLower / lower)
+    for (i = 0; i < opts.length; i++) {
+        if (optsLower[i] === lower) {
+            return opts[i];
+        }
+    }
+    // 3 — bidirectional prefix
+    for (i = 0; i < opts.length; i++) {
+        s = opts[i];
+        if (s.indexOf(seed) === 0 || seed.indexOf(s) === 0) {
+            return s;
+        }
+    }
+    // 4 — family tag before ":" (reuse optFamPrefix / optFamPrefixLower; require truthy prefix like original)
+    for (i = 0; i < opts.length; i++) {
+        if (optFamPrefix[i] && fam && optFamPrefixLower[i] === famLower) {
+            return opts[i];
+        }
+    }
+    // 5 — full option string starts with family prefix
+    for (i = 0; i < opts.length; i++) {
+        if (fam && optsLower[i].indexOf(famLower) === 0) {
+            return opts[i];
+        }
+    }
+    return '';
+};
+
+/**
  * Fill file/chunk/finding dropdowns from a vulnerability report payload (shared by single-report and executive scope).
  */
 DashboardApp.populateAssistantFindingSelectorsFromPayload = function (panelRoot, txt, payload) {
@@ -1616,9 +1687,9 @@ DashboardApp.mountReportAssistantPanel = function () {
         refreshSessionList(DashboardApp._assistantSessionId);
     };
 
-    const applyAssistantChatModelSeed = function (sortedNames, seedPreferred) {
-        if (!chatModelSelect) {
-            return;
+    const getValidStoredChatModel = function (sortedNames) {
+        if (!Array.isArray(sortedNames) || sortedNames.length === 0) {
+            return '';
         }
         let lsScoped = '';
         let lsLegacy = '';
@@ -1632,20 +1703,96 @@ DashboardApp.mountReportAssistantPanel = function () {
         } catch (e) {
             lsLegacy = '';
         }
+        const scoped = typeof lsScoped === 'string' ? lsScoped.trim() : '';
+        const legacy = typeof lsLegacy === 'string' ? lsLegacy.trim() : '';
+        if (scoped && sortedNames.indexOf(scoped) >= 0) {
+            return scoped;
+        }
+        if (legacy && sortedNames.indexOf(legacy) >= 0) {
+            return legacy;
+        }
+        return '';
+    };
+
+    /**
+     * Choose the chat-model ``<select>`` value when opening the panel.
+     *
+     * Behavior (in order): valid scoped or legacy localStorage → else map ``seedPreferred`` (report
+     * JSON ``model_name`` / ``deep_model`` / …) onto ``sortedNames`` via ``matchChatModelToOptions``
+     * (exact, case, prefix, family heuristics) → else first Ollama option. When the report string no
+     * longer matches any live option (e.g. model removed from Ollama), mapping fails and we fall back
+     * to the first listed model — users can still pick another; branch restore on session load uses
+     * ``resolveReportPreferredBranchModelKey`` separately.
+     */
+    const applyAssistantChatModelSeed = function (sortedNames, seedPreferred) {
+        if (!chatModelSelect) {
+            return;
+        }
+        if (!Array.isArray(sortedNames) || sortedNames.length === 0) {
+            return;
+        }
         const seed = typeof seedPreferred === 'string' ? seedPreferred.trim() : '';
-        let pick = '';
-        if (seed && sortedNames.indexOf(seed) >= 0) {
-            pick = seed;
-        } else if (lsScoped && sortedNames.indexOf(lsScoped) >= 0) {
-            pick = lsScoped;
-        } else if (lsLegacy && sortedNames.indexOf(lsLegacy) >= 0) {
-            pick = lsLegacy;
-        } else if (sortedNames.length > 0) {
+        let pick = getValidStoredChatModel(sortedNames);
+        if (!pick && seed) {
+            pick = DashboardApp.matchChatModelToOptions(seed, sortedNames) || '';
+        }
+        if (!pick && sortedNames.length > 0) {
             pick = sortedNames[0];
         }
         if (pick) {
             chatModelSelect.value = pick;
         }
+    };
+
+    /** Set ``select.value`` only when an ``<option>`` with that ``value`` exists (avoids invalid state). */
+    const setChatModelSelectIfOptionMatches = function (selectEl, modelValue) {
+        if (!selectEl || !modelValue) {
+            return;
+        }
+        const hit = Array.prototype.find.call(selectEl.querySelectorAll('option'), function (opt) {
+            return opt.value === modelValue;
+        });
+        if (hit) {
+            selectEl.value = modelValue;
+        }
+    };
+
+    /** Messages for ``modelKey`` within ``model_branches`` (or ``[]``); sync select to ``modelKey`` when present. */
+    const pickBranchMessagesForReportModel = function (selectEl, branches, modelKey) {
+        const br = branches && modelKey ? branches[modelKey] : null;
+        const raw = br && Array.isArray(br.messages) ? br.messages : [];
+        setChatModelSelectIfOptionMatches(selectEl, modelKey);
+        return raw;
+    };
+
+    /**
+     * Branch key to load when preferring the report model without localStorage: align with Ollama options
+     * via ``DashboardApp.matchChatModelToOptions``, then fall back to ``model_branches`` keys so stored
+     * sessions still resolve after renames when branch keys are not a subset of current option strings.
+     */
+    const resolveReportPreferredBranchModelKey = function (preferredStr, branches, sortedOptions) {
+        const kOptions = DashboardApp.matchChatModelToOptions(preferredStr, sortedOptions);
+        if (kOptions) {
+            return kOptions;
+        }
+        if (!preferredStr || !branches || typeof branches !== 'object') {
+            return '';
+        }
+        const pref = String(preferredStr).trim();
+        if (!pref) {
+            return '';
+        }
+        if (Object.prototype.hasOwnProperty.call(branches, pref)) {
+            return pref;
+        }
+        const lower = pref.toLowerCase();
+        const keys = Object.keys(branches);
+        for (let bi = 0; bi < keys.length; bi++) {
+            if (keys[bi].toLowerCase() === lower) {
+                return keys[bi];
+            }
+        }
+        return '';
     };
 
     const syncChatModelFromSessionDoc = function (doc) {
@@ -1656,23 +1803,48 @@ DashboardApp.mountReportAssistantPanel = function () {
         if (!m) {
             return;
         }
-        const opts = chatModelSelect.querySelectorAll('option');
-        for (let i = 0; i < opts.length; i++) {
-            if (opts[i].value === m) {
-                chatModelSelect.value = m;
-                return;
-            }
-        }
+        setChatModelSelectIfOptionMatches(chatModelSelect, m);
     };
 
-    const loadSessionById = function (sessionId) {
+    const loadSessionById = function (sessionId, loadOpts) {
+        loadOpts = loadOpts && typeof loadOpts === 'object' ? loadOpts : {};
         if (!sessionId) {
             startNewChat();
             return Promise.resolve();
         }
         return DashboardApp.fetchAssistantSession(reportPath, sessionId)
             .then(function (doc) {
-                const raw = Array.isArray(doc.messages) ? doc.messages : [];
+                const branches =
+                    doc.model_branches && typeof doc.model_branches === 'object' ? doc.model_branches : {};
+                let raw = Array.isArray(doc.messages) ? doc.messages : [];
+                let useReportWhenNoStore = false;
+                // No chat-model localStorage: prefer the conversation stored under the report's model.
+                if (
+                    loadOpts.useReportModelIfNoStored === true &&
+                    reportPreferredModelStr
+                ) {
+                    // (1) Branch selection: map report JSON model string → a key in model_branches (via
+                    // Ollama option list first, then exact/case keys on branches — see resolver).
+                    const reportBranchKey = resolveReportPreferredBranchModelKey(
+                        reportPreferredModelStr,
+                        branches,
+                        cachedSortedChatModels
+                    );
+                    // (2) Message loading: if we resolved a branch, use its messages and align the select;
+                    // otherwise fall through to doc.messages + doc.model below.
+                    if (reportBranchKey) {
+                        raw = pickBranchMessagesForReportModel(
+                            chatModelSelect,
+                            branches,
+                            reportBranchKey
+                        );
+                        useReportWhenNoStore = true;
+                    }
+                }
+                if (!useReportWhenNoStore) {
+                    raw = Array.isArray(doc.messages) ? doc.messages : [];
+                    syncChatModelFromSessionDoc(doc);
+                }
                 const trimmed = DashboardApp._trimAssistantMessages(raw);
                 DashboardApp._assistantConversation = trimmed.map(function (m) {
                     if (!m || typeof m !== 'object') {
@@ -1694,7 +1866,6 @@ DashboardApp.mountReportAssistantPanel = function () {
                     return base;
                 });
                 DashboardApp._assistantSessionId = doc.session_id || sessionId;
-                syncChatModelFromSessionDoc(doc);
                 renderLog();
                 activeChatModel =
                     chatModelSelect && chatModelSelect.value
@@ -2146,20 +2317,18 @@ DashboardApp.mountReportAssistantPanel = function () {
                 chatModelSelect.appendChild(optEmpty);
             }
 
-            let seed = '';
-            if (reportMn) {
-                seed = reportMn;
-            } else if (rows.length && rows[0].model && String(rows[0].model).trim()) {
-                seed = String(rows[0].model).trim();
-            }
-            applyAssistantChatModelSeed(sorted, seed);
+            const seedFromReport = reportMn ? String(reportMn).trim() : '';
+            applyAssistantChatModelSeed(sorted, seedFromReport);
             activeChatModel =
                 chatModelSelect && chatModelSelect.value ? String(chatModelSelect.value).trim() : '';
+            const hadStoredChatModel = Boolean(getValidStoredChatModel(sorted));
 
             if (rows.length > 0) {
                 const firstId = rows[0].session_id;
                 populateSessionSelect(rows, firstId);
-                return loadSessionById(firstId).then(function () {
+                return loadSessionById(firstId, {
+                    useReportModelIfNoStored: !hadStoredChatModel,
+                }).then(function () {
                     return refreshSessionList(DashboardApp._assistantSessionId);
                 });
             }

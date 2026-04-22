@@ -427,7 +427,7 @@ class TestWebAssistantRoutes(unittest.TestCase):
             }
             (sec / rel).write_text(json.dumps(payload), encoding="utf-8")
 
-            from oasis.helpers.assistant_persistence import (
+            from oasis.helpers.assistant.web.persistence import (
                 finding_validation_storage_key,
                 merge_finding_validation_into_session,
                 new_session_id,
@@ -590,7 +590,7 @@ class TestWebAssistantRoutes(unittest.TestCase):
             }
             (sec / rel).write_text(json.dumps(payload), encoding="utf-8")
 
-            from oasis.helpers.assistant_persistence import new_session_id, save_chat_session
+            from oasis.helpers.assistant.web.persistence import new_session_id, save_chat_session
 
             sid = new_session_id()
             save_chat_session(
@@ -648,7 +648,7 @@ class TestWebAssistantRoutes(unittest.TestCase):
             }
             (sec / rel).write_text(json.dumps(payload), encoding="utf-8")
 
-            from oasis.helpers.assistant_persistence import new_session_id, save_chat_session
+            from oasis.helpers.assistant.web.persistence import new_session_id, save_chat_session
 
             sid = new_session_id()
             save_chat_session(
@@ -1033,7 +1033,7 @@ class TestResolveAssistantOllamaUrl(unittest.TestCase):
 
 class TestAssistantRagRootResolution(unittest.TestCase):
     def test_resolve_assistant_cache_root_falls_back_for_stale_root(self):
-        from oasis.helpers.assistant_rag import resolve_assistant_cache_root
+        from oasis.helpers.assistant.web.rag import resolve_assistant_cache_root
 
         with tempfile.TemporaryDirectory() as td:
             fallback = Path(td)
@@ -1042,7 +1042,7 @@ class TestAssistantRagRootResolution(unittest.TestCase):
             self.assertEqual(out, fallback.resolve())
 
     def test_resolve_assistant_cache_root_keeps_valid_local_root(self):
-        from oasis.helpers.assistant_rag import resolve_assistant_cache_root
+        from oasis.helpers.assistant.web.rag import resolve_assistant_cache_root
 
         with tempfile.TemporaryDirectory() as td:
             fallback = Path(td) / "fallback"

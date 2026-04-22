@@ -1,7 +1,7 @@
 """Internal helper submodules: dashboard, embedding, progress, scan, langgraph_cli, poc, misc (see each file).
 
 Submodules import without eager-loading unrelated helpers (avoids heavy optional deps when importing
-only lightweight modules such as ``exec_summary_tiers``).
+only lightweight modules such as ``dashboard.exec_summary_tiers``).
 
 **Package API (lazy re-exports)**
 
@@ -41,17 +41,17 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "standard_initial_iteration_extras": (".progress", "standard_initial_iteration_extras"),
     "standard_initial_sweep_extras": (".progress", "standard_initial_sweep_extras"),
     "standard_progress_extras": (".progress", "standard_progress_extras"),
-    "PhaseTriple": (".scan", "PhaseTriple"),
-    "adaptive_phases_identifying": (".scan", "adaptive_phases_identifying"),
-    "adaptive_scan_phases": (".scan", "adaptive_scan_phases"),
-    "adaptive_subphases_during_identification": (".scan", "adaptive_subphases_during_identification"),
-    "adaptive_subphases_payload": (".scan", "adaptive_subphases_payload"),
-    "embedding_phase_row": (".scan", "embedding_phase_row"),
-    "phase_progress_row": (".scan", "phase_progress_row"),
-    "phase_triple": (".scan", "phase_triple"),
-    "safe_code_base_file_count": (".scan", "safe_code_base_file_count"),
-    "standard_scan_phases": (".scan", "standard_scan_phases"),
-    "standard_scan_phases_vuln_types": (".scan", "standard_scan_phases_vuln_types"),
+    "PhaseTriple": (".phases.scan", "PhaseTriple"),
+    "adaptive_phases_identifying": (".phases.scan", "adaptive_phases_identifying"),
+    "adaptive_scan_phases": (".phases.scan", "adaptive_scan_phases"),
+    "adaptive_subphases_during_identification": (".phases.scan", "adaptive_subphases_during_identification"),
+    "adaptive_subphases_payload": (".phases.scan", "adaptive_subphases_payload"),
+    "embedding_phase_row": (".phases.scan", "embedding_phase_row"),
+    "phase_progress_row": (".phases.scan", "phase_progress_row"),
+    "phase_triple": (".phases.scan", "phase_triple"),
+    "safe_code_base_file_count": (".phases.scan", "safe_code_base_file_count"),
+    "standard_scan_phases": (".phases.scan", "standard_scan_phases"),
+    "standard_scan_phases_vuln_types": (".phases.scan", "standard_scan_phases_vuln_types"),
 }
 
 __all__ = sorted(_LAZY_IMPORTS.keys())

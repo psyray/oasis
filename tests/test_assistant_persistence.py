@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from oasis.helpers.assistant_persistence import (
+from oasis.helpers.assistant.web.persistence import (
     CHAT_SCHEMA_VERSION,
     branch_key,
     chat_dir_for_report_json,

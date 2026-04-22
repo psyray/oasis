@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import unittest
 
-from oasis.helpers.assistant_prompt_shrink import (
+from oasis.helpers.assistant.prompt.prompt_shrink import (
     VerdictPromptHardCapConfig,
     find_safe_cut_boundary,
     hard_cap_verdict_prompt_if_needed,

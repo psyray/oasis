@@ -2,7 +2,7 @@
 
 import unittest
 
-from oasis.helpers.executive_dashboard_preview import augment_executive_markdown_preview_html
+from oasis.helpers.executive.dashboard_preview import augment_executive_markdown_preview_html
 
 
 class TestExecutiveDashboardPreview(unittest.TestCase):
