@@ -17,6 +17,7 @@ from oasis.ollama_manager import OllamaManager
 from oasis.schemas.analysis import AssistantInvestigationResult
 
 logger = logging.getLogger(__name__)
+_oasis_log = logging.getLogger("oasis")
 
 _MAX_ENTRY_POINTS = 15
 _MAX_PATHS = 8
@@ -109,6 +110,19 @@ def enrich_investigation_with_llm_narrative(
         return result
 
     messages = build_synthesis_messages(result, max_context_chars=max_context_chars)
+    if _oasis_log.isEnabledFor(logging.DEBUG):
+        _oasis_log.debug(
+            "[assistant_llm] POST /api/assistant/investigate synthesize ollama_request\n%s",
+            json.dumps(
+                {
+                    "model": model,
+                    "options": {"temperature": float(temperature)},
+                    "messages": messages,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
     try:
         resp = ollama_manager.chat(
             model,
@@ -126,6 +140,12 @@ def enrich_investigation_with_llm_narrative(
             update={
                 "synthesis_error": f"{type(exc).__name__}: {exc}",
             }
+        )
+
+    if _oasis_log.isEnabledFor(logging.DEBUG):
+        _oasis_log.debug(
+            "[assistant_llm] POST /api/assistant/investigate synthesize ollama_response\n%s",
+            json.dumps({"raw": resp}, ensure_ascii=False, indent=2, default=str),
         )
 
     msg = resp.get("message") if isinstance(resp, dict) else None

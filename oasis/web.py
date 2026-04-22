@@ -234,6 +234,29 @@ class WebServer:
             )
         self.security_dir.mkdir(parents=True, exist_ok=True)
 
+    def _assistant_llm_debug_payload(self, prep: Dict[str, Any]) -> Dict[str, Any]:
+        """Structured metadata logged alongside Ollama messages when ``self.debug`` is True."""
+        return {
+            "chat_model": prep.get("chat_model"),
+            "report_rel": prep.get("report_rel"),
+            "session_id_hint": prep.get("session_id_hint"),
+            "aggregate_mode": prep.get("aggregate_mode"),
+            "total_budget": prep.get("total_budget"),
+            "excerpt_truncated": prep.get("excerpt_truncated"),
+            "rag_unavailable": prep.get("rag_unavailable"),
+            "validated_dialogue_messages": prep.get("messages"),
+        }
+
+    def _log_assistant_llm_debug(self, event: str, payload: Dict[str, Any]) -> None:
+        """Log full assistant ↔ Ollama payloads when running ``oasis --web --debug``."""
+        if not self.debug:
+            return
+        try:
+            body = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+        except Exception:
+            body = repr(payload)
+        logger.debug("[assistant_llm] %s\n%s", event, body)
+
     def run(self):
         """Serve reports via a web interface."""
         from .__init__ import __version__
@@ -300,9 +323,19 @@ class WebServer:
         # Determine the host based on the expose setting
         host = '127.0.0.1' if self.web_expose == 'local' else '0.0.0.0'
         
-        # Run the server
+        # Run the server. When ``debug=True``, Werkzeug's reloader would spawn a
+        # child process that re-runs this entrypoint: a new random ``web_password``
+        # and ``secret_key`` are generated, so the password printed in the parent
+        # no longer matches — login always fails. Disable the reloader; Flask
+        # still serves interactive tracebacks.
         if self.debug:
-            self.socketio.run(app, debug=True, host=host, port=self.web_port)
+            self.socketio.run(
+                app,
+                debug=True,
+                use_reloader=False,
+                host=host,
+                port=self.web_port,
+            )
         else:
             self.socketio.run(app, host=host, port=self.web_port)
 
@@ -955,6 +988,16 @@ class WebServer:
 
         def event_stream():
             sess_id = self._resolve_assistant_session_id(prep.get('session_id_hint'))
+            stream_opts = {'temperature': 0.2}
+            self._log_assistant_llm_debug(
+                'POST /api/assistant/chat-stream ollama_request',
+                {
+                    'model': prep['chat_model'],
+                    'options': stream_opts,
+                    'messages': prep['full_messages'],
+                    'context': self._assistant_llm_debug_payload(prep),
+                },
+            )
             yield ndjson(
                 {
                     'type': 'start',
@@ -967,12 +1010,13 @@ class WebServer:
             )
             content_parts: List[str] = []
             thinking_parts: List[str] = []
+            stream_chunks: List[Any] = []
             try:
                 om = self._get_assistant_ollama_manager()
                 for chunk in om.chat_stream(
                     prep['chat_model'],
                     prep['full_messages'],
-                    options={'temperature': 0.2},
+                    options=stream_opts,
                 ):
                     if isinstance(chunk, dict) and chunk.get('type') == 'error':
                         self._persist_partial_assistant_stream_reply(
@@ -980,8 +1024,19 @@ class WebServer:
                         )
                         err = chunk.get('error')
                         err_msg = err if isinstance(err, str) else f'{type(err).__name__}'
+                        self._log_assistant_llm_debug(
+                            'POST /api/assistant/chat-stream ollama_stream_error',
+                            {
+                                'error': err_msg,
+                                'partial_content': ''.join(content_parts),
+                                'partial_thinking': ''.join(thinking_parts),
+                                'chunks': stream_chunks,
+                            },
+                        )
                         yield ndjson({'type': 'error', 'error': err_msg})
                         return
+                    if isinstance(chunk, dict):
+                        stream_chunks.append(chunk)
                     msg = chunk.get('message') if isinstance(chunk, dict) else None
                     if not isinstance(msg, dict):
                         continue
@@ -1001,6 +1056,15 @@ class WebServer:
                 self._persist_partial_assistant_stream_reply(
                     prep, sess_id, content_parts, thinking_parts
                 )
+                self._log_assistant_llm_debug(
+                    'POST /api/assistant/chat-stream ollama_exception',
+                    {
+                        'error': f'{type(exc).__name__}: {exc}',
+                        'partial_content': ''.join(content_parts),
+                        'partial_thinking': ''.join(thinking_parts),
+                        'chunks': stream_chunks,
+                    },
+                )
                 yield ndjson(
                     {
                         'type': 'error',
@@ -1019,19 +1083,27 @@ class WebServer:
                     thought_segments=[native_thinking, *split.thought_segments],
                 )
             self._persist_assistant_reply(prep, raw, sess_id)
-            yield ndjson(
+            done_event = {
+                'type': 'done',
+                'message': raw,
+                'visible_markdown': split.visible_markdown,
+                'thought_segments': split.thought_segments,
+                'session_id': sess_id,
+                'model': prep['chat_model'],
+                'rag_unavailable': bool(prep['rag_unavailable']),
+                'system_budget_chars': prep['total_budget'],
+                'assistant_aggregate': prep['aggregate_mode'],
+            }
+            self._log_assistant_llm_debug(
+                'POST /api/assistant/chat-stream ollama_stream_complete',
                 {
-                    'type': 'done',
-                    'message': raw,
-                    'visible_markdown': split.visible_markdown,
-                    'thought_segments': split.thought_segments,
-                    'session_id': sess_id,
-                    'model': prep['chat_model'],
-                    'rag_unavailable': bool(prep['rag_unavailable']),
-                    'system_budget_chars': prep['total_budget'],
-                    'assistant_aggregate': prep['aggregate_mode'],
-                }
+                    'done': done_event,
+                    'native_thinking_concat': native_thinking,
+                    'stream_chunk_count': len(stream_chunks),
+                    'raw_ollama_chunks': stream_chunks,
+                },
             )
+            yield ndjson(done_event)
 
         return Response(
             stream_with_context(event_stream()),
@@ -1269,17 +1341,31 @@ class WebServer:
                 err_body, status = prep
                 return jsonify(err_body), status
 
+            chat_opts = {'temperature': 0.2}
+            self._log_assistant_llm_debug(
+                'POST /api/assistant/chat ollama_request',
+                {
+                    'model': prep['chat_model'],
+                    'options': chat_opts,
+                    'messages': prep['full_messages'],
+                    'context': self._assistant_llm_debug_payload(prep),
+                },
+            )
             try:
                 om = self._get_assistant_ollama_manager()
                 resp = om.chat(
                     prep['chat_model'],
                     prep['full_messages'],
-                    options={'temperature': 0.2},
+                    options=chat_opts,
                 )
             except Exception as exc:
                 logger.exception('Assistant chat failed')
                 return jsonify({'error': f'Assistant request failed: {type(exc).__name__}'}), 502
 
+            self._log_assistant_llm_debug(
+                'POST /api/assistant/chat ollama_response',
+                {'raw': resp},
+            )
             msg = resp.get('message') if isinstance(resp, dict) else None
             raw = ''
             if isinstance(msg, dict):
