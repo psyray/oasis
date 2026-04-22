@@ -111,6 +111,11 @@ DashboardApp.renderAssistantMessageHtml = function (data) {
         rawMsg = data;
     } else if (data && typeof data === 'object') {
         rawMsg = typeof data.message === 'string' ? data.message : '';
+        // Persisted sessions and _assistantConversation use ``content`` (API/chat storage shape);
+        // live finalize payloads use ``message``.
+        if (!rawMsg && typeof data.content === 'string') {
+            rawMsg = data.content;
+        }
         visible = typeof data.visible_markdown === 'string' ? data.visible_markdown : '';
         thoughts = Array.isArray(data.thought_segments) ? data.thought_segments : [];
     }

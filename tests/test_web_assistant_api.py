@@ -683,6 +683,71 @@ class TestWebAssistantRoutes(unittest.TestCase):
             )
             self.assertEqual(doc["model_branches"]["m-a"]["messages"], [])
 
+    def test_assistant_session_get_enriches_branch_messages_with_think_split(self):
+        """Branch messages must expose visible_markdown/thought_segments like top-level (dashboard loads branches)."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            rel = "branch_think.json"
+            payload = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "t",
+                "generated_at": "2026-01-01",
+                "model_name": "mx",
+                "vulnerability_name": "SQL Injection",
+                "files": [],
+                "stats": {"total_findings": 0},
+            }
+            (sec / rel).write_text(json.dumps(payload), encoding="utf-8")
+
+            from oasis.helpers.assistant.web.persistence import new_session_id, save_chat_session
+
+            sid = new_session_id()
+            harmony_raw = (
+                "<|channel>thought <channel|>Based on the report, IDOR.\n\n"
+                "## Answer\n\nThe issue is valid."
+            )
+            save_chat_session(
+                sec,
+                rel,
+                sid,
+                [{"role": "user", "content": "q", "at": "t"}],
+                "mx",
+                "SQL Injection",
+            )
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            resp = client.post(
+                "/api/assistant/session-branch",
+                data=json.dumps(
+                    {
+                        "report_path": rel,
+                        "session_id": sid,
+                        "model": "mx",
+                        "messages": [
+                            {"role": "user", "content": "u1", "at": "t"},
+                            {"role": "assistant", "content": harmony_raw, "at": "t"},
+                        ],
+                        "vulnerability_name": "SQL Injection",
+                        "set_as_active": True,
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            doc = json.loads(
+                client.get(f"/api/assistant/session?report_path={rel}&session_id={sid}").get_data(as_text=True)
+            )
+            am = doc["model_branches"]["mx"]["messages"][1]
+            self.assertEqual(am.get("role"), "assistant")
+            self.assertEqual(am.get("thought_segments"), ["Based on the report, IDOR."])
+            self.assertEqual(am.get("visible_markdown"), "## Answer\n\nThe issue is valid.")
+
     def test_assistant_chat_visible_and_thought_split(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)

@@ -1757,10 +1757,25 @@ class WebServer:
             if not doc:
                 return jsonify({'error': 'session not found'}), 404
             doc = ensure_session_views(doc)
+            doc = dict(doc)
             msgs = doc.get('messages')
             if isinstance(msgs, list):
-                doc = dict(doc)
                 doc['messages'] = enrich_messages_for_response([m for m in msgs if isinstance(m, dict)])
+            branches = doc.get('model_branches')
+            if isinstance(branches, dict):
+                coerced_branches: Dict[str, Any] = {}
+                for bk, branch in branches.items():
+                    if isinstance(branch, dict):
+                        branch_copy = dict(branch)
+                        bm = branch_copy.get('messages')
+                        if isinstance(bm, list):
+                            branch_copy['messages'] = enrich_messages_for_response(
+                                [m for m in bm if isinstance(m, dict)]
+                            )
+                        coerced_branches[bk] = branch_copy
+                    else:
+                        coerced_branches[bk] = branch
+                doc['model_branches'] = coerced_branches
             return jsonify(doc)
 
         @app.route('/api/assistant/session', methods=['DELETE'])
