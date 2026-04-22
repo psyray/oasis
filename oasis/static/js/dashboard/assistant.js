@@ -1440,6 +1440,27 @@ DashboardApp.mountReportAssistantPanel = function () {
         hd.textContent = txt('msgLabelAssistant', 'Assistant');
         const body = document.createElement('div');
         body.className = 'oasis-assistant-msg-body oasis-assistant-msg-body--rich';
+
+        // Reasoning (``thinking`` channel) lives in a collapsible block so it
+        // doesn't pollute the answer. Element is created lazily on first delta.
+        let thinkingBlock = null;
+        let thinkingPre = null;
+        const ensureThinkingBlock = function () {
+            if (thinkingBlock) {
+                return;
+            }
+            thinkingBlock = document.createElement('details');
+            thinkingBlock.className = 'oasis-assistant-think oasis-assistant-think--live';
+            thinkingBlock.open = true;
+            const summary = document.createElement('summary');
+            summary.textContent = txt('msgLabelReasoning', 'Reasoning');
+            thinkingPre = document.createElement('pre');
+            thinkingPre.className = 'oasis-assistant-think-pre';
+            thinkingBlock.appendChild(summary);
+            thinkingBlock.appendChild(thinkingPre);
+            body.insertBefore(thinkingBlock, body.firstChild);
+        };
+
         const streamNode = document.createElement('pre');
         streamNode.className = 'oasis-assistant-stream';
         const cursor = document.createElement('span');
@@ -1454,6 +1475,7 @@ DashboardApp.mountReportAssistantPanel = function () {
         logEl.scrollTop = logEl.scrollHeight;
 
         let accumulated = '';
+        let thinkingAcc = '';
         let scrollScheduled = false;
         const scheduleScroll = function () {
             if (scrollScheduled) {
@@ -1468,16 +1490,26 @@ DashboardApp.mountReportAssistantPanel = function () {
 
         return {
             row: row,
-            appendText: function (text) {
+            appendText: function (text, channel) {
                 if (!text) {
                     return;
                 }
-                accumulated += String(text);
-                streamNode.textContent = accumulated;
+                const safe = String(text);
+                if (channel === 'thinking') {
+                    thinkingAcc += safe;
+                    ensureThinkingBlock();
+                    thinkingPre.textContent = thinkingAcc;
+                } else {
+                    accumulated += safe;
+                    streamNode.textContent = accumulated;
+                }
                 scheduleScroll();
             },
             getAccumulated: function () {
                 return accumulated;
+            },
+            getThinking: function () {
+                return thinkingAcc;
             },
             remove: function () {
                 if (row.parentNode) {
@@ -1488,6 +1520,9 @@ DashboardApp.mountReportAssistantPanel = function () {
                 row.classList.remove('oasis-assistant-msg--streaming');
                 if (cursor.parentNode) {
                     cursor.parentNode.removeChild(cursor);
+                }
+                if (thinkingBlock && thinkingBlock.parentNode) {
+                    thinkingBlock.parentNode.removeChild(thinkingBlock);
                 }
                 const acc = accumulated.trim();
                 const merged =
@@ -1934,6 +1969,7 @@ DashboardApp.mountReportAssistantPanel = function () {
         sendBtn.disabled = true;
 
         let live = null;
+        let streamingErrorShown = false;
 
         const applyFinalReply = function (data) {
             if (budgetHintEl) {
@@ -1972,6 +2008,14 @@ DashboardApp.mountReportAssistantPanel = function () {
             if (live) {
                 live.remove();
             }
+            if (streamingErrorShown) {
+                const msg = DashboardApp._errorMessage(err);
+                appendAssistantMsg({
+                    message:
+                        txt('fallbackErrorPrefix', 'Could not complete request: ') + msg,
+                });
+                return;
+            }
             const msg = DashboardApp._errorMessage(err);
             appendAssistantMsg({ message: 'Error: ' + msg });
         };
@@ -1993,9 +2037,39 @@ DashboardApp.mountReportAssistantPanel = function () {
                 }
             },
             onDelta: function (evt) {
-                if (evt && typeof evt.content === 'string' && evt.content && live) {
-                    live.appendText(evt.content);
+                if (!evt || typeof evt.content !== 'string' || !evt.content || !live) {
+                    return;
                 }
+                // ``channel`` may be "thinking" (reasoning stream) or "content"
+                // (visible answer). Older backends omit it — default to content.
+                const ch = typeof evt.channel === 'string' ? evt.channel : 'content';
+                live.appendText(evt.content, ch);
+            },
+            onError: function (evt) {
+                streamingErrorShown = true;
+                const errField = evt && evt.error;
+                const detail =
+                    typeof errField === 'string' && errField
+                        ? errField
+                        : errField &&
+                            typeof errField === 'object' &&
+                            typeof errField.message === 'string'
+                          ? errField.message
+                          : 'assistant stream error';
+                if (live) {
+                    live.remove();
+                    live = null;
+                }
+                appendAssistantMsg({
+                    message:
+                        txt('streamErrorBeforeRetry', 'Streaming error: ') +
+                        detail +
+                        ' ' +
+                        txt(
+                            'streamRetryHint',
+                            '(retrying with non-streaming request…)'
+                        ),
+                });
             },
         });
 

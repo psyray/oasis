@@ -46,6 +46,7 @@ DashboardApp.ASSISTANT_UI = {
     chatModelsUnavailable: '(models unavailable)',
     msgLabelUser: 'You',
     msgLabelAssistant: 'Assistant',
+    msgLabelReasoning: 'Reasoning',
     questionsIndexTitle: 'Questions',
     ariaQuestionsIndex: 'Question index',
     jumpToQuestion: 'Jump to question',

@@ -172,6 +172,8 @@ class TestWebAssistantRoutes(unittest.TestCase):
             self.assertEqual(
                 [d.get("content") for d in deltas], ["Hel", "lo, ", "world"]
             )
+            # New ``channel`` field tags each delta as content vs thinking.
+            self.assertTrue(all(d.get("channel") == "content" for d in deltas))
             done = events[-1]
             self.assertEqual(done.get("type"), "done")
             self.assertEqual(done.get("message"), "Hello, world")
@@ -190,6 +192,121 @@ class TestWebAssistantRoutes(unittest.TestCase):
             assistant_entries = [m for m in msgs if m.get("role") == "assistant"]
             self.assertTrue(assistant_entries)
             self.assertEqual(assistant_entries[-1].get("content"), "Hello, world")
+
+    def test_assistant_chat_stream_exposes_native_thinking_channel(self):
+        """``message.thinking`` from ollama is forwarded as its own delta channel
+        and surfaces in ``thought_segments`` so the UI can render reasoning
+        separately from the visible answer.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            rel = "rep_stream_thinking.json"
+            payload = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "t",
+                "generated_at": "2026-01-01",
+                "model_name": "m1",
+                "vulnerability_name": "SQL Injection",
+                "files": [],
+                "stats": {"total_findings": 0},
+            }
+            (sec / rel).write_text(json.dumps(payload), encoding="utf-8")
+
+            mock_om = server._get_assistant_ollama_manager()
+            mock_om.chat_stream.return_value = iter(
+                [
+                    {"message": {"thinking": "Analyzing ", "content": ""}},
+                    {"message": {"thinking": "the snippet.", "content": ""}},
+                    {"message": {"thinking": "", "content": "Hello"}},
+                    {"message": {"thinking": "", "content": " world"}},
+                    {"done": True},
+                ]
+            )
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            resp = client.post(
+                "/api/assistant/chat-stream",
+                data=json.dumps(
+                    {"messages": [{"role": "user", "content": "hi"}], "report_path": rel}
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            events = self._parse_ndjson_events(resp.get_data())
+
+            deltas = [e for e in events if e.get("type") == "delta"]
+            thinking_deltas = [d for d in deltas if d.get("channel") == "thinking"]
+            content_deltas = [d for d in deltas if d.get("channel") == "content"]
+            self.assertEqual(
+                [d.get("content") for d in thinking_deltas],
+                ["Analyzing ", "the snippet."],
+            )
+            self.assertEqual(
+                [d.get("content") for d in content_deltas], ["Hello", " world"]
+            )
+
+            done = events[-1]
+            self.assertEqual(done.get("type"), "done")
+            self.assertEqual(done.get("message"), "Hello world")
+            self.assertEqual(done.get("visible_markdown"), "Hello world")
+            self.assertIn("Analyzing the snippet.", done.get("thought_segments", []))
+
+    def test_assistant_chat_stream_strips_harmony_tags_from_visible(self):
+        """Raw ``<|channel>thought <channel|>`` tags emitted by gpt-oss style
+        models must not leak into ``visible_markdown``.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            rel = "rep_stream_harmony.json"
+            payload = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "t",
+                "generated_at": "2026-01-01",
+                "model_name": "m1",
+                "vulnerability_name": "SQL Injection",
+                "files": [],
+                "stats": {"total_findings": 0},
+            }
+            (sec / rel).write_text(json.dumps(payload), encoding="utf-8")
+
+            mock_om = server._get_assistant_ollama_manager()
+            mock_om.chat_stream.return_value = iter(
+                [
+                    {"message": {"content": "<|channel>>thought <channel|>"}},
+                    {"message": {"content": "Some reasoning here.\n\n"}},
+                    {"message": {"content": "The actual answer."}},
+                    {"done": True},
+                ]
+            )
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            resp = client.post(
+                "/api/assistant/chat-stream",
+                data=json.dumps(
+                    {"messages": [{"role": "user", "content": "q"}], "report_path": rel}
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            events = self._parse_ndjson_events(resp.get_data())
+            done = events[-1]
+            self.assertEqual(done.get("type"), "done")
+            self.assertNotIn("<|channel", done.get("visible_markdown", ""))
+            self.assertNotIn("<channel|>", done.get("visible_markdown", ""))
+            self.assertEqual(done.get("visible_markdown"), "The actual answer.")
+            self.assertIn("Some reasoning here.", done.get("thought_segments", []))
 
     def test_assistant_chat_stream_emits_error_event_on_ollama_failure(self):
         with tempfile.TemporaryDirectory() as td:
@@ -278,12 +395,18 @@ class TestWebAssistantRoutes(unittest.TestCase):
             dones = [e for e in events if e.get("type") == "done"]
             self.assertFalse(dones)
 
-            sessions = json.loads(
+            sid = events[0].get("session_id")
+            self.assertIsInstance(sid, str)
+            doc = json.loads(
                 client.get(
-                    f"/api/assistant/sessions?report_path={rel}"
+                    f"/api/assistant/session?report_path={rel}&session_id={sid}"
                 ).get_data(as_text=True)
             )
-            self.assertEqual(sessions, [])
+            msgs = doc.get("messages")
+            self.assertIsInstance(msgs, list)
+            assistant_entries = [m for m in msgs if m.get("role") == "assistant"]
+            self.assertTrue(assistant_entries)
+            self.assertEqual(assistant_entries[-1].get("content"), "x")
 
     def test_assistant_chat_injects_finding_validation_json(self):
         with tempfile.TemporaryDirectory() as td:

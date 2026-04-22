@@ -12,6 +12,8 @@
 ### 🐛 Fixed
 - 💬 Assistant: **`POST /api/assistant/session-branch`** accepts **`messages: []`** (e.g. changing chat model before any message) instead of 400 *messages required*.
 - 🖼️ Dashboard HTML preview: **Executive Summary** reports in canonical JSON no longer error in the preview path.
+- 💬 Assistant streaming: harmony-style reasoning tags emitted by some models (e.g. **gpt-oss** variants like `<|channel>>thought <channel|>`, `<|channel> most_thought <channel|>`, `<|channel|>analysis<|message|>`) are now recognized and extracted into `thought_segments` instead of leaking as raw tokens into `visible_markdown`.
+- 💬 Assistant streaming: ollama-python's native `message.thinking` field is forwarded as its own delta channel (`{type: "delta", channel: "thinking"}`), rendered live in a collapsible reasoning block, and appended to `thought_segments` at completion so the visible answer stays clean when `think=True` is negotiated.
 
 ## 🚀 [0.5.0] - 2026-04-20
 

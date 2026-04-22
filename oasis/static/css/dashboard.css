@@ -2611,6 +2611,20 @@ body.modal-open {
     max-height: 8rem;
     overflow: auto;
     white-space: pre-wrap;
+    word-break: break-word;
+    font-family: inherit;
+    font-size: inherit;
+    line-height: 1.4;
+}
+.oasis-assistant-think--live {
+    opacity: 0.9;
+    border-left: 2px solid var(--turquoise, #38b2ac);
+    padding-left: 0.4rem;
+}
+.oasis-assistant-think--live summary::after {
+    content: ' ▍';
+    color: var(--turquoise, #38b2ac);
+    animation: oasis-assistant-stream-blink 1s steps(2, start) infinite;
 }
 .oasis-assistant-log .oasis-assistant-md {
     white-space: normal;

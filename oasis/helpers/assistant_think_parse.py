@@ -19,14 +19,45 @@ class AssistantThinkSplit:
     thought_segments: List[str]
 
 
-# Open: ``<|channel>`` + one or more ``thought`` tokens; close: ``<channel|>`` or ``<|channel|>``
-# (provider output varies; some models repeat ``thought`` or use a symmetric close tag).
+# Harmony-style reasoning channel opener (OpenAI gpt-oss et al.).
+#
+# Observed variants from streaming output:
+# - ``<|channel>thought <channel|>`` (asymmetric pipes, short label)
+# - ``<|channel>thought thought <channel|>`` (duplicated label token)
+# - ``<|channel>>thought <channel|>`` (stray ``>`` glued to opener)
+# - ``<|channel> most_thought <channel|>`` (prefixed label)
+# - ``<|channel|>analysis<|message|>`` (fully symmetric harmony form)
+# - ``<|channel|>commentary<|message|>``
+#
+# The label word is one of ``thought``/``analysis``/``reasoning``/``commentary``
+# optionally surrounded by ``\w``/``-``; the opener may have stray ``>`` or repeats.
 _CHANNEL_THOUGHT_OPEN = re.compile(
-    r"<\|channel>\s*(?:thought\s*)+"
+    r"<\|?channel\|?>"                           # <|channel>, <channel|>, or <|channel|>
+    r"[\s>]*"                                    # tolerate stray '>' / whitespace tokens
+    r"(?:[\w\-]*"                                # optional label prefix (e.g. ``most_``)
+    r"(?:thought|analysis|reasoning|commentary)" # reasoning channel keyword
+    r"[\w\-]*\s*)+"                              # optional suffix / repeated label tokens
     r"(?:"
-    r"<\s*channel\s*\|>"  # e.g. <channel|>
-    r"|<\s*\|channel\|>"  # e.g. <|channel|>
+    r"<\s*channel\s*\|>"                         # <channel|>
+    r"|<\s*\|channel\|>"                         # <|channel|>
+    r"|<\s*\|?message\|?>"                       # <|message|>, <message|>
     r")",
+    re.IGNORECASE,
+)
+
+# Harmony boundaries that terminate a reasoning segment (``<|end|>``/``<|return|>``/``<|start|>``).
+_HARMONY_SEGMENT_END = re.compile(
+    r"<\|?(?:end|return|start)\|?>",
+    re.IGNORECASE,
+)
+
+# Stray harmony/channel tokens to strip from the visible body when they survive
+# structured extraction (partial tokenization, truncated streams, unknown labels).
+_STRAY_HARMONY_TOKEN = re.compile(
+    r"<\|?"
+    r"(?:channel|message|start|end|return|refusal|analysis|final|system|user|assistant"
+    r"|thought|reasoning|commentary)"
+    r"\|?>",
     re.IGNORECASE,
 )
 
@@ -45,8 +76,9 @@ _THINK_BLOCK_PATTERNS: tuple[re.Pattern[str], ...] = (
 def _strip_channel_thought_prefix(work: str, segments: List[str]) -> str:
     """Extract ``<|channel>thought … <|channel|>`` segments.
 
-    End of segment: next channel opener if any (handles multiple reasoning blocks back-to-back),
-    else first ``\\n\\n`` (thought vs reply), else end of string.
+    End of segment (earliest wins): next channel opener (multiple reasoning blocks
+    back-to-back), harmony boundary token (``<|end|>``/``<|return|>``/``<|start|>``),
+    or first ``\\n\\n`` (thought vs reply). Falls back to end of string.
     """
     while True:
         m = _CHANNEL_THOUGHT_OPEN.search(work)
@@ -54,23 +86,40 @@ def _strip_channel_thought_prefix(work: str, segments: List[str]) -> str:
             return work
         before = work[: m.start()]
         tail = work[m.end() :]
+
         next_open = _CHANNEL_THOUGHT_OPEN.search(tail)
+        end_tok = _HARMONY_SEGMENT_END.search(tail)
         para_idx = tail.find("\n\n")
 
-        if next_open is not None and (para_idx == -1 or next_open.start() < para_idx):
-            end = next_open.start()
-            thought_body = tail[:end].strip()
-            # Keep remainder starting at the next opener so the outer loop extracts it too.
-            work = before + tail[end:]
-        elif para_idx != -1:
-            thought_body = tail[:para_idx].strip()
-            work = before + tail[para_idx + 2 :]
-        else:
-            thought_body = tail.strip()
-            work = before
+        # Earliest terminator wins so reasoning never swallows the real reply.
+        candidates: List[tuple[int, str, Any]] = []
+        if next_open is not None:
+            candidates.append((next_open.start(), "next_open", next_open))
+        if end_tok is not None:
+            candidates.append((end_tok.start(), "end_tok", end_tok))
+        if para_idx != -1:
+            candidates.append((para_idx, "para", None))
 
+        if not candidates:
+            thought_body = tail.strip()
+            if thought_body:
+                segments.append(thought_body)
+            work = before
+            continue
+
+        candidates.sort(key=lambda t: t[0])
+        pos, kind, obj = candidates[0]
+        thought_body = tail[:pos].strip()
         if thought_body:
             segments.append(thought_body)
+
+        if kind == "next_open":
+            # Preserve the next opener so the outer loop extracts it too.
+            work = before + tail[pos:]
+        elif kind == "end_tok" and obj is not None:
+            work = before + tail[pos + (obj.end() - obj.start()) :]
+        else:  # "para"
+            work = before + tail[pos + 2 :]
 
 
 def parse_assistant_think(text: str) -> AssistantThinkSplit:
@@ -91,6 +140,9 @@ def parse_assistant_think(text: str) -> AssistantThinkSplit:
             if inner:
                 segments.append(inner)
             work = work[: m.start()] + work[m.end() :]
+    # Final safety net: drop stray harmony tokens that survived structured extraction
+    # (partial tokenization during streaming, unknown channel labels, truncated streams).
+    work = _STRAY_HARMONY_TOKEN.sub("", work)
     return AssistantThinkSplit(visible_markdown=work.strip(), thought_segments=segments)
 
 
