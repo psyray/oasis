@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from oasis.helpers.assistant_scan_aggregate import build_aggregate_assistant_document
+from oasis.helpers.assistant.scan.scan_aggregate import build_aggregate_assistant_document
 
 
 class TestBuildAggregateAssistantDocument(unittest.TestCase):

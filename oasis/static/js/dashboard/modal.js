@@ -192,7 +192,7 @@ DashboardApp._syncReportModalBackButton = function() {
     if (!back) {
         return;
     }
-    const stack = DashboardApp.reportModalState.stack;
+    const {stack} = DashboardApp.reportModalState;
     const depth = stack && stack.length ? stack.length : 0;
     back.style.display = depth ? 'inline-flex' : 'none';
 };
@@ -271,10 +271,8 @@ DashboardApp.openReport = function(path, format, options) {
 
     const prevPath = DashboardApp.reportModalState.currentPath || '';
     const prevFormat = DashboardApp.reportModalState.currentFormat || '';
-    if (prevPath !== path || prevFormat !== format) {
-        if (typeof DashboardApp.resetAssistantPanelForModalNavigation === 'function') {
-            DashboardApp.resetAssistantPanelForModalNavigation();
-        }
+    if ((prevPath !== path || prevFormat !== format) && typeof DashboardApp.resetAssistantPanelForModalNavigation === 'function') {
+          DashboardApp.resetAssistantPanelForModalNavigation();
     }
 
     const opts = Object.assign(

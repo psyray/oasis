@@ -46,9 +46,38 @@ DashboardApp.ASSISTANT_UI = {
     chatModelsUnavailable: '(models unavailable)',
     msgLabelUser: 'You',
     msgLabelAssistant: 'Assistant',
+    msgLabelReasoning: 'Reasoning',
     questionsIndexTitle: 'Questions',
     ariaQuestionsIndex: 'Question index',
     jumpToQuestion: 'Jump to question',
     copyCode: 'Copy',
     copiedCode: 'Copied',
+    validateButton: 'Validate this finding',
+    validateRunning: 'Validating…',
+    validateHeader: 'Finding validation',
+    validateStatusLabel: 'Status',
+    validateConfidenceLabel: 'Confidence',
+    validateFamilyLabel: 'Family',
+    validateEvidenceHeader: 'Evidence',
+    validateEntryPointsLabel: 'Entry points',
+    validatePathsLabel: 'Execution paths',
+    validateFlowsLabel: 'Taint flows',
+    validateMitigationsLabel: 'Mitigations',
+    validateControlsLabel: 'Access controls',
+    validateConfigLabel: 'Config findings',
+    validateEmpty: 'No evidence recorded.',
+    validateErrorPrefix: 'Validation failed: ',
+    validateMissingScanRoot:
+        'Re-run the scan or set scan_root in the report to enable validation.',
+    validateTargetScopeLabel: 'Report',
+    validateTargetIncomplete: 'Select file, chunk, and finding for validation scope.',
 };
+
+/** CSS suffixes for ``oasis-assistant-validate-sev--*`` (must match ``ConfigFinding.severity`` in ``oasis/schemas/analysis.py``). */
+DashboardApp.ASSISTANT_VALIDATE_SEVERITY_SUFFIXES = Object.freeze([
+    'info',
+    'low',
+    'medium',
+    'high',
+    'critical',
+]);

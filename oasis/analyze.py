@@ -54,7 +54,7 @@ from .helpers.langgraph_cli import (
     separator_file_scope,
     separator_vulnerability,
 )
-from .helpers.context_expand import expand_suspicious_chunk_records
+from .helpers.context.expand import expand_suspicious_chunk_records
 from .helpers.poc import (
     POC_DIGEST_JSON_MAX_CHARS,
     build_compact_findings_digest,

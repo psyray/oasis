@@ -485,6 +485,23 @@ DashboardApp.fetchAssistantSession = function (reportPath, sessionId) {
     });
 };
 
+/** Persist messages for one chat model branch (``POST /api/assistant/session-branch``). */
+DashboardApp.postAssistantSessionBranch = function (payload) {
+    return fetch('/api/assistant/session-branch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload || {}),
+    }).then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const err = data && data.error ? data.error : `HTTP ${response.status}`;
+            throw new Error(err);
+        }
+        return data;
+    });
+};
+
 DashboardApp.fetchAssistantChatModels = function () {
     return fetch('/api/assistant/chat-models', {
         credentials: 'same-origin',
@@ -497,7 +514,7 @@ DashboardApp.fetchAssistantChatModels = function () {
             const err = data && data.error ? data.error : `HTTP ${response.status}`;
             throw new Error(err);
         }
-        const models = data.models;
+        const {models} = data;
         return Array.isArray(models) ? models : [];
     });
 };
@@ -538,6 +555,130 @@ DashboardApp.postAssistantChat = function (payload) {
     });
 };
 
+/**
+ * Stream an assistant reply from ``POST /api/assistant/chat-stream``.
+ *
+ * The server emits newline-delimited JSON events: ``{type: 'start', ...}``,
+ * any number of ``{type: 'delta', content: '...'}``, then a single terminal
+ * ``{type: 'done', ...}`` or ``{type: 'error', error: '...'}``.
+ *
+ * ``callbacks`` is an object with optional ``onStart``, ``onDelta``, ``onDone``
+ * and ``onError`` handlers. The returned promise resolves with the final
+ * ``done`` event payload, or rejects when the stream fails (including when
+ * the server advertises ``type: 'error'``). Callers should fall back to
+ * :func:`DashboardApp.postAssistantChat` when this promise rejects and
+ * streaming is not critical.
+ */
+DashboardApp.streamAssistantChat = function (payload, callbacks) {
+    const handlers = callbacks || {};
+    return fetch('/api/assistant/chat-stream', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/x-ndjson',
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload || {}),
+    }).then(async (response) => {
+        if (!response.ok) {
+            let errMsg = `HTTP ${response.status}`;
+            try {
+                const errData = await response.json();
+                if (errData && errData.error) {
+                    errMsg = errData.error;
+                }
+            } catch (e) {
+                /* body was not JSON */
+            }
+            throw new Error(errMsg);
+        }
+        if (!response.body || typeof response.body.getReader !== 'function') {
+            throw new Error('Streaming responses are not supported by this browser');
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        let finalEvent = null;
+        let streamError = null;
+        const streamErrorMessage = function (event) {
+            const err = event && event.error;
+            if (typeof err === 'string' && err) {
+                return err;
+            }
+            if (err && typeof err === 'object' && typeof err.message === 'string') {
+                return err.message;
+            }
+            return 'assistant stream error';
+        };
+        const dispatch = (event) => {
+            if (!event || typeof event !== 'object') {
+                return;
+            }
+            if (event.type === 'start' && typeof handlers.onStart === 'function') {
+                handlers.onStart(event);
+            } else if (event.type === 'delta' && typeof handlers.onDelta === 'function') {
+                handlers.onDelta(event);
+            } else if (event.type === 'done') {
+                finalEvent = event;
+                if (typeof handlers.onDone === 'function') {
+                    handlers.onDone(event);
+                }
+            } else if (event.type === 'error') {
+                if (typeof handlers.onError === 'function') {
+                    handlers.onError(event);
+                }
+                streamError = streamErrorMessage(event);
+            }
+        };
+        const flushBuffer = (force) => {
+            let newlineIdx;
+            while (streamError === null && (newlineIdx = buffer.indexOf('\n')) !== -1) {
+                const line = buffer.slice(0, newlineIdx).trim();
+                buffer = buffer.slice(newlineIdx + 1);
+                if (!line) {
+                    continue;
+                }
+                let parsed = null;
+                try {
+                    parsed = JSON.parse(line);
+                } catch (e) {
+                    continue;
+                }
+                dispatch(parsed);
+            }
+            if (streamError === null && force && buffer.trim()) {
+                try {
+                    dispatch(JSON.parse(buffer.trim()));
+                } catch (e) {
+                    /* ignore trailing partial */
+                }
+                buffer = '';
+            }
+        };
+        while (true) {
+            const { value, done } = await reader.read();
+            if (value) {
+                buffer += decoder.decode(value, { stream: !done });
+                flushBuffer(false);
+            }
+            if (streamError !== null) {
+                break;
+            }
+            if (done) {
+                flushBuffer(true);
+                break;
+            }
+        }
+        if (streamError !== null) {
+            throw new Error(streamError);
+        }
+        if (!finalEvent) {
+            throw new Error('assistant stream closed before completion');
+        }
+        return finalEvent;
+    });
+};
+
 DashboardApp.deleteAssistantSession = function (reportPath, sessionId) {
     return fetch('/api/assistant/session', {
         method: 'DELETE',
@@ -562,6 +703,27 @@ DashboardApp.fetchReportJsonPayload = function (reportPath) {
     }
     const url = `/api/report-json/${encodeURIComponent(rel)}`;
     return fetch(url, { credentials: 'same-origin' }).then(async function (response) {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const err = data && data.error ? data.error : `HTTP ${response.status}`;
+            throw new Error(err);
+        }
+        return data;
+    });
+};
+
+/**
+ * Call the finding-validation endpoint. Payload mirrors the POST body
+ * accepted by ``/api/assistant/investigate`` in ``oasis.web``; callers pass
+ * ``{ report_path, file_index, chunk_index, finding_index, vulnerability_name?, scan_root?, budget_seconds? }``.
+ */
+DashboardApp.postAssistantInvestigate = function (payload) {
+    return fetch('/api/assistant/investigate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload || {}),
+    }).then(async (response) => {
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
             const err = data && data.error ? data.error : `HTTP ${response.status}`;

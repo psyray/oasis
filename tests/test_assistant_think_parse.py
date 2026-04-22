@@ -2,7 +2,7 @@
 
 import unittest
 
-from oasis.helpers.assistant_think_parse import (
+from oasis.helpers.assistant.think.think_parse import (
     enrich_assistant_message_dict,
     enrich_messages_for_response,
     parse_assistant_think,
@@ -120,6 +120,55 @@ class TestAssistantThinkParse(unittest.TestCase):
         split = parse_assistant_think(raw)
         self.assertEqual(split.thought_segments, ["reasoning notes.", "later block."])
         self.assertEqual(split.visible_markdown, "Visible reply starts here.")
+
+    def test_channel_thought_stray_angle_bracket_token(self):
+        # Streaming tokenization sometimes emits a lone ``>`` between the opener
+        # and the label (observed with gpt-oss).
+        raw = (
+            "<|channel>>thought <channel|>Reasoning body.\n\n"
+            "Final answer here."
+        )
+        split = parse_assistant_think(raw)
+        self.assertEqual(split.thought_segments, ["Reasoning body."])
+        self.assertEqual(split.visible_markdown, "Final answer here.")
+
+    def test_channel_thought_prefixed_label(self):
+        # Some runs prefix the label (``most_thought``/``deep_thought``).
+        raw = (
+            "<|channel> most_thought <channel|>Deep reasoning.\n\n"
+            "Visible reply."
+        )
+        split = parse_assistant_think(raw)
+        self.assertEqual(split.thought_segments, ["Deep reasoning."])
+        self.assertEqual(split.visible_markdown, "Visible reply.")
+
+    def test_channel_analysis_symmetric_harmony(self):
+        # Full harmony form: ``<|channel|>analysis<|message|>`` terminated by ``<|end|>``.
+        raw = (
+            "<|channel|>analysis<|message|>Internal steps...<|end|>"
+            "<|start|>assistant<|channel|>final<|message|>Actual reply."
+        )
+        split = parse_assistant_think(raw)
+        self.assertEqual(split.thought_segments, ["Internal steps..."])
+        # Stray harmony tokens (``<|start|>``/``<|channel|>``/``final``/``<|message|>``)
+        # survive structured extraction but are stripped by the final safety net.
+        self.assertNotIn("<|", split.visible_markdown)
+        self.assertIn("Actual reply.", split.visible_markdown)
+
+    def test_channel_commentary_label(self):
+        raw = "<|channel>commentary <channel|>meta notes.\n\nReply text."
+        split = parse_assistant_think(raw)
+        self.assertEqual(split.thought_segments, ["meta notes."])
+        self.assertEqual(split.visible_markdown, "Reply text.")
+
+    def test_stray_harmony_tokens_stripped_from_visible(self):
+        # Partial tokens (truncated streams) should not leak into the UI.
+        raw = "<|channel|>Hello<|end|>world"
+        split = parse_assistant_think(raw)
+        # ``<|channel|>`` without a reasoning label doesn't match the structured
+        # opener, but the stray-token filter still removes it.
+        self.assertNotIn("<|channel|>", split.visible_markdown)
+        self.assertNotIn("<|end|>", split.visible_markdown)
 
 
 if __name__ == "__main__":

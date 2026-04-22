@@ -70,42 +70,73 @@ from .helpers.dashboard import (
 from .helpers.progress import SCAN_PROGRESS_EXTENDED_KEYS, coerce_scan_progress_event_version
 from .report import Report, executive_summary_progress_sidecar_path, is_executive_summary_progress_sidecar
 from .ollama_manager import OllamaManager
-from .helpers.assistant_rag import (
+from .helpers.assistant.web.rag import (
     embedding_cache_file_path,
-    json_finding_slice,
     load_embedding_code_base,
+    resolve_assistant_cache_root,
     retrieve_relevant_snippets,
 )
-from .helpers.path_containment import is_path_within_root
-from .helpers.assistant_api_validate import (
+from .helpers.context.path_containment import is_path_within_root
+from .helpers.assistant.web.api_validate import (
     coerce_finding_indices,
     normalize_report_rel_query_arg,
     resolve_assistant_primary_payload,
     validate_assistant_messages,
 )
-from .helpers.assistant_persistence import (
+from .helpers.assistant.prompt.chat_context import (
+    assemble_verdict_first_prompt,
+    compute_verdict_first_subbudgets,
+    shrink_rag_block,
+    shrink_user_labels_block,
+)
+from .helpers.assistant.prompt.prompt_tuning import REPORT_SUMMARY_AGGREGATE_MERGE_BUDGET_FACTOR
+from .helpers.assistant.prompt.report_excerpt import compact_report_excerpt
+from .helpers.assistant.web.http_contract import (
+    ERR_AGGREGATE_REQUIRES_EXECUTIVE,
+    ERR_CHAT_MODEL_REQUIRED,
+    ERR_COULD_NOT_READ_REPORT,
+    ERR_INVALID_JSON,
+    ERR_INVALID_REPORT,
+    ERR_REPORT_PATH_REQUIRED,
+    HTTP_BAD_REQUEST,
+    HTTP_INTERNAL,
+    HTTP_UNPROCESSABLE,
+    assistant_http_error,
+)
+from .helpers.assistant.web.web_prepare import (
+    build_assistant_finding_json_prompt_block,
+    build_report_summary_payload,
+    extract_last_user_message_text,
+    full_messages_from_system_and_dialogue,
+    prepare_aggregate_branch_paths,
+    resolve_assistant_chat_model,
+)
+from .helpers.assistant.web.persistence import (
     delete_all_chat_sessions,
     delete_chat_session,
+    ensure_session_views,
+    finding_validation_storage_key,
+    get_finding_validation_for_branch,
     list_chat_sessions,
     load_chat_session,
+    merge_finding_validation_into_session,
     new_session_id,
+    normalize_validated_messages_for_storage,
     save_chat_session,
+    save_session_branch_messages,
     utc_now_iso,
     validate_session_id,
 )
-from .helpers.assistant_think_parse import enrich_messages_for_response, parse_assistant_think
-from .helpers.assistant_context_budget import assistant_total_system_budget_chars
-from .helpers.assistant_scan_aggregate import (
-    build_aggregate_assistant_document,
-    first_vulnerability_payload_from_paths,
-    iter_json_report_paths_in_model_dir,
-    model_directory_from_security_report_file,
-    union_file_paths_from_vulnerability_payloads,
+from .helpers.assistant.think.think_parse import (
+    AssistantThinkSplit,
+    enrich_messages_for_response,
+    parse_assistant_think,
 )
-from .helpers.executive_dashboard_preview import augment_executive_markdown_preview_html
-from .helpers.executive_modal_chart_meta import rollup_severity_counts_from_model_dir
-from .helpers.executive_assistant_scope import (
-    resolve_aggregate_finding_scope_payload,
+from .helpers.assistant.prompt.context_budget import assistant_total_system_budget_chars
+from .helpers.assistant.scan.scan_aggregate import model_directory_from_security_report_file
+from .helpers.executive.dashboard_preview import augment_executive_markdown_preview_html
+from .helpers.executive.modal_chart_meta import rollup_severity_counts_from_model_dir
+from .helpers.executive.assistant_scope import (
     synthetic_executive_primary_payload,
     vulnerability_reports_for_executive_assistant,
 )
@@ -150,10 +181,25 @@ class WebServer:
     _ASSISTANT_MAX_MESSAGES = 40
     _ASSISTANT_MAX_MESSAGE_CHARS = 12000
     _ASSISTANT_SYSTEM_INTRO_PREFIX = (
-        'You are a defensive security assistant helping triage static-analysis findings '
-        'and understand code context. Only provide guidance for authorized testing. '
-        'Prefer citing file paths from REPORT_JSON_EXCERPT or RETRIEVAL_CONTEXT.\n\n'
-        'REPORT_JSON_EXCERPT:\n'
+        "You are a defensive security assistant helping triage static-analysis findings "
+        "and understand code context. Only provide guidance for authorized testing.\n"
+        "\n"
+        "Authoritative sources (strict):\n"
+        "- Treat FINDING_VALIDATION_JSON as the ground-truth verdict. Never contradict its "
+        "`status`, `confidence`, `family`, `vulnerability_name`, or `summary` fields. "
+        "If those fields mark the finding as `confirmed_exploitable`, do NOT call it a "
+        "false positive; if marked `false_positive`, do not call it exploitable.\n"
+        "- When FINDING_VALIDATION_JSON is absent, say so explicitly instead of inventing a verdict.\n"
+        "- Cite only file paths and line numbers that appear in FINDING_VALIDATION_JSON, "
+        "SELECTED_FINDING_JSON, RETRIEVAL_CONTEXT, or REPORT_SUMMARY. Never fabricate paths, "
+        "line numbers, or frameworks.\n"
+        "\n"
+        "Output requirements:\n"
+        "- Reply in concise Markdown (3–6 short paragraphs, optional bullet lists). "
+        "No JSON, no code fences wrapping the whole answer.\n"
+        "- Do not emit internal channel tokens (e.g. `<|channel>`, `<bos>`, `<|turn|>`), "
+        "reasoning tags, or raw tokenizer artifacts.\n"
+        "- Stay in English unless the user writes in another language first.\n"
     )
 
     def __init__(
@@ -205,6 +251,35 @@ class WebServer:
                 self.security_dir,
             )
         self.security_dir.mkdir(parents=True, exist_ok=True)
+
+    def _assistant_llm_debug_payload(self, prep: Dict[str, Any]) -> Dict[str, Any]:
+        """Structured metadata logged alongside Ollama messages when ``self.debug`` is True."""
+        sl = prep.get("section_lengths")
+        if sl is not None and hasattr(sl, "to_dict"):
+            sl = sl.to_dict()  # VerdictSectionLengths
+        return {
+            "chat_model": prep.get("chat_model"),
+            "report_rel": prep.get("report_rel"),
+            "session_id_hint": prep.get("session_id_hint"),
+            "aggregate_mode": prep.get("aggregate_mode"),
+            "total_budget": prep.get("total_budget"),
+            "runtime_num_ctx": prep.get("runtime_num_ctx"),
+            "context_source": prep.get("context_source"),
+            "excerpt_truncated": prep.get("excerpt_truncated"),
+            "rag_unavailable": prep.get("rag_unavailable"),
+            "section_lengths": sl,
+            "validated_dialogue_messages": prep.get("messages"),
+        }
+
+    def _log_assistant_llm_debug(self, event: str, payload: Dict[str, Any]) -> None:
+        """Log full assistant ↔ Ollama payloads when running ``oasis --web --debug``."""
+        if not self.debug:
+            return
+        try:
+            body = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+        except Exception:
+            body = repr(payload)
+        logger.debug("[assistant_llm] %s\n%s", event, body)
 
     def run(self):
         """Serve reports via a web interface."""
@@ -272,9 +347,19 @@ class WebServer:
         # Determine the host based on the expose setting
         host = '127.0.0.1' if self.web_expose == 'local' else '0.0.0.0'
         
-        # Run the server
+        # Run the server. When ``debug=True``, Werkzeug's reloader would spawn a
+        # child process that re-runs this entrypoint: a new random ``web_password``
+        # and ``secret_key`` are generated, so the password printed in the parent
+        # no longer matches — login always fails. Disable the reloader; Flask
+        # still serves interactive tracebacks.
         if self.debug:
-            self.socketio.run(app, debug=True, host=host, port=self.web_port)
+            self.socketio.run(
+                app,
+                debug=True,
+                use_reloader=False,
+                host=host,
+                port=self.web_port,
+            )
         else:
             self.socketio.run(app, host=host, port=self.web_port)
 
@@ -531,8 +616,7 @@ class WebServer:
         ):
             if raw is None:
                 continue
-            candidate = str(raw).strip()
-            if candidate:
+            if candidate := str(raw).strip():
                 return candidate
         return str(OLLAMA_URL).strip()
 
@@ -550,15 +634,22 @@ class WebServer:
                 return em.strip()
         return str(DEFAULT_ARGS.get("EMBED_MODEL") or "nomic-embed-text")
 
-    def _assistant_reserved_chars_for_extras(self) -> int:
-        total = self._ASSISTANT_MAX_TOTAL_REPORT_CHARS
-        r = int(total * 0.25)
-        return max(512, min(4096, r))
+    def _assistant_chat_options(
+        self, prep: Dict[str, Any], *, temperature: float
+    ) -> Dict[str, Any]:
+        """
+        Build Ollama chat ``options`` dict.
 
-    @staticmethod
-    def _assistant_reserved_chars_for_total_budget(total_budget: int) -> int:
-        r = int(max(1, total_budget) * 0.25)
-        return max(512, min(4096, r))
+        When the resolved runtime ``num_ctx`` is known (via ``ps()`` or
+        ``Modelfile``), it is forwarded so Ollama is asked to honor the same
+        context window the budget calculation assumes. Falls back to just
+        ``temperature`` when the runtime window cannot be determined.
+        """
+        options: Dict[str, Any] = {'temperature': temperature}
+        runtime_num_ctx = prep.get('runtime_num_ctx')
+        if isinstance(runtime_num_ctx, int) and runtime_num_ctx > 0:
+            options['num_ctx'] = runtime_num_ctx
+        return options
 
     def _assistant_run_rag_retrieval(
         self,
@@ -571,8 +662,7 @@ class WebServer:
     ) -> Tuple[str, bool]:
         """Return ``(rag_block, rag_unavailable)`` for assistant context."""
         em_model = self._embed_model_for_assistant(report_payload)
-        ar = report_payload.get("analysis_root")
-        root_path = Path(ar).resolve() if isinstance(ar, str) and ar.strip() else self.input_path_absolute
+        root_path = resolve_assistant_cache_root(report_payload, self.input_path_absolute)
         cache_path = embedding_cache_file_path(root_path, em_model)
 
         try:
@@ -644,6 +734,432 @@ class WebServer:
             return "", True
 
         return rag_block, False
+
+    def _prepare_assistant_chat_context(self, data: Any):
+        """Build the assistant chat context shared by JSON and streaming endpoints.
+
+        Returns either a context dict ready for an LLM call or a ``(err_body, status)``
+        tuple the route can surface to the client via ``jsonify``.
+
+        The dict contains: ``full_messages`` (list for ollama), ``chat_model``,
+        ``messages`` (validated user-visible), ``primary_payload``, ``report_rel``,
+        ``aggregate_mode``, ``rag_unavailable``, ``total_budget``, ``excerpt_truncated``
+        and ``session_id_hint`` (raw session_id from request, may be ``None``).
+        """
+        if not isinstance(data, dict):
+            return assistant_http_error(ERR_INVALID_JSON, HTTP_BAD_REQUEST)
+
+        messages, msg_err = validate_assistant_messages(
+            data.get('messages'),
+            max_messages=self._ASSISTANT_MAX_MESSAGES,
+            max_message_chars=self._ASSISTANT_MAX_MESSAGE_CHARS,
+        )
+        if msg_err is not None:
+            return msg_err
+        assert messages is not None
+
+        approx_msg_chars = sum(
+            len(str(m.get('content') or '')) for m in messages if isinstance(m, dict)
+        )
+
+        report_rel_raw = str(data.get('report_path') or '').strip()
+        if not report_rel_raw:
+            return assistant_http_error(ERR_REPORT_PATH_REQUIRED, HTTP_BAD_REQUEST)
+
+        security_root = self.security_dir.resolve()
+        resolved_report, primary_synthetic, path_err = resolve_assistant_primary_payload(
+            self.security_dir,
+            report_rel_raw,
+        )
+        if path_err is not None:
+            return path_err
+        assert resolved_report is not None
+
+        aggregate_mode = bool(data.get('aggregate_model_json'))
+        if aggregate_mode and resolved_report.stem.lower() != '_executive_summary':
+            return assistant_http_error(ERR_AGGREGATE_REQUIRES_EXECUTIVE, HTTP_BAD_REQUEST)
+
+        if primary_synthetic is not None:
+            primary_payload = primary_synthetic
+        else:
+            try:
+                with open(resolved_report, 'r', encoding='utf-8') as rf:
+                    primary_payload = json.load(rf)
+            except Exception:
+                return assistant_http_error(ERR_COULD_NOT_READ_REPORT, HTTP_INTERNAL)
+        if not isinstance(primary_payload, dict):
+            return assistant_http_error(ERR_INVALID_REPORT, HTTP_UNPROCESSABLE)
+
+        report_rel = str(resolved_report.relative_to(security_root)).replace('\\', '/')
+
+        json_paths_for_union: List[Path] = []
+        extra_rag_paths: Optional[List[str]] = None
+        rag_source_payload: Dict[str, Any] = primary_payload
+        md_obj: Optional[Path] = None
+
+        if aggregate_mode:
+            md_obj, json_paths_for_union, rag_source_payload, extra_rag_paths, agg_err = (
+                prepare_aggregate_branch_paths(
+                    security_root,
+                    resolved_report,
+                    primary_payload,
+                )
+            )
+            if agg_err is not None:
+                return agg_err
+
+        chat_model = resolve_assistant_chat_model(
+            data,
+            primary_payload,
+            aggregate_mode,
+            json_paths_for_union,
+            rag_source_payload,
+        )
+        if not chat_model:
+            return assistant_http_error(ERR_CHAT_MODEL_REQUIRED, HTTP_BAD_REQUEST)
+
+        total_budget, budget_meta = assistant_total_system_budget_chars(
+            fallback_total=self._ASSISTANT_MAX_TOTAL_REPORT_CHARS,
+            ollama_manager=self._get_assistant_ollama_manager(),
+            chat_model=chat_model,
+            approx_message_chars_in_request=approx_msg_chars,
+        )
+        subbudgets = compute_verdict_first_subbudgets(total_budget)
+        report_sum_budget = subbudgets["report_summary"]
+        # Merge aggregate JSON with extra headroom; final system prompt size is
+        # capped by ``compact_report_excerpt`` to ``report_sum_budget`` (see tuning doc).
+        merge_budget = report_sum_budget * REPORT_SUMMARY_AGGREGATE_MERGE_BUDGET_FACTOR
+        report_summary_payload, excerpt_truncated = build_report_summary_payload(
+            aggregate_mode=aggregate_mode,
+            json_paths_for_union=json_paths_for_union,
+            security_root=security_root,
+            primary_payload=primary_payload,
+            aggregate_char_budget=merge_budget,
+        )
+        report_summary_text = compact_report_excerpt(
+            report_summary_payload,
+            max_chars=report_sum_budget,
+        )
+
+        fi, ci, gi = coerce_finding_indices(data)
+        finding_scope_for_key = ''
+        if aggregate_mode:
+            scope_raw = data.get('finding_scope_report_path')
+            if isinstance(scope_raw, str) and scope_raw.strip():
+                finding_scope_for_key = scope_raw.strip()
+        finding_key_for_prompt = finding_validation_storage_key(
+            finding_scope_for_key,
+            fi,
+            ci,
+            gi,
+        )
+        finding_json, finding_scope_err = build_assistant_finding_json_prompt_block(
+            aggregate_mode=aggregate_mode,
+            primary_payload=primary_payload,
+            data=data,
+            security_root=security_root,
+            resolved_report=resolved_report,
+            md_obj=md_obj,
+            fi=fi,
+            ci=ci,
+            gi=gi,
+            finding_max=subbudgets['selected_finding'],
+        )
+        if finding_scope_err is not None:
+            return assistant_http_error(finding_scope_err, HTTP_BAD_REQUEST)
+        assert finding_json is not None
+
+        use_rag = self.web_assistant_rag and not bool(data.get('rag_disabled'))
+        rag_block = ''
+        rag_unavailable = False
+        if use_rag:
+            last_user = extract_last_user_message_text(messages)
+            if last_user.strip():
+                rag_block, rag_unavailable = self._assistant_run_rag_retrieval(
+                    last_user=last_user,
+                    report_payload=rag_source_payload,
+                    report_rel=report_rel,
+                    rag_expand_project=bool(data.get('rag_expand_project')),
+                    extra_report_file_paths=extra_rag_paths,
+                )
+        if rag_block and len(rag_block) > subbudgets['rag']:
+            rag_block = shrink_rag_block(rag_block, subbudgets['rag'])
+
+        labels_note = data.get('user_finding_labels')
+        user_labels = ''
+        if isinstance(labels_note, str) and labels_note.strip():
+            user_labels = shrink_user_labels_block(
+                labels_note.strip(), subbudgets['user_labels']
+            )
+
+        finding_validation_for_prompt: Optional[Dict[str, Any]] = None
+        sid_ctx = data.get('session_id')
+        try:
+            if isinstance(sid_ctx, str) and validate_session_id(sid_ctx.strip()):
+                loaded_sess = load_chat_session(
+                    self.security_dir, report_rel, sid_ctx.strip()
+                )
+                finding_validation_for_prompt = get_finding_validation_for_branch(
+                    loaded_sess,
+                    chat_model,
+                    finding_key_for_prompt,
+                )
+        except Exception:
+            logger.warning(
+                'Assistant chat context build failed; continuing without persisted finding validation',
+                exc_info=True,
+            )
+            finding_validation_for_prompt = None
+
+        system_content, section_lengths = assemble_verdict_first_prompt(
+            system_intro=self._ASSISTANT_SYSTEM_INTRO_PREFIX,
+            finding_validation=finding_validation_for_prompt,
+            selected_finding_json=finding_json,
+            rag_block=rag_block,
+            report_summary=report_summary_text,
+            user_labels=user_labels,
+            total_budget=total_budget,
+        )
+
+        runtime_num_ctx: Optional[int] = None
+        context_source = budget_meta.context_source or ""
+        try:
+            runtime_num_ctx = budget_meta.ollama_runtime_num_ctx()
+            configured = budget_meta.effective_chars_per_token()
+            total_len = int(section_lengths["total"])
+            if (
+                runtime_num_ctx
+                and configured is not None
+                and total_len > runtime_num_ctx * configured
+            ):
+                prompt_chars_per_ctx_token = total_len / runtime_num_ctx
+                logger.warning(
+                    "Assistant system prompt larger than runtime context allows "
+                    "(prompt_chars=%s runtime_num_ctx=%s prompt_chars_per_ctx_token=%.2f "
+                    "configured_chars_per_token=%s context_source=%s budget=%s)",
+                    total_len,
+                    runtime_num_ctx,
+                    prompt_chars_per_ctx_token,
+                    configured,
+                    context_source,
+                    total_budget,
+                )
+        except Exception:
+            logger.warning(
+                "Assistant budget/section length diagnostic failed; skipping ctx-size warning",
+                exc_info=True,
+            )
+        if excerpt_truncated:
+            logger.info(
+                "Assistant aggregate report summary inputs truncated (budget=%s)",
+                report_sum_budget,
+            )
+
+        full_messages = full_messages_from_system_and_dialogue(system_content, messages)
+
+        return {
+            'full_messages': full_messages,
+            'chat_model': chat_model,
+            'messages': messages,
+            'primary_payload': primary_payload,
+            'report_rel': report_rel,
+            'aggregate_mode': aggregate_mode,
+            'rag_unavailable': bool(rag_unavailable),
+            'total_budget': total_budget,
+            'runtime_num_ctx': runtime_num_ctx,
+            'context_source': context_source,
+            'excerpt_truncated': excerpt_truncated,
+            'section_lengths': section_lengths,
+            'session_id_hint': data.get('session_id'),
+        }
+
+    def _resolve_assistant_session_id(self, session_id_hint: Any) -> str:
+        if isinstance(session_id_hint, str) and validate_session_id(session_id_hint.strip()):
+            return session_id_hint.strip()
+        return new_session_id()
+
+    def _persist_assistant_reply(self, prep: Dict[str, Any], raw: str, sess_id: str) -> None:
+        ts = utc_now_iso()
+        persist_msgs = normalize_validated_messages_for_storage(prep['messages'], default_at=ts)
+        persist_msgs.append({'role': 'assistant', 'content': raw, 'at': ts})
+        if prep['aggregate_mode']:
+            vuln_label = 'Executive summary (aggregate)'
+        else:
+            vn = prep['primary_payload'].get('vulnerability_name')
+            vuln_label = vn.strip() if isinstance(vn, str) else ''
+        try:
+            save_chat_session(
+                self.security_dir,
+                prep['report_rel'],
+                sess_id,
+                persist_msgs,
+                prep['chat_model'],
+                vuln_label,
+            )
+        except (ValueError, OSError):
+            logger.warning('Assistant session save failed', exc_info=True)
+
+    def _persist_partial_assistant_stream_reply(
+        self,
+        prep: Dict[str, Any],
+        sess_id: str,
+        content_parts: List[str],
+        thinking_parts: List[str],
+    ) -> None:
+        """Best-effort persist when streaming stops after partial output (error mid-stream)."""
+        raw = ''.join(content_parts).strip()
+        thinking = ''.join(thinking_parts).strip()
+        if not raw and not thinking:
+            return
+        stored = raw or thinking
+        self._persist_assistant_reply(prep, stored, sess_id)
+
+    def _finalize_assistant_chat_response(self, prep: Dict[str, Any], raw: str) -> Dict[str, Any]:
+        split = parse_assistant_think(raw)
+        sess_id = self._resolve_assistant_session_id(prep.get('session_id_hint'))
+        self._persist_assistant_reply(prep, raw, sess_id)
+        return {
+            'message': raw,
+            'visible_markdown': split.visible_markdown,
+            'thought_segments': split.thought_segments,
+            'session_id': sess_id,
+            'model': prep['chat_model'],
+            'rag_unavailable': bool(prep['rag_unavailable']),
+            'system_budget_chars': prep['total_budget'],
+            'assistant_aggregate': prep['aggregate_mode'],
+        }
+
+    def _stream_assistant_chat_response(self, prep: Dict[str, Any]):
+        """Return a Flask streaming response yielding NDJSON assistant events."""
+        from flask import Response, stream_with_context
+
+        def ndjson(event: Dict[str, Any]) -> str:
+            return json.dumps(event, ensure_ascii=False) + '\n'
+
+        def event_stream():
+            sess_id = self._resolve_assistant_session_id(prep.get('session_id_hint'))
+            stream_opts = self._assistant_chat_options(prep, temperature=0.2)
+            self._log_assistant_llm_debug(
+                'POST /api/assistant/chat-stream ollama_request',
+                {
+                    'model': prep['chat_model'],
+                    'options': stream_opts,
+                    'messages': prep['full_messages'],
+                    'context': self._assistant_llm_debug_payload(prep),
+                },
+            )
+            yield ndjson(
+                {
+                    'type': 'start',
+                    'session_id': sess_id,
+                    'model': prep['chat_model'],
+                    'rag_unavailable': bool(prep['rag_unavailable']),
+                    'system_budget_chars': prep['total_budget'],
+                    'assistant_aggregate': prep['aggregate_mode'],
+                }
+            )
+            content_parts: List[str] = []
+            thinking_parts: List[str] = []
+            stream_chunks: List[Any] = []
+            try:
+                om = self._get_assistant_ollama_manager()
+                for chunk in om.chat_stream(
+                    prep['chat_model'],
+                    prep['full_messages'],
+                    options=stream_opts,
+                ):
+                    if isinstance(chunk, dict) and chunk.get('type') == 'error':
+                        self._persist_partial_assistant_stream_reply(
+                            prep, sess_id, content_parts, thinking_parts
+                        )
+                        err = chunk.get('error')
+                        err_msg = err if isinstance(err, str) else f'{type(err).__name__}'
+                        self._log_assistant_llm_debug(
+                            'POST /api/assistant/chat-stream ollama_stream_error',
+                            {
+                                'error': err_msg,
+                                'partial_content': ''.join(content_parts),
+                                'partial_thinking': ''.join(thinking_parts),
+                                'chunks': stream_chunks,
+                            },
+                        )
+                        yield ndjson({'type': 'error', 'error': err_msg})
+                        return
+                    if isinstance(chunk, dict):
+                        stream_chunks.append(chunk)
+                    msg = chunk.get('message') if isinstance(chunk, dict) else None
+                    if not isinstance(msg, dict):
+                        continue
+                    # Ollama-python exposes ``thinking`` separately when ``think=True``
+                    # is negotiated; forward it as a dedicated delta so the UI can
+                    # render reasoning without polluting the visible markdown body.
+                    thinking_delta = msg.get('thinking') or ''
+                    if isinstance(thinking_delta, str) and thinking_delta:
+                        thinking_parts.append(thinking_delta)
+                        yield ndjson({'type': 'delta', 'channel': 'thinking', 'content': thinking_delta})
+                    content_delta = msg.get('content') or ''
+                    if isinstance(content_delta, str) and content_delta:
+                        content_parts.append(content_delta)
+                        yield ndjson({'type': 'delta', 'channel': 'content', 'content': content_delta})
+            except Exception as exc:
+                logger.exception('Assistant chat stream failed')
+                self._persist_partial_assistant_stream_reply(
+                    prep, sess_id, content_parts, thinking_parts
+                )
+                self._log_assistant_llm_debug(
+                    'POST /api/assistant/chat-stream ollama_exception',
+                    {
+                        'error': f'{type(exc).__name__}: {exc}',
+                        'partial_content': ''.join(content_parts),
+                        'partial_thinking': ''.join(thinking_parts),
+                        'chunks': stream_chunks,
+                    },
+                )
+                yield ndjson(
+                    {
+                        'type': 'error',
+                        'error': f'Assistant request failed: {type(exc).__name__}',
+                    }
+                )
+                return
+            raw = ''.join(content_parts)
+            split = parse_assistant_think(raw)
+            # Prepend any native ``thinking`` stream to thought segments so the UI
+            # surfaces reasoning even when the model never emits harmony tags.
+            native_thinking = ''.join(thinking_parts).strip()
+            if native_thinking:
+                split = AssistantThinkSplit(
+                    visible_markdown=split.visible_markdown,
+                    thought_segments=[native_thinking, *split.thought_segments],
+                )
+            self._persist_assistant_reply(prep, raw, sess_id)
+            done_event = {
+                'type': 'done',
+                'message': raw,
+                'visible_markdown': split.visible_markdown,
+                'thought_segments': split.thought_segments,
+                'session_id': sess_id,
+                'model': prep['chat_model'],
+                'rag_unavailable': bool(prep['rag_unavailable']),
+                'system_budget_chars': prep['total_budget'],
+                'assistant_aggregate': prep['aggregate_mode'],
+            }
+            self._log_assistant_llm_debug(
+                'POST /api/assistant/chat-stream ollama_stream_complete',
+                {
+                    'done': done_event,
+                    'native_thinking_concat': native_thinking,
+                    'stream_chunk_count': len(stream_chunks),
+                    'raw_ollama_chunks': stream_chunks,
+                },
+            )
+            yield ndjson(done_event)
+
+        return Response(
+            stream_with_context(event_stream()),
+            mimetype='application/x-ndjson',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+        )
 
     def register_routes(self, app, server, login_required):
         # Logout route
@@ -870,26 +1386,68 @@ class WebServer:
         @app.route('/api/assistant/chat', methods=['POST'])
         @login_required
         def assistant_chat():
+            prep = self._prepare_assistant_chat_context(request.get_json(silent=True))
+            if isinstance(prep, tuple):
+                err_body, status = prep
+                return jsonify(err_body), status
+
+            chat_opts = self._assistant_chat_options(prep, temperature=0.2)
+            self._log_assistant_llm_debug(
+                'POST /api/assistant/chat ollama_request',
+                {
+                    'model': prep['chat_model'],
+                    'options': chat_opts,
+                    'messages': prep['full_messages'],
+                    'context': self._assistant_llm_debug_payload(prep),
+                },
+            )
+            try:
+                om = self._get_assistant_ollama_manager()
+                resp = om.chat(
+                    prep['chat_model'],
+                    prep['full_messages'],
+                    options=chat_opts,
+                )
+            except Exception as exc:
+                logger.exception('Assistant chat failed')
+                return jsonify({'error': f'Assistant request failed: {type(exc).__name__}'}), 502
+
+            self._log_assistant_llm_debug(
+                'POST /api/assistant/chat ollama_response',
+                {'raw': resp},
+            )
+            msg = resp.get('message') if isinstance(resp, dict) else None
+            raw = ''
+            if isinstance(msg, dict):
+                raw = msg.get('content') or ''
+            body = self._finalize_assistant_chat_response(prep, raw if isinstance(raw, str) else '')
+            return jsonify(body)
+
+        @app.route('/api/assistant/chat-stream', methods=['POST'])
+        @login_required
+        def assistant_chat_stream():
+            prep = self._prepare_assistant_chat_context(request.get_json(silent=True))
+            if isinstance(prep, tuple):
+                err_body, status = prep
+                return jsonify(err_body), status
+            return self._stream_assistant_chat_response(prep)
+
+        @app.route('/api/assistant/investigate', methods=['POST'])
+        @login_required
+        def assistant_investigate():
+            from oasis.agent.assistant_invoke import (
+                coerce_investigation_budget,
+                invoke_assistant_validation,
+            )
+            from oasis.helpers.vuln.taxonomy import ALL_VULN_NAMES
+            from oasis.schemas.analysis import InvestigationScope
+
             try:
                 data = request.get_json(silent=True)
             except Exception:
                 data = None
             if not isinstance(data, dict):
                 return jsonify({'error': 'Invalid JSON'}), 400
-
-            messages, msg_err = validate_assistant_messages(
-                data.get('messages'),
-                max_messages=self._ASSISTANT_MAX_MESSAGES,
-                max_message_chars=self._ASSISTANT_MAX_MESSAGE_CHARS,
-            )
-            if msg_err is not None:
-                err_body, status = msg_err
-                return jsonify(err_body), status
-            assert messages is not None
-
-            approx_msg_chars = sum(
-                len(str(m.get('content') or '')) for m in messages if isinstance(m, dict)
-            )
 
             report_rel_raw = str(data.get('report_path') or '').strip()
             if not report_rel_raw:
@@ -905,14 +1463,6 @@ class WebServer:
                 return jsonify(err_body), status
             assert resolved_report is not None
 
-            aggregate_mode = bool(data.get('aggregate_model_json'))
-            if aggregate_mode and resolved_report.stem.lower() != '_executive_summary':
-                return jsonify(
-                    {
-                        'error': 'aggregate_model_json requires json/_executive_summary.json (or its md sibling)',
-                    }
-                ), 400
-
             if primary_synthetic is not None:
                 primary_payload = primary_synthetic
             else:
@@ -924,228 +1474,264 @@ class WebServer:
             if not isinstance(primary_payload, dict):
                 return jsonify({'error': 'Invalid report'}), 422
 
-            report_rel = str(resolved_report.relative_to(security_root)).replace('\\', '/')
+            vulnerability_name = str(data.get('vulnerability_name') or '').strip() or str(primary_payload.get('vulnerability_name') or '').strip()
 
-            json_paths_for_union: List[Path] = []
-            extra_rag_paths: Optional[List[str]] = None
-            rag_source_payload: Dict[str, Any] = primary_payload
-            md_obj: Optional[Path] = None
+            # Candidate scan roots, in priority order:
+            #   1. explicit ``scan_root`` from the request payload
+            #   2. ``analysis_root`` stored inside the report JSON (may be stale if
+            #      the report was generated on another machine / path)
+            #   3. the scan root currently served by this WebServer instance
+            scan_root_candidates: List[str] = []
+            for raw in (
+                data.get('scan_root'),
+                primary_payload.get('analysis_root'),
+                str(self.input_path_absolute) if getattr(self, 'input_path_absolute', None) else None,
+            ):
+                if isinstance(raw, str) and raw.strip():
+                    scan_root_candidates.append(raw.strip())
 
-            if aggregate_mode:
-                md_obj = model_directory_from_security_report_file(security_root, resolved_report)
-                if md_obj is None:
-                    return jsonify({'error': 'Could not resolve model directory for aggregate assistant'}), 400
-                json_paths_for_union = iter_json_report_paths_in_model_dir(md_obj)
-                if not json_paths_for_union:
-                    return jsonify({'error': 'No JSON reports found for aggregate assistant'}), 404
-                vp = first_vulnerability_payload_from_paths(json_paths_for_union)
-                rag_source_payload = vp if vp is not None else primary_payload
-                extra_rag_paths = union_file_paths_from_vulnerability_payloads(json_paths_for_union)
+            scan_root: Optional[Path] = None
+            for candidate_raw in scan_root_candidates:
+                candidate = Path(candidate_raw).expanduser().resolve(strict=False)
+                if candidate.exists() and candidate.is_dir():
+                    scan_root = candidate
+                    break
 
-            chat_model = data.get('model')
-            if isinstance(chat_model, str) and chat_model.strip():
-                chat_model = chat_model.strip()
-            else:
-                mn = primary_payload.get('model_name')
-                chat_model = mn.strip() if isinstance(mn, str) and mn.strip() else ''
-                if not chat_model and aggregate_mode:
-                    for jp in json_paths_for_union:
-                        try:
-                            jd = json.loads(jp.read_text(encoding='utf-8'))
-                        except Exception:
-                            continue
-                        if isinstance(jd, dict):
-                            mnx = jd.get('model_name')
-                            if isinstance(mnx, str) and mnx.strip():
-                                chat_model = mnx.strip()
-                                break
-                if not chat_model:
-                    mn2 = rag_source_payload.get('model_name')
-                    chat_model = mn2.strip() if isinstance(mn2, str) and mn2.strip() else ''
-            if not chat_model:
-                return jsonify({'error': 'model required (pass model or ensure report has model_name)'}), 400
-
-            total_budget, _budget_meta = assistant_total_system_budget_chars(
-                fallback_total=self._ASSISTANT_MAX_TOTAL_REPORT_CHARS,
-                ollama_manager=self._get_assistant_ollama_manager(),
-                chat_model=chat_model,
-                approx_message_chars_in_request=approx_msg_chars,
-            )
-            reserved_extras = self._assistant_reserved_chars_for_total_budget(total_budget)
-            excerpt_budget = max(total_budget - reserved_extras, 0)
-
-            excerpt_truncated = False
-            if aggregate_mode:
-                report_payload, _agg_meta = build_aggregate_assistant_document(
-                    json_paths_for_union,
-                    security_root,
-                    total_char_budget=excerpt_budget,
-                )
-                excerpt_truncated = bool(_agg_meta.get('truncated'))
-            else:
-                report_payload = primary_payload
-
-            excerpt = json.dumps(report_payload, ensure_ascii=False)
-            if excerpt_budget > 0 and len(excerpt) > excerpt_budget:
-                excerpt = excerpt[:excerpt_budget] + '\n…(truncated)…'
-                excerpt_truncated = True
-            elif excerpt_budget <= 0:
-                excerpt = ''
-                excerpt_truncated = True
+            if scan_root is None:
+                if not scan_root_candidates:
+                    return jsonify({'error': 'scan_root required (pass scan_root or ensure report has analysis_root)'}), 400
+                return jsonify({'error': 'scan_root does not exist'}), 404
 
             fi, ci, gi = coerce_finding_indices(data)
-            used_after_excerpt = len(self._ASSISTANT_SYSTEM_INTRO_PREFIX) + len(excerpt)
-            remaining_for_prompt = max(0, total_budget - used_after_excerpt)
-            finding_header_len = len('\n\nSELECTED_FINDING_JSON:\n')
-            finding_max = max(0, min(12000, remaining_for_prompt - finding_header_len - 200))
-            finding_json = ''
-            if not aggregate_mode:
-                finding_json = json_finding_slice(
-                    primary_payload,
-                    fi,
-                    ci,
-                    gi,
-                    max_chars=finding_max,
+            scope_merge = data.get('finding_scope_report_path')
+            finding_scope_merge = (
+                scope_merge.strip()
+                if isinstance(scope_merge, str) and scope_merge.strip()
+                else ''
+            )
+            sink_file: Optional[Path] = None
+            sink_line: Optional[int] = None
+            try:
+                if fi is not None and isinstance(primary_payload.get('files'), list):
+                    file_entry = primary_payload['files'][fi] if fi < len(primary_payload['files']) else None
+                    if isinstance(file_entry, dict):
+                        fp = file_entry.get('file_path')
+                        if isinstance(fp, str) and fp.strip():
+                            candidate = (scan_root / fp).resolve(strict=False)
+                            if is_path_within_root(candidate, scan_root) and candidate.is_file():
+                                sink_file = candidate
+                        chunks = file_entry.get('chunk_analyses') or []
+                        if ci is not None and ci < len(chunks) and isinstance(chunks[ci], dict):
+                            chunk = chunks[ci]
+                            findings = chunk.get('findings') or []
+                            if gi is not None and gi < len(findings) and isinstance(findings[gi], dict):
+                                line_val = findings[gi].get('snippet_start_line') or chunk.get('start_line')
+                                if isinstance(line_val, int) and line_val > 0:
+                                    sink_line = line_val
+            except Exception:
+                sink_file = None
+                sink_line = None
+
+            # Client-provided sink_file / sink_line hints take precedence when
+            # they resolve inside scan_root; useful when indices refer to a
+            # synthesized scope (executive aggregate) or when the report JSON
+            # is incomplete.
+            client_sink_file_raw = data.get('sink_file')
+            if isinstance(client_sink_file_raw, str) and client_sink_file_raw.strip():
+                hint = Path(client_sink_file_raw.strip())
+                candidate = hint if hint.is_absolute() else (scan_root / hint)
+                candidate = candidate.resolve(strict=False)
+                if is_path_within_root(candidate, scan_root) and candidate.is_file():
+                    sink_file = candidate
+            client_sink_line_raw = data.get('sink_line')
+            if isinstance(client_sink_line_raw, int) and client_sink_line_raw > 0:
+                sink_line = client_sink_line_raw
+
+            budget_seconds = coerce_investigation_budget(data.get('budget_seconds'))
+
+            try:
+                result = invoke_assistant_validation(
+                    vulnerability_name=vulnerability_name,
+                    scan_root=scan_root,
+                    sink_file=sink_file,
+                    sink_line=sink_line,
+                    budget_seconds=budget_seconds,
                 )
-            elif aggregate_mode:
-                scope_raw = data.get('finding_scope_report_path')
-                if isinstance(scope_raw, str) and scope_raw.strip():
-                    scope_payload, scope_err = resolve_aggregate_finding_scope_payload(
-                        scope_raw.strip(),
-                        security_root=security_root,
-                        executive_report_path=resolved_report,
-                        model_dir=md_obj,
+            except Exception as exc:
+                return jsonify({'error': f'investigation failed: {exc}'}), 500
+
+            # Expose the resolved investigation scope so the dashboard can show
+            # exactly which file/line was analysed (avoids ambiguity when only
+            # zero-based indices are sent over the wire).
+            try:
+                sink_file_rel: Optional[str] = None
+                if sink_file is not None:
+                    try:
+                        sink_file_rel = str(sink_file.relative_to(scan_root))
+                    except ValueError:
+                        sink_file_rel = str(sink_file)
+                result.scope = InvestigationScope(
+                    scan_root=str(scan_root),
+                    sink_file=sink_file_rel,
+                    sink_line=sink_line,
+                    vulnerability_name=vulnerability_name,
+                    family=result.family,
+                )
+            except Exception:
+                pass
+
+            synthesize_raw = data.get('synthesize_narrative')
+            if synthesize_raw is None:
+                synthesize_narrative = True
+            else:
+                synthesize_narrative = bool(synthesize_raw)
+
+            if synthesize_narrative:
+                chat_model_inv = data.get('model')
+                if isinstance(chat_model_inv, str) and chat_model_inv.strip():
+                    chat_model_inv = chat_model_inv.strip()
+                else:
+                    mn_inv = primary_payload.get('model_name')
+                    chat_model_inv = (
+                        mn_inv.strip() if isinstance(mn_inv, str) and mn_inv.strip() else ''
                     )
-                    if scope_err is not None:
-                        return jsonify({'error': scope_err}), 400
-                    if scope_payload is not None:
-                        finding_json = json_finding_slice(
-                            scope_payload,
-                            fi,
-                            ci,
-                            gi,
-                            max_chars=finding_max,
+                if chat_model_inv:
+                    try:
+                        from oasis.helpers.assistant.think.investigation_synth import (
+                            enrich_investigation_with_llm_narrative,
                         )
 
-            use_rag = self.web_assistant_rag and not bool(data.get('rag_disabled'))
-            rag_block = ''
-            rag_unavailable = False
-            if use_rag:
-                last_user = ''
-                for m in reversed(messages):
-                    if isinstance(m, dict) and m.get('role') == 'user':
-                        c = m.get('content', '')
-                        last_user = c if isinstance(c, str) else ''
-                        break
-                if last_user.strip():
-                    rag_block, rag_unavailable = self._assistant_run_rag_retrieval(
-                        last_user=last_user,
-                        report_payload=rag_source_payload,
-                        report_rel=report_rel,
-                        rag_expand_project=bool(data.get('rag_expand_project')),
-                        extra_report_file_paths=extra_rag_paths,
+                        result = enrich_investigation_with_llm_narrative(
+                            result,
+                            ollama_manager=self._get_assistant_ollama_manager(),
+                            chat_model=chat_model_inv,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            'Investigation narrative enrichment failed: %s',
+                            type(exc).__name__,
+                            exc_info=True,
+                        )
+                        result = result.model_copy(
+                            update={
+                                'synthesis_error': f'{type(exc).__name__}: {exc}',
+                            }
+                        )
+
+            report_rel_save = str(resolved_report.relative_to(security_root)).replace('\\', '/')
+            sid_merge = data.get('session_id')
+            chat_model_merge = data.get('model')
+            if isinstance(chat_model_merge, str) and chat_model_merge.strip():
+                chat_model_merge = chat_model_merge.strip()
+            else:
+                mn_m = primary_payload.get('model_name')
+                chat_model_merge = (
+                    mn_m.strip() if isinstance(mn_m, str) and mn_m.strip() else ''
+                )
+            merge_fk = finding_validation_storage_key(
+                finding_scope_merge,
+                fi,
+                ci,
+                gi,
+            )
+            if (
+                isinstance(sid_merge, str)
+                and validate_session_id(sid_merge.strip())
+                and chat_model_merge
+                and merge_fk
+            ):
+                try:
+                    merge_finding_validation_into_session(
+                        security_root,
+                        report_rel_save,
+                        sid_merge.strip(),
+                        chat_model_merge,
+                        result.model_dump(mode='json'),
+                        vulnerability_name,
+                        finding_key=merge_fk,
+                    )
+                except (ValueError, OSError) as exc:
+                    logger.warning(
+                        'merge finding validation into session failed: %s',
+                        exc,
+                        exc_info=True,
                     )
 
-            prompt_chunks: List[str] = [self._ASSISTANT_SYSTEM_INTRO_PREFIX + excerpt]
-            if finding_json:
-                prompt_chunks.extend(['', 'SELECTED_FINDING_JSON:', finding_json])
-            if rag_block:
-                prompt_chunks.extend(['', 'RETRIEVAL_CONTEXT:', rag_block])
+            return jsonify(result.model_dump())
 
-            labels_note = data.get('user_finding_labels')
-            labels_header = '\n\nUSER_LOCAL_TRIAGE_NOTES:\n'
-            core_so_far = '\n'.join(prompt_chunks)
-            labels_cap = max(0, total_budget - len(core_so_far) - len(labels_header))
-            if isinstance(labels_note, str) and labels_note.strip():
-                note = labels_note.strip()
-                if labels_cap > 0 and len(note) > labels_cap:
-                    note = note[:labels_cap] + '\n…(truncated)…'
-                elif labels_cap <= 0:
-                    note = ''
-                if note:
-                    prompt_chunks.extend(['', 'USER_LOCAL_TRIAGE_NOTES:', note])
-
-            system_content = '\n'.join(prompt_chunks)
-            if len(system_content) > total_budget:
-                logger.info(
-                    "Assistant system prompt capped (chars=%s budget=%s excerpt_truncated=%s)",
-                    len(system_content),
-                    total_budget,
-                    excerpt_truncated,
-                )
-                system_content = system_content[:total_budget] + '\n…(truncated)…'
-            elif excerpt_truncated:
-                logger.info(
-                    "Assistant report JSON excerpt truncated (budget=%s reserved_extras=%s)",
-                    excerpt_budget,
-                    reserved_extras,
-                )
-            full_messages: List[Dict[str, str]] = [{'role': 'system', 'content': system_content}]
-            for m in messages:
-                role = str(m.get('role', ''))
-                content = m.get('content', '')
-                if isinstance(content, str):
-                    full_messages.append({'role': role, 'content': content})
-
+        @app.route('/api/assistant/session-branch', methods=['POST'])
+        @login_required
+        def assistant_session_branch():
             try:
-                om = self._get_assistant_ollama_manager()
-                resp = om.chat(chat_model, full_messages, options={'temperature': 0.2})
-            except Exception as exc:
-                logger.exception('Assistant chat failed')
-                return jsonify({'error': f'Assistant request failed: {type(exc).__name__}'}), 502
+                body = request.get_json(silent=True)
+            except Exception:
+                body = None
+            if not isinstance(body, dict):
+                return jsonify({'error': 'Invalid JSON'}), 400
 
-            msg = resp.get('message') if isinstance(resp, dict) else None
-            raw = ''
-            if isinstance(msg, dict):
-                raw = msg.get('content') or ''
-            split = parse_assistant_think(raw if isinstance(raw, str) else '')
-            sid_raw = data.get('session_id')
-            if isinstance(sid_raw, str) and validate_session_id(sid_raw.strip()):
-                sess_id = sid_raw.strip()
+            report_rel_raw = str(body.get('report_path') or '').strip()
+            if not report_rel_raw:
+                return jsonify({'error': 'report_path required'}), 400
+
+            security_root = self.security_dir.resolve()
+            resolved_report, primary_synthetic, path_err = resolve_assistant_primary_payload(
+                self.security_dir,
+                report_rel_raw,
+            )
+            if path_err is not None:
+                err_body, status = path_err
+                return jsonify(err_body), status
+            assert resolved_report is not None
+
+            if primary_synthetic is not None:
+                primary_payload = primary_synthetic
             else:
-                sess_id = new_session_id()
+                try:
+                    with open(resolved_report, 'r', encoding='utf-8') as rf:
+                        primary_payload = json.load(rf)
+                except Exception:
+                    primary_payload = {}
+            if not isinstance(primary_payload, dict):
+                primary_payload = {}
+
+            report_rel = str(resolved_report.relative_to(security_root)).replace('\\', '/')
+
+            sid = body.get('session_id', '')
+            if not isinstance(sid, str) or not validate_session_id(sid.strip()):
+                return jsonify({'error': 'session_id required'}), 400
+            model = body.get('model')
+            if not isinstance(model, str) or not model.strip():
+                return jsonify({'error': 'model required'}), 400
+
+            msgs, msg_err = validate_assistant_messages(
+                body.get('messages'),
+                max_messages=self._ASSISTANT_MAX_MESSAGES,
+                max_message_chars=self._ASSISTANT_MAX_MESSAGE_CHARS,
+                allow_empty=True,
+            )
+            if msg_err is not None:
+                err_body, status = msg_err
+                return jsonify(err_body), status
+            assert msgs is not None
+
             ts = utc_now_iso()
-            persist_msgs: List[Dict[str, Any]] = []
-            for m in messages:
-                if not isinstance(m, dict):
-                    continue
-                mc: Dict[str, Any] = {
-                    'role': str(m.get('role', '')),
-                    'content': m.get('content') if isinstance(m.get('content'), str) else '',
-                }
-                att = m.get('at')
-                mc['at'] = att.strip() if isinstance(att, str) and att.strip() else ts
-                persist_msgs.append(mc)
-            persist_msgs.append({'role': 'assistant', 'content': raw if isinstance(raw, str) else '', 'at': ts})
-            if aggregate_mode:
-                vuln_label = 'Executive summary (aggregate)'
-            else:
-                vn = primary_payload.get('vulnerability_name')
-                vuln_label = vn.strip() if isinstance(vn, str) else ''
+            persist_msgs = normalize_validated_messages_for_storage(msgs, default_at=ts)
+
+            vn = str(body.get('vulnerability_name') or '').strip() or str(primary_payload.get('vulnerability_name') or '').strip()
+
             try:
-                save_chat_session(
+                save_session_branch_messages(
                     self.security_dir,
                     report_rel,
-                    sess_id,
+                    sid.strip(),
+                    model.strip(),
                     persist_msgs,
-                    chat_model,
-                    vuln_label,
+                    vn,
+                    set_as_active=bool(body.get('set_as_active')),
                 )
-            except (ValueError, OSError):
-                logger.warning('Assistant session save failed', exc_info=True)
-
-            return jsonify(
-                {
-                    'message': raw,
-                    'visible_markdown': split.visible_markdown,
-                    'thought_segments': split.thought_segments,
-                    'session_id': sess_id,
-                    'model': chat_model,
-                    'rag_unavailable': bool(rag_unavailable),
-                    'system_budget_chars': total_budget,
-                    'assistant_aggregate': aggregate_mode,
-                }
-            )
+            except (ValueError, OSError) as exc:
+                return jsonify({'error': str(exc)}), 400
+            return jsonify({'ok': True})
 
         @app.route('/api/assistant/sessions', methods=['GET'])
         @login_required
@@ -1170,10 +1756,26 @@ class WebServer:
             doc = load_chat_session(self.security_dir, report_rel, sid)
             if not doc:
                 return jsonify({'error': 'session not found'}), 404
+            doc = ensure_session_views(doc)
+            doc = dict(doc)
             msgs = doc.get('messages')
             if isinstance(msgs, list):
-                doc = dict(doc)
                 doc['messages'] = enrich_messages_for_response([m for m in msgs if isinstance(m, dict)])
+            branches = doc.get('model_branches')
+            if isinstance(branches, dict):
+                coerced_branches: Dict[str, Any] = {}
+                for bk, branch in branches.items():
+                    if isinstance(branch, dict):
+                        branch_copy = dict(branch)
+                        bm = branch_copy.get('messages')
+                        if isinstance(bm, list):
+                            branch_copy['messages'] = enrich_messages_for_response(
+                                [m for m in bm if isinstance(m, dict)]
+                            )
+                        coerced_branches[bk] = branch_copy
+                    else:
+                        coerced_branches[bk] = branch
+                doc['model_branches'] = coerced_branches
             return jsonify(doc)
 
         @app.route('/api/assistant/session', methods=['DELETE'])
@@ -1600,10 +2202,6 @@ class WebServer:
                 label, status, prog_cell = cells[0], cells[1], cells[2]
                 pair = parse_phase_counts_from_progress_cell(prog_cell)
                 if pair is None:
-                    logger.debug(
-                        "Skipping pipeline phase row without parseable counts: %s",
-                        line[:120],
-                    )
                     continue
                 c, t = pair
                 phases.append(
@@ -2015,6 +2613,17 @@ class WebServer:
     def _latest_scan_progress_from_filtered_reports(reports_to_analyze) -> dict:
         return WebServer._latest_scan_progress_from_reports(reports_to_analyze)
 
+    @staticmethod
+    def _merge_json_report_stats_into_risk_summary(
+        risk_summary: Dict[str, int], report_stats: Dict[str, Any]
+    ) -> None:
+        """Accumulate vulnerability JSON ``stats`` into dashboard ``risk_summary`` counters."""
+        risk_summary["total_findings"] += report_stats.get("total_findings", 0)
+        risk_summary["critical"] += report_stats.get("critical_risk", 0)
+        risk_summary["high"] += report_stats.get("high_risk", 0)
+        risk_summary["medium"] += report_stats.get("medium_risk", 0)
+        risk_summary["low"] += report_stats.get("low_risk", 0)
+
     def _update_stats_for_report(self, stats: dict, report: dict) -> None:
         stats["total_reports"] += 1
         if model := report.get("model"):
@@ -2033,10 +2642,7 @@ class WebServer:
             stats["dates"][date_only] = stats["dates"].get(date_only, 0) + 1
 
         if "stats" in report and report["stats"]:
-            report_stats = report["stats"]
-            stats["risk_summary"]["total_findings"] += report_stats.get("total_findings", 0)
-            stats["risk_summary"]["critical"] += report_stats.get("critical_risk", 0)
-            stats["risk_summary"]["high"] += report_stats.get("high_risk", 0)
-            stats["risk_summary"]["medium"] += report_stats.get("medium_risk", 0)
-            stats["risk_summary"]["low"] += report_stats.get("low_risk", 0)
+            WebServer._merge_json_report_stats_into_risk_summary(
+                stats["risk_summary"], report["stats"]
+            )
 
