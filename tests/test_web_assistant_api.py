@@ -97,7 +97,8 @@ class TestWebAssistantRoutes(unittest.TestCase):
             doc = json.loads(
                 client.get(f"/api/assistant/session?report_path=rep.json&session_id={sid}").get_data(as_text=True)
             )
-            self.assertEqual(doc.get("schema_version"), 1)
+            self.assertEqual(doc.get("schema_version"), 3)
+            self.assertIn("model_branches", doc)
             msgs = doc.get("messages")
             self.assertIsInstance(msgs, list)
             self.assertGreaterEqual(len(msgs), 2)
@@ -108,6 +109,175 @@ class TestWebAssistantRoutes(unittest.TestCase):
                 content_type="application/json",
             )
             self.assertEqual(del_resp.status_code, 200)
+
+    def test_assistant_chat_injects_finding_validation_json(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            rel = "repv.json"
+            payload = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "t",
+                "generated_at": "2026-01-01",
+                "model_name": "m1",
+                "vulnerability_name": "SQL Injection",
+                "files": [],
+                "stats": {"total_findings": 0},
+            }
+            (sec / rel).write_text(json.dumps(payload), encoding="utf-8")
+
+            from oasis.helpers.assistant_persistence import (
+                finding_validation_storage_key,
+                merge_finding_validation_into_session,
+                new_session_id,
+            )
+
+            sid = new_session_id()
+            fk0 = finding_validation_storage_key("", 0, 0, 0)
+            assert fk0 is not None
+            merge_finding_validation_into_session(
+                sec,
+                rel,
+                sid,
+                "m1",
+                {
+                    "vulnerability_name": "SQL Injection",
+                    "family": "flow",
+                    "status": "confirmed_exploitable",
+                    "confidence": 0.88,
+                    "summary": "deterministic summary",
+                },
+                "SQL Injection",
+                finding_key=fk0,
+            )
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            mock_om = server._get_assistant_ollama_manager()
+            resp = client.post(
+                "/api/assistant/chat",
+                data=json.dumps(
+                    {
+                        "messages": [{"role": "user", "content": "PoC?"}],
+                        "report_path": rel,
+                        "model": "m1",
+                        "session_id": sid,
+                        "file_index": 0,
+                        "chunk_index": 0,
+                        "finding_index": 0,
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            mock_om.chat.assert_called()
+            full_messages = mock_om.chat.call_args[0][1]
+            system_prompt = full_messages[0]["content"]
+            self.assertIn("FINDING_VALIDATION_JSON", system_prompt)
+            self.assertIn("confirmed_exploitable", system_prompt)
+
+    def test_assistant_chat_survives_validation_context_builder_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            rel = "rep_ctx_fail.json"
+            payload = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "t",
+                "generated_at": "2026-01-01",
+                "model_name": "m1",
+                "vulnerability_name": "SQL Injection",
+                "files": [],
+                "stats": {"total_findings": 0},
+            }
+            (sec / rel).write_text(json.dumps(payload), encoding="utf-8")
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            mock_om = server._get_assistant_ollama_manager()
+
+            with patch("oasis.web.append_validation_then_balance_rag", side_effect=RuntimeError("boom")):
+                resp = client.post(
+                    "/api/assistant/chat",
+                    data=json.dumps(
+                        {
+                            "messages": [{"role": "user", "content": "hello"}],
+                            "report_path": rel,
+                            "model": "m1",
+                        }
+                    ),
+                    content_type="application/json",
+                )
+
+            self.assertEqual(resp.status_code, 200)
+            data = json.loads(resp.get_data(as_text=True))
+            self.assertEqual(data.get("message"), "assistant-reply")
+            mock_om.chat.assert_called_once()
+
+    def test_assistant_session_branch_persists_messages(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            rel = "branch.json"
+            payload = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "t",
+                "generated_at": "2026-01-01",
+                "model_name": "mx",
+                "vulnerability_name": "SQL Injection",
+                "files": [],
+                "stats": {"total_findings": 0},
+            }
+            (sec / rel).write_text(json.dumps(payload), encoding="utf-8")
+
+            from oasis.helpers.assistant_persistence import new_session_id, save_chat_session
+
+            sid = new_session_id()
+            save_chat_session(
+                sec,
+                rel,
+                sid,
+                [{"role": "user", "content": "old", "at": "t"}],
+                "mx",
+                "SQL Injection",
+            )
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            resp = client.post(
+                "/api/assistant/session-branch",
+                data=json.dumps(
+                    {
+                        "report_path": rel,
+                        "session_id": sid,
+                        "model": "mx",
+                        "messages": [
+                            {"role": "user", "content": "u1", "at": "t"},
+                            {"role": "assistant", "content": "a1", "at": "t"},
+                        ],
+                        "vulnerability_name": "SQL Injection",
+                        "set_as_active": True,
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            doc = json.loads(
+                client.get(f"/api/assistant/session?report_path={rel}&session_id={sid}").get_data(as_text=True)
+            )
+            self.assertEqual(doc["model_branches"]["mx"]["messages"][0]["content"], "u1")
 
     def test_assistant_chat_visible_and_thought_split(self):
         with tempfile.TemporaryDirectory() as td:

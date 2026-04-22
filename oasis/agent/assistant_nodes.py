@@ -219,6 +219,7 @@ def node_aggregate_verdict(state: AssistantGraphState) -> Dict[str, Any]:
         config_findings=state.get("config_findings", []),
         errors=state.get("errors", []),
         budget_exhausted=bool(state.get("budget_exhausted")),
+        validation_backend=str(state.get("backend", "sequential")),
     )
     result = compute_verdict(inputs)
     return {"result": result}

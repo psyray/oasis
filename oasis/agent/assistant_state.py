@@ -33,4 +33,5 @@ class AssistantGraphState(TypedDict, total=False):
 
     errors: List[str]
     budget_exhausted: bool
+    backend: str
     result: Any

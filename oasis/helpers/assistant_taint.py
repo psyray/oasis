@@ -8,9 +8,14 @@ the same function body by looking for simple variable flow patterns:
     ...
     cursor.execute(value)           # sink
 
-The detection is intentionally shallow (no SSA, no alias analysis): it is good
-enough to flag obvious flows, it scales to any language, and the verdict node
-uses its output as one signal among others.
+Assignment parsing is heuristic and covers common shapes across typical OASIS
+targets (e.g. ``x =``, Go ``:=``, PHP ``$x =``, Ruby ``@x =``, Kotlin ``val``,
+and typed LHS such as ``String s =`` / ``final T v =``) by taking the last
+identifier token before a lone ``=``. It is still shallow (no SSA, no alias
+analysis, no tuple-unpacking): good enough to flag obvious flows; the verdict
+node uses its output as one signal among others. The generic ``=`` fallback
+ignores LHS with ``.``, ``[]``, or comma-separated targets so member writes,
+subscripts, and destructuring are not mistaken for simple bindings.
 """
 
 from __future__ import annotations
@@ -23,10 +28,41 @@ from oasis.helpers.assistant_scan_utils import read_text_safely
 from oasis.helpers.validation_patterns import SINKS, SOURCES
 from oasis.schemas.analysis import Citation, TaintFlow
 
+# Lone "=" not part of ==, !=, <=, >=, or =>.
+_ASSIGN_OP = re.compile(r"(?<![=!<>])=(?!=|>)")
 
-_ASSIGNMENT_PATTERN = re.compile(
-    r"""^\s*(?:var\s+|let\s+|const\s+)?(?P<name>[A-Za-z_][\w]*)\s*=\s*(?P<rhs>.+)$"""
+_GO_ASSIGN = re.compile(
+    r"""^\s*(?P<name>[A-Za-z_][\w]*)\s*:=\s*(?P<rhs>.+)$"""
 )
+_PHP_ASSIGN = re.compile(
+    r"""^\s*\$(?P<name>[A-Za-z_][\w]*)\s*=\s*(?P<rhs>.+)$"""
+)
+_RUBY_IVAR_ASSIGN = re.compile(
+    r"""^\s*(?P<name>@@?[A-Za-z_][\w]*)\s*=\s*(?P<rhs>.+)$"""
+)
+_JS_LIKE_ASSIGN = re.compile(
+    r"""^\s*(?:var\s+|let\s+|const\s+|val\s+)?(?P<name>[A-Za-z_][\w]*)\s*=\s*(?P<rhs>.+)$"""
+)
+
+_IDENTIFIER_TOKEN = re.compile(r"[A-Za-z_][\w]*")
+
+
+def _reject_generic_assign_fallback(line: str, assign_match: re.Match[str]) -> bool:
+    """Reject *_ASSIGN_OP* matches that are unlikely to be simple assignments."""
+    lhs = line[: assign_match.start()].strip()
+    if not lhs:
+        return True
+    if "&&" in lhs or "||" in lhs:
+        return True
+    if "==" in lhs or "!=" in lhs or "<=" in lhs or ">=" in lhs:
+        return True
+    # Ternary parsed as LHS (not valid assignment); allow RHS like ``x = a ? b : c``.
+    return "?" in lhs and ":" in lhs
+
+
+def _generic_assign_lhs_too_complex(lhs: str) -> bool:
+    """True if *lhs* is not a simple assignee (member, subscript, multi-target)."""
+    return any(ch in lhs for ch in (".", "[", "]", ","))
 
 
 def _compiled(patterns: Sequence[str]) -> List[re.Pattern[str]]:
@@ -35,6 +71,67 @@ def _compiled(patterns: Sequence[str]) -> List[re.Pattern[str]]:
 
 def _line_matches_any(line: str, compiled: List[re.Pattern[str]]) -> bool:
     return any(p.search(line) for p in compiled)
+
+
+def _is_identifier_boundary(ch: Optional[str]) -> bool:
+    """True if *ch* ends / starts an identifier token for cross-language matching."""
+    return True if ch is None else not (ch.isalnum() or ch == "_")
+
+
+def _sigil_variable_referenced_on_sink_line(variable: str, sink_snippet: str) -> bool:
+    """Match PHP/Ruby ``$x`` / ``@x`` (including ``${x}``, ``#{@x}``, ``?``/``!`` suffixes)."""
+    escaped = re.escape(variable)
+    sigil_pat = rf"{escaped}[!?]?"
+    for match in re.finditer(sigil_pat, sink_snippet):
+        start, end = match.span()
+        before = sink_snippet[start - 1] if start > 0 else None
+        after = sink_snippet[end] if end < len(sink_snippet) else None
+        if _is_identifier_boundary(before) and _is_identifier_boundary(after):
+            return True
+
+    name_no_sigils = re.escape(variable.lstrip("$@"))
+    if re.search(rf"\$\{{{name_no_sigils}[!?]?\}}", sink_snippet):
+        return True
+    return re.search(rf"#\{{\s*{escaped}[!?]?\s*\}}", sink_snippet) is not None
+
+
+def _variable_referenced_on_sink_line(variable: str, sink_snippet: str) -> bool:
+    """Return True if *variable* appears as a use on the sink line.
+
+    Handles plain identifiers, PHP ``$x`` / ``${x}``, Ruby ``@x`` / ``@x?``,
+    and similar without matching a shorter name inside a longer one (e.g. ``$x``
+    inside ``$xyz``).
+    """
+    if not variable:
+        return False
+
+    if variable.startswith(("$", "@")):
+        return _sigil_variable_referenced_on_sink_line(variable, sink_snippet)
+
+    return re.search(rf"\b{re.escape(variable)}\b", sink_snippet) is not None
+
+
+def _parse_assignment(line: str) -> Optional[tuple[str, str]]:
+    """Return (variable_name, rhs) if *line* looks like a simple assignment."""
+    if "=" not in line:
+        return None
+    for pattern in (_GO_ASSIGN, _PHP_ASSIGN, _RUBY_IVAR_ASSIGN, _JS_LIKE_ASSIGN):
+        m = pattern.match(line)
+        if m is not None:
+            return m.group("name"), m.group("rhs")
+    m = _ASSIGN_OP.search(line)
+    if m is None:
+        return None
+    if _reject_generic_assign_fallback(line, m):
+        return None
+    lhs = line[: m.start()].strip()
+    rhs = line[m.end() :].strip()
+    if not lhs or not rhs:
+        return None
+    if _generic_assign_lhs_too_complex(lhs):
+        return None
+    tokens = _IDENTIFIER_TOKEN.findall(lhs)
+    return (tokens[-1], rhs) if tokens else None
 
 
 def _collect_source_variables(
@@ -47,13 +144,13 @@ def _collect_source_variables(
     tainted: Dict[str, str] = {}
     for idx in range(start, end):
         line = lines[idx]
-        assign = _ASSIGNMENT_PATTERN.match(line)
-        rhs = assign.group("rhs") if assign else line
+        parsed = _parse_assignment(line)
+        rhs = parsed[1] if parsed else line
         for source_kind, compiled in compiled_sources.items():
             if not _line_matches_any(rhs, compiled):
                 continue
-            if assign is not None:
-                tainted[assign.group("name")] = source_kind
+            if parsed is not None:
+                tainted[parsed[0]] = source_kind
             else:
                 tainted.setdefault(f"__line_{idx + 1}", source_kind)
             break
@@ -126,7 +223,9 @@ def detect_flows_for_sink(
         if not _line_matches_any(sink_snippet, compiled):
             continue
         for variable, source_kind in tainted.items():
-            if variable.startswith("__line_") or re.search(rf"\b{re.escape(variable)}\b", sink_snippet):
+            if variable.startswith("__line_") or _variable_referenced_on_sink_line(
+                variable, sink_snippet
+            ):
                 pair = (source_kind, sink_kind)
                 if pair in already_emitted:
                     continue

@@ -19,8 +19,8 @@ from oasis.helpers.assistant_crypto_scan import run_crypto_scan
 from oasis.helpers.assistant_entrypoints import discover_entry_points
 from oasis.helpers.assistant_log_filter import run_log_filter_scan
 from oasis.helpers.assistant_mitigations import find_mitigations_in_root
+from oasis.helpers import assistant_taint
 from oasis.helpers.assistant_secret_scan import run_secret_scan
-from oasis.helpers.assistant_taint import detect_flows_for_descriptor
 from oasis.helpers.assistant_trace import (
     enclosing_symbol,
     trace_to_entry_points,
@@ -137,7 +137,7 @@ class TestDotNetSinks(unittest.TestCase):
                 "  }\n"
                 "}\n",
             )
-            flows = detect_flows_for_descriptor(
+            flows = assistant_taint.detect_flows_for_descriptor(
                 p, 4, ("sql_execute",), ("http_params",)
             )
             self.assertEqual(flows, [])
@@ -169,11 +169,76 @@ class TestTraceAndTaint(unittest.TestCase):
                 "    q = request.args.get('q')\n"
                 "    cursor.execute('SELECT * FROM t WHERE x = ' + q)\n",
             )
-            flows = detect_flows_for_descriptor(
+            flows = assistant_taint.detect_flows_for_descriptor(
                 p, 4, ("sql_execute",), ("http_params",)
             )
             self.assertTrue(flows)
             self.assertEqual(flows[0].sink_kind, "sql_execute")
+            self.assertEqual(flows[0].source_kind, "http_params")
+
+    def test_taint_flow_go_short_declaration(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "handler.go",
+                "func search() {\n"
+                "    q := request.args.get('q')\n"
+                "    cursor.execute(q)\n"
+                "}\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 3, ("sql_execute",), ("http_params",)
+            )
+            self.assertTrue(flows)
+            self.assertEqual(flows[0].source_kind, "http_params")
+
+    def test_taint_flow_java_typed_lhs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "Search.java",
+                "void search() {\n"
+                '    String q = request.args.get("q");\n'
+                "    cursor.execute(q);\n"
+                "}\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 3, ("sql_execute",), ("http_params",)
+            )
+            self.assertTrue(flows)
+            self.assertEqual(flows[0].source_kind, "http_params")
+
+    def test_taint_flow_php_dollar_var(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "search.php",
+                "<?php\n"
+                "function search() {\n"
+                "    $q = request.args.get('q');\n"
+                "    cursor.execute($q);\n"
+                "}\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 4, ("sql_execute",), ("http_params",)
+            )
+            self.assertTrue(flows)
+            self.assertEqual(flows[0].source_kind, "http_params")
+
+    def test_taint_flow_ruby_instance_var(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "search.rb",
+                "def search\n"
+                "  @q = request.args.get('q')\n"
+                "  cursor.execute(@q)\n"
+                "end\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 3, ("sql_execute",), ("http_params",)
+            )
+            self.assertTrue(flows)
             self.assertEqual(flows[0].source_kind, "http_params")
 
     def test_trace_links_to_entry_point(self) -> None:
@@ -297,6 +362,10 @@ class TestInvoke(unittest.TestCase):
             )
             self.assertIsInstance(result, AssistantInvestigationResult)
             self.assertEqual(result.family, "flow")
+            self.assertIn(
+                result.validation_backend,
+                {"graph", "sequential", "sequential_fallback"},
+            )
             self.assertIn(
                 result.status,
                 {"confirmed_exploitable", "likely_exploitable", "partial_mitigation"},
@@ -445,6 +514,109 @@ class TestInvestigationSynth(unittest.TestCase):
         )
         self.assertEqual(out.narrative_markdown, "")
         self.assertIsNone(out.synthesis_model)
+
+
+class TestAssistantTaintAssignmentParsing(unittest.TestCase):
+    def test_generic_fallback_rejects_logical_and_lhs(self) -> None:
+        self.assertIsNone(assistant_taint._parse_assignment("foo && bar = baz"))
+
+    def test_generic_fallback_rejects_comparison_tokens_in_lhs(self) -> None:
+        self.assertIsNone(assistant_taint._parse_assignment("if (c == d && e = f"))
+
+    def test_generic_fallback_rejects_ternary_heuristic(self) -> None:
+        self.assertIsNone(assistant_taint._parse_assignment("x ? y : z = answer"))
+
+    def test_js_like_simple_assignment(self) -> None:
+        parsed = assistant_taint._parse_assignment('value = request.args.get("q")')
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed[0], "value")
+
+    def test_go_short_decl_assignment(self) -> None:
+        parsed = assistant_taint._parse_assignment('id := uuid.New().String()')
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed[0], "id")
+
+    def test_generic_fallback_accepts_typed_lhs(self) -> None:
+        parsed = assistant_taint._parse_assignment(
+            'final String payload = req.getParameter("id")'
+        )
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed[0], "payload")
+
+    def test_generic_fallback_accepts_rhs_ternary(self) -> None:
+        parsed = assistant_taint._parse_assignment("Result r = cond ? x : y")
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed[0], "r")
+
+    def test_generic_fallback_rejects_member_lhs(self) -> None:
+        self.assertIsNone(assistant_taint._parse_assignment("self.foo = bar"))
+
+    def test_generic_fallback_rejects_subscript_lhs(self) -> None:
+        self.assertIsNone(assistant_taint._parse_assignment("items[i] = x"))
+
+    def test_generic_fallback_rejects_tuple_unpack_lhs(self) -> None:
+        self.assertIsNone(assistant_taint._parse_assignment("a, b = pair"))
+
+
+class TestAssistantTaintVariableOnSinkLine(unittest.TestCase):
+    def test_php_var_plain(self) -> None:
+        self.assertTrue(
+            assistant_taint._variable_referenced_on_sink_line("$u", 'cursor.execute($u)')
+        )
+
+    def test_php_var_arrow(self) -> None:
+        self.assertTrue(
+            assistant_taint._variable_referenced_on_sink_line(
+                "$row", '$db->query($row["id"])'
+            )
+        )
+
+    def test_php_var_bracket(self) -> None:
+        self.assertTrue(
+            assistant_taint._variable_referenced_on_sink_line("$k", "x($data[$k])")
+        )
+
+    def test_php_var_interpolated_braces(self) -> None:
+        self.assertTrue(
+            assistant_taint._variable_referenced_on_sink_line(
+                "$id", 'echo "x${id}y";'
+            )
+        )
+
+    def test_ruby_ivar_string_interpolation(self) -> None:
+        self.assertTrue(
+            assistant_taint._variable_referenced_on_sink_line(
+                "@name", 'puts "hi #{@name}"'
+            )
+        )
+
+    def test_ruby_ivar_predicate_suffix(self) -> None:
+        self.assertTrue(
+            assistant_taint._variable_referenced_on_sink_line(
+                "@ok", "render if @ok?"
+            )
+        )
+
+    def test_ruby_ivar_bang_suffix(self) -> None:
+        self.assertTrue(
+            assistant_taint._variable_referenced_on_sink_line(
+                "@done", "notify @done!"
+            )
+        )
+
+    def test_negative_php_prefix_of_longer_var(self) -> None:
+        self.assertFalse(
+            assistant_taint._variable_referenced_on_sink_line("$x", "$xyz = 1")
+        )
+
+    def test_negative_ruby_ivar_prefix(self) -> None:
+        self.assertFalse(
+            assistant_taint._variable_referenced_on_sink_line("@foo", "@foo_bar.nil?")
+        )
 
 
 if __name__ == "__main__":

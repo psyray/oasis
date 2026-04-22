@@ -12,8 +12,11 @@ installed still exercise the logic.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from oasis.agent.assistant_nodes import (
     _ensure_descriptor,
@@ -27,6 +30,7 @@ from oasis.agent.assistant_nodes import (
     node_trace_execution,
 )
 from oasis.agent.assistant_state import AssistantGraphState
+from oasis.helpers.assistant_verdict import _normalize_validation_backend
 from oasis.helpers.vuln_taxonomy import VulnFamily
 from oasis.schemas.analysis import AssistantInvestigationResult
 
@@ -98,6 +102,8 @@ def invoke_assistant_validation(
     budget_seconds: Optional[float] = None,
 ) -> AssistantInvestigationResult:
     """Run the validation agent and return the aggregated verdict."""
+    graph = _get_compiled_graph()
+    initial_backend = "graph" if graph is not None else "sequential"
     state: AssistantGraphState = {
         "vulnerability_name": vulnerability_name,
         "scan_root": Path(scan_root),
@@ -115,19 +121,51 @@ def invoke_assistant_validation(
         "config_findings": [],
         "errors": [],
         "budget_exhausted": False,
+        "backend": initial_backend,
     }
 
-    graph = _get_compiled_graph()
+    graph_failed = False
     if graph is not None:
         try:
+            state["backend"] = initial_backend
             final_state = graph.invoke(state)
-            if isinstance(final_state, dict) and "result" in final_state:
+            if isinstance(final_state, AssistantInvestigationResult):
+                result = final_state
+            elif isinstance(final_state, dict) and "result" in final_state:
                 result = final_state["result"]
-                if isinstance(result, AssistantInvestigationResult):
-                    return result
-        except Exception:
-            # Fall back to sequential execution on LangGraph runtime errors.
-            pass
+            else:
+                result = None
+            if isinstance(result, AssistantInvestigationResult):
+                if _normalize_validation_backend(str(result.validation_backend)) == "sequential":
+                    result = result.model_copy(update={"validation_backend": "graph"})
+                return result
+            graph_failed = True
+        except Exception as exc:
+            graph_failed = True
+            logger.warning(
+                "%s: compiled graph execution failed, falling back to sequential",
+                __name__,
+                exc_info=True,
+            )
+            errs = state.get("errors", [])
+            if isinstance(errs, list):
+                state["errors"] = [
+                    *errs,
+                    "graph_runtime: compiled graph execution failed; "
+                    f"falling back to sequential ({exc!r})",
+                ]
+    if graph_failed:
+        state["backend"] = "sequential_fallback"
+        errs = state.get("errors", [])
+        if isinstance(errs, list) and not any(
+            isinstance(e, str) and e.startswith("graph_runtime:") for e in errs
+        ):
+            state["errors"] = [
+                *errs,
+                "graph_runtime: compiled graph did not return a usable result; "
+                "falling back to sequential",
+            ]
+
     final_state = _run_fallback(state)
     result = final_state.get("result")
     if isinstance(result, AssistantInvestigationResult):
@@ -139,4 +177,7 @@ def invoke_assistant_validation(
         status="error",
         summary="Validation agent returned no result.",
         errors=["no_result"],
+        validation_backend=_normalize_validation_backend(
+            str(state.get("backend", "sequential"))
+        ),
     )

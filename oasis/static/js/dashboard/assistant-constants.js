@@ -68,4 +68,15 @@ DashboardApp.ASSISTANT_UI = {
     validateErrorPrefix: 'Validation failed: ',
     validateMissingScanRoot:
         'Re-run the scan or set scan_root in the report to enable validation.',
+    validateTargetScopeLabel: 'Report',
+    validateTargetIncomplete: 'Select file, chunk, and finding for validation scope.',
 };
+
+/** CSS suffixes for ``oasis-assistant-validate-sev--*`` (must match ``ConfigFinding.severity`` in ``oasis/schemas/analysis.py``). */
+DashboardApp.ASSISTANT_VALIDATE_SEVERITY_SUFFIXES = Object.freeze([
+    'info',
+    'low',
+    'medium',
+    'high',
+    'critical',
+]);

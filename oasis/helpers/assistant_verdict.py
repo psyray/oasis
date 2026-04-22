@@ -11,7 +11,15 @@ and cheap to unit-test.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Sequence
+from typing import List, Literal, Sequence
+
+AssistantValidationBackend = Literal["graph", "sequential", "sequential_fallback"]
+
+
+def _normalize_validation_backend(raw: str) -> AssistantValidationBackend:
+    if raw == "graph":
+        return "graph"
+    return "sequential_fallback" if raw == "sequential_fallback" else "sequential"
 
 from oasis.helpers.vuln_taxonomy import VulnDescriptor, VulnFamily
 from oasis.schemas.analysis import (
@@ -41,6 +49,7 @@ class VerdictInputs:
     config_findings: Sequence[ConfigFinding] = ()
     errors: Sequence[str] = ()
     budget_exhausted: bool = False
+    validation_backend: str = "sequential"
 
 
 def _verdict_flow(inputs: VerdictInputs) -> tuple[str, float, str]:
@@ -102,21 +111,27 @@ def _verdict_access(inputs: VerdictInputs) -> tuple[str, float, str]:
             + ") were detected."
         )
 
-    if missing and present:
+    if missing:
         return "partial_mitigation", 0.6, (
             "Some controls are present but others are missing: "
             + ", ".join(check.kind for check in missing)
         )
 
-    if inputs.authz_hits:
-        return "likely_exploitable", 0.55, (
-            "Authorization hits were observed but required controls for this "
-            "vulnerability were not explicitly verified."
+    else:
+        return (
+            (
+                "likely_exploitable",
+                0.55,
+                "Authorization hits were observed but required controls for this "
+                "vulnerability were not explicitly verified.",
+            )
+            if inputs.authz_hits
+            else (
+                "insufficient_signal",
+                0.3,
+                "No access-control evidence could be correlated to this finding.",
+            )
         )
-
-    return "insufficient_signal", 0.3, (
-        "No access-control evidence could be correlated to this finding."
-    )
 
 
 def _verdict_config(inputs: VerdictInputs) -> tuple[str, float, str]:
@@ -159,6 +174,7 @@ def compute_verdict(inputs: VerdictInputs) -> AssistantInvestigationResult:
             summary="Validation failed before any evidence could be collected.",
             errors=list(inputs.errors),
             budget_exhausted=inputs.budget_exhausted,
+            validation_backend=_normalize_validation_backend(inputs.validation_backend),
         )
 
     if inputs.descriptor.family is VulnFamily.FLOW:
@@ -190,6 +206,7 @@ def compute_verdict(inputs: VerdictInputs) -> AssistantInvestigationResult:
         citations=citations,
         budget_exhausted=inputs.budget_exhausted,
         errors=list(inputs.errors),
+        validation_backend=_normalize_validation_backend(inputs.validation_backend),
     )
 
 

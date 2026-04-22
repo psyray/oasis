@@ -282,6 +282,13 @@ class AssistantInvestigationResult(BaseModel):
         default=None,
         description="Set when narrative synthesis was requested but failed or was skipped.",
     )
+    validation_backend: Literal["graph", "sequential", "sequential_fallback"] = Field(
+        default="sequential",
+        description=(
+            "How the validation pipeline ran: LangGraph when available, pure-Python "
+            "sequential when not, or sequential after a compiled-graph runtime failure."
+        ),
+    )
 
 
 ScanVerdict.model_rebuild()

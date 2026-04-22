@@ -485,6 +485,23 @@ DashboardApp.fetchAssistantSession = function (reportPath, sessionId) {
     });
 };
 
+/** Persist messages for one chat model branch (``POST /api/assistant/session-branch``). */
+DashboardApp.postAssistantSessionBranch = function (payload) {
+    return fetch('/api/assistant/session-branch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload || {}),
+    }).then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const err = data && data.error ? data.error : `HTTP ${response.status}`;
+            throw new Error(err);
+        }
+        return data;
+    });
+};
+
 DashboardApp.fetchAssistantChatModels = function () {
     return fetch('/api/assistant/chat-models', {
         credentials: 'same-origin',
@@ -497,7 +514,7 @@ DashboardApp.fetchAssistantChatModels = function () {
             const err = data && data.error ? data.error : `HTTP ${response.status}`;
             throw new Error(err);
         }
-        const models = data.models;
+        const {models} = data;
         return Array.isArray(models) ? models : [];
     });
 };

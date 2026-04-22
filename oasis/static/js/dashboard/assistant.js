@@ -43,6 +43,176 @@ DashboardApp._validateShortenPath = function (value, keep) {
     return '…/' + parts.slice(-k).join('/');
 };
 
+/** Matches ``finding_validation_storage_key`` in ``assistant_persistence.py`` (sorted JSON keys). */
+DashboardApp.findingValidationStorageKey = function (indices) {
+    if (!indices || typeof indices !== 'object') {
+        return null;
+    }
+    const s = typeof indices.finding_scope_report_path === 'string' ? indices.finding_scope_report_path.trim() : '';
+    const fi = indices.file_index;
+    const ci = indices.chunk_index;
+    const gi = indices.finding_index;
+    if (!Number.isFinite(fi) || !Number.isFinite(ci) || !Number.isFinite(gi)) {
+        return null;
+    }
+    if (fi < 0 || ci < 0 || gi < 0) {
+        return null;
+    }
+    return JSON.stringify({ ci: ci, fi: fi, gi: gi, s: s });
+};
+
+DashboardApp._gatherAssistantFindingIndices = function (panelRoot) {
+    if (!panelRoot) {
+        return {
+            finding_scope_report_path: '',
+            file_index: null,
+            chunk_index: null,
+            finding_index: null,
+        };
+    }
+    const vi = panelRoot.querySelector('#oasis-assistant-vi');
+    const fi = panelRoot.querySelector('#oasis-assistant-fi');
+    const ci = panelRoot.querySelector('#oasis-assistant-ci');
+    const gi = panelRoot.querySelector('#oasis-assistant-gi');
+    const num = function (el) {
+        const v = el && el.value;
+        if (v === '' || v === undefined || v === null) {
+            return null;
+        }
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+    };
+    const scopeRel =
+        vi && typeof vi.value === 'string' && vi.value.trim() ? vi.value.trim() : '';
+    return {
+        finding_scope_report_path: scopeRel,
+        file_index: num(fi),
+        chunk_index: num(ci),
+        finding_index: num(gi),
+    };
+};
+
+/** Human-readable pills for the selected finding (Validate row); uses dashboard charter pills. */
+DashboardApp.updateAssistantValidateTargetSummary = function (panel, txt) {
+    const el = panel && panel.querySelector('#oasis-assistant-validate-target');
+    if (!el) {
+        return;
+    }
+    const label = function (key, fallback) {
+        return typeof txt === 'function' ? txt(key, fallback) : fallback;
+    };
+    DashboardApp._clearElement(el);
+    const indices = DashboardApp._gatherAssistantFindingIndices(panel);
+    const files = Array.isArray(panel._oasisAssistantFiles) ? panel._oasisAssistantFiles : [];
+    const wrap = document.createElement('div');
+    wrap.className = 'oasis-assistant-validate-target-inner';
+
+    const addPill = function (text, titleAttr) {
+        const sp = document.createElement('span');
+        sp.className = 'oasis-assistant-validate-vuln oasis-assistant-validate-target-pill';
+        sp.textContent = text;
+        if (titleAttr) {
+            sp.title = titleAttr;
+        }
+        wrap.appendChild(sp);
+    };
+
+    const scopeRel = indices.finding_scope_report_path || '';
+    if (scopeRel) {
+        addPill(
+            label('validateTargetScopeLabel', 'Report') +
+                ': ' +
+                DashboardApp._truncateAssistantLabel(scopeRel, 72),
+            scopeRel
+        );
+    }
+
+    const fi = indices.file_index;
+    const ci = indices.chunk_index;
+    const gi = indices.finding_index;
+    if (
+        !Number.isFinite(fi) ||
+        fi < 0 ||
+        fi >= files.length ||
+        !Number.isFinite(ci) ||
+        !Number.isFinite(gi)
+    ) {
+        const hint = document.createElement('span');
+        hint.className = 'oasis-assistant-validate-target-hint';
+        hint.textContent = label(
+            'validateTargetIncomplete',
+            'Select file, chunk, and finding for validation scope.'
+        );
+        el.appendChild(hint);
+        return;
+    }
+    const fileEntry = files[fi] || {};
+    const fp =
+        fileEntry && typeof fileEntry.file_path === 'string' && fileEntry.file_path.trim()
+            ? fileEntry.file_path.trim()
+            : '(' + fi + ')';
+    addPill(
+        label('findingFileLabel', 'File') + ': ' + DashboardApp._truncateAssistantLabel(fp, 72),
+        fp
+    );
+    const chunks = Array.isArray(fileEntry.chunk_analyses) ? fileEntry.chunk_analyses : [];
+    const chunk = ci >= 0 && ci < chunks.length ? chunks[ci] : null;
+    let chunkText = label('findingChunkLabel', 'Chunk') + ' ' + (ci + 1);
+    if (chunk && chunk.start_line != null && chunk.end_line != null) {
+        chunkText += ' (lines ' + chunk.start_line + '–' + chunk.end_line + ')';
+    }
+    addPill(DashboardApp._truncateAssistantLabel(chunkText, 96), chunkText);
+    const findings = chunk && Array.isArray(chunk.findings) ? chunk.findings : [];
+    const fd = gi >= 0 && gi < findings.length ? findings[gi] : null;
+    const ft =
+        fd && typeof fd.title === 'string' && fd.title.trim()
+            ? fd.title.trim()
+            : label('findingFindingLabel', 'Finding') + ' ' + (gi + 1);
+    addPill(DashboardApp._truncateAssistantLabel(ft, 88), ft);
+    el.appendChild(wrap);
+};
+
+DashboardApp.refreshAssistantVerdictPanelFromSession = function (panel, txt) {
+    const reportPath = DashboardApp._assistantReportPath || '';
+    const sid = DashboardApp._assistantSessionId;
+    const chatModelSelect = panel && panel.querySelector('#oasis-assistant-chat-model');
+    const cm = chatModelSelect && chatModelSelect.value ? String(chatModelSelect.value).trim() : '';
+    const validatePanel = panel && panel.querySelector('#oasis-assistant-validate-panel');
+    if (!panel || !reportPath || !sid || !cm || !validatePanel) {
+        return Promise.resolve();
+    }
+    const fk = DashboardApp.findingValidationStorageKey(DashboardApp._gatherAssistantFindingIndices(panel));
+    if (!fk) {
+        validatePanel.hidden = true;
+        DashboardApp._clearElement(validatePanel);
+        return Promise.resolve();
+    }
+    return DashboardApp.fetchAssistantSession(reportPath, sid)
+        .then(function (doc) {
+            if (!doc || typeof doc !== 'object') {
+                return;
+            }
+            const branches =
+                doc.model_branches && typeof doc.model_branches === 'object' ? doc.model_branches : {};
+            const br = branches[cm];
+            const rawMap = br && br.finding_validations;
+            const fv =
+                rawMap && typeof rawMap === 'object' && typeof rawMap[fk] === 'object'
+                    ? rawMap[fk]
+                    : null;
+            if (fv) {
+                validatePanel.hidden = false;
+                DashboardApp.renderAssistantVerdictPanel(validatePanel, fv, txt);
+            } else {
+                validatePanel.hidden = true;
+                DashboardApp._clearElement(validatePanel);
+            }
+        })
+        .catch(function () {
+            /* ignore */
+        });
+};
+
 /**
  * Render the ``AssistantInvestigationResult`` payload returned by
  * ``/api/assistant/investigate`` with the dashboard charter. Layout is
@@ -237,15 +407,27 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
         container.appendChild(scope);
     }
 
-    const citationLabel = function (cit) {
+    const appendCitation = function (parent, cit) {
         if (!cit || typeof cit !== 'object') {
-            return '';
+            return;
         }
         const p = cit.file_path || '';
         const start = cit.start_line || '';
         const full = p + (start ? ':' + start : '');
         const short = shortPath(p, 2) + (start ? ':' + start : '');
-        return '<span class="oasis-assistant-validate-citation" title="' + esc(full) + '">' + esc(short) + '</span>';
+        const span = document.createElement('span');
+        span.className = 'oasis-assistant-validate-citation';
+        span.title = full;
+        span.textContent = short;
+        parent.appendChild(span);
+    };
+
+    const appendSeverityClassSuffix = function (raw) {
+        const allowed =
+            DashboardApp.ASSISTANT_VALIDATE_SEVERITY_SUFFIXES ||
+            ['info', 'low', 'medium', 'high', 'critical'];
+        const s = String(raw || '').trim().toLowerCase();
+        return allowed.indexOf(s) !== -1 ? s : 'info';
     };
 
     // Evidence section builder — each group gets a <details> so the user can
@@ -254,7 +436,7 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
     const evidenceWrap = document.createElement('div');
     evidenceWrap.className = 'oasis-assistant-validate-evidence';
 
-    const appendGroup = function (groupKey, titleText, items, render, opts) {
+    const appendGroup = function (groupKey, titleText, items, fillItem, opts) {
         if (!Array.isArray(items) || items.length === 0) {
             return;
         }
@@ -285,7 +467,7 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
         items.forEach(function (item) {
             const li = document.createElement('li');
             li.className = 'oasis-assistant-validate-item';
-            li.innerHTML = render(item, esc);
+            fillItem(item, li);
             list.appendChild(li);
         });
         scroll.appendChild(list);
@@ -297,88 +479,129 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
         'entries',
         label('validateEntryPointsLabel', 'Entry points'),
         result.entry_points,
-        function (ep) {
-            const tag = '<span class="oasis-assistant-validate-tag">' + esc(ep.framework || '') + '</span>';
-            const kind = esc(ep.label || '');
-            const route = ep.route
-                ? ' <span class="oasis-assistant-validate-route">' + esc(ep.route) + '</span>'
-                : '';
-            return tag + ' <code>' + kind + '</code>' + route + ' ' + citationLabel(ep.citation);
+        function (ep, li) {
+            const tag = document.createElement('span');
+            tag.className = 'oasis-assistant-validate-tag';
+            tag.textContent = ep.framework || '';
+            li.appendChild(tag);
+            li.appendChild(document.createTextNode(' '));
+            const kind = document.createElement('code');
+            kind.textContent = ep.label || '';
+            li.appendChild(kind);
+            if (ep.route) {
+                li.appendChild(document.createTextNode(' '));
+                const route = document.createElement('span');
+                route.className = 'oasis-assistant-validate-route';
+                route.textContent = ep.route;
+                li.appendChild(route);
+            }
+            li.appendChild(document.createTextNode(' '));
+            appendCitation(li, ep.citation);
         }
     );
     appendGroup(
         'paths',
         label('validatePathsLabel', 'Execution paths'),
         result.execution_paths,
-        function (path) {
+        function (path, li) {
             const hops = Array.isArray(path.hops) ? path.hops.length : 0;
-            const entry = path.entry_point
-                ? esc(path.entry_point.route || path.entry_point.label || '')
-                : '<em class="oasis-assistant-validate-none">no entry</em>';
-            return entry + ' <span class="oasis-assistant-validate-sep">→</span> ' + esc(hops) + ' hop(s)';
+            if (path.entry_point) {
+                const entry = document.createElement('span');
+                entry.textContent =
+                    path.entry_point.route || path.entry_point.label || '';
+                li.appendChild(entry);
+            } else {
+                const none = document.createElement('em');
+                none.className = 'oasis-assistant-validate-none';
+                none.textContent = 'no entry';
+                li.appendChild(none);
+            }
+            li.appendChild(document.createTextNode(' '));
+            const sep = document.createElement('span');
+            sep.className = 'oasis-assistant-validate-sep';
+            sep.textContent = '\u2192';
+            li.appendChild(sep);
+            li.appendChild(
+                document.createTextNode(' ' + String(hops) + ' hop(s)')
+            );
         }
     );
     appendGroup(
         'flows',
         label('validateFlowsLabel', 'Taint flows'),
         result.taint_flows,
-        function (flow) {
-            return (
-                '<code>' +
-                esc(flow.source_kind || '') +
-                '</code> <span class="oasis-assistant-validate-sep">→</span> <code>' +
-                esc(flow.sink_kind || '') +
-                '</code> ' +
-                citationLabel(flow.sink_citation)
-            );
+        function (flow, li) {
+            const src = document.createElement('code');
+            src.textContent = flow.source_kind || '';
+            li.appendChild(src);
+            li.appendChild(document.createTextNode(' '));
+            const sep = document.createElement('span');
+            sep.className = 'oasis-assistant-validate-sep';
+            sep.textContent = '\u2192';
+            li.appendChild(sep);
+            li.appendChild(document.createTextNode(' '));
+            const sk = document.createElement('code');
+            sk.textContent = flow.sink_kind || '';
+            li.appendChild(sk);
+            li.appendChild(document.createTextNode(' '));
+            appendCitation(li, flow.sink_citation);
         }
     );
     appendGroup(
         'mitigations',
         label('validateMitigationsLabel', 'Mitigations'),
         result.mitigations,
-        function (m) {
-            const mark = m.nullifies
-                ? '<span class="oasis-assistant-validate-null" title="nullifies the finding">✓</span>'
-                : '';
-            return '<code>' + esc(m.kind || '') + '</code>' + mark + ' ' + citationLabel(m.citation);
+        function (m, li) {
+            const kind = document.createElement('code');
+            kind.textContent = m.kind || '';
+            li.appendChild(kind);
+            if (m.nullifies) {
+                const mark = document.createElement('span');
+                mark.className = 'oasis-assistant-validate-null';
+                mark.title = 'nullifies the finding';
+                mark.textContent = '\u2713';
+                li.appendChild(mark);
+            }
+            li.appendChild(document.createTextNode(' '));
+            appendCitation(li, m.citation);
         }
     );
     appendGroup(
         'controls',
         label('validateControlsLabel', 'Access controls'),
         result.control_checks,
-        function (c) {
-            const cls = c.present
-                ? 'oasis-assistant-validate-ctrl--ok'
-                : 'oasis-assistant-validate-ctrl--missing';
-            return (
-                '<code>' +
-                esc(c.kind || '') +
-                '</code> <span class="oasis-assistant-validate-ctrl ' +
-                cls +
-                '">' +
-                (c.present ? 'present' : 'missing') +
-                '</span>'
-            );
+        function (c, li) {
+            const kind = document.createElement('code');
+            kind.textContent = c.kind || '';
+            li.appendChild(kind);
+            li.appendChild(document.createTextNode(' '));
+            const pill = document.createElement('span');
+            pill.className =
+                'oasis-assistant-validate-ctrl ' +
+                (c.present
+                    ? 'oasis-assistant-validate-ctrl--ok'
+                    : 'oasis-assistant-validate-ctrl--missing');
+            pill.textContent = c.present ? 'present' : 'missing';
+            li.appendChild(pill);
         }
     );
     appendGroup(
         'config',
         label('validateConfigLabel', 'Config findings'),
         result.config_findings,
-        function (f) {
-            const sev = String(f.severity || '').toLowerCase();
-            return (
-                '<code>' +
-                esc(f.kind || '') +
-                '</code> <span class="oasis-assistant-validate-sev oasis-assistant-validate-sev--' +
-                esc(sev || 'info') +
-                '">' +
-                esc(sev || 'info') +
-                '</span> ' +
-                citationLabel(f.citation)
-            );
+        function (f, li) {
+            const kind = document.createElement('code');
+            kind.textContent = f.kind || '';
+            li.appendChild(kind);
+            li.appendChild(document.createTextNode(' '));
+            const sevSlug = appendSeverityClassSuffix(f.severity);
+            const sev = document.createElement('span');
+            sev.className =
+                'oasis-assistant-validate-sev oasis-assistant-validate-sev--' + sevSlug;
+            sev.textContent = sevSlug;
+            li.appendChild(sev);
+            li.appendChild(document.createTextNode(' '));
+            appendCitation(li, f.citation);
         }
     );
 
@@ -447,11 +670,20 @@ DashboardApp._trimAssistantMessages = function (messages) {
 
 DashboardApp._assistantMessagesForApi = function () {
     return DashboardApp._assistantConversation.map(function (m) {
-        return {
+        const o = {
             role: m.role,
             content: typeof m.content === 'string' ? m.content : '',
             at: typeof m.at === 'string' ? m.at : '',
         };
+        if (m.role === 'assistant') {
+            if (typeof m.visible_markdown === 'string') {
+                o.visible_markdown = m.visible_markdown;
+            }
+            if (Array.isArray(m.thought_segments)) {
+                o.thought_segments = m.thought_segments;
+            }
+        }
+        return o;
     });
 };
 
@@ -516,13 +748,13 @@ DashboardApp.populateAssistantFindingSelectorsFromPayload = function (panelRoot,
         return;
     }
     const noneText = txt('findingNoneOption', '— none —');
-    function resetSelect(sel) {
+    const resetSelect = function (sel) {
         DashboardApp._clearElement(sel);
         const opt = document.createElement('option');
         opt.value = '';
         opt.textContent = noneText;
         sel.appendChild(opt);
-    }
+    };
     const files =
         payload && typeof payload === 'object' && Array.isArray(payload.files) ? payload.files : [];
     panelRoot._oasisAssistantFiles = files;
@@ -553,32 +785,32 @@ DashboardApp._assistantBindFindingSelectorEvents = function (panelRoot, txt) {
     }
     const noneText = txt('findingNoneOption', '— none —');
 
-    function selectedIndex(sel) {
+    const selectedIndex = function (sel) {
         const v = sel && sel.value;
         if (v === '' || v === undefined || v === null) {
             return NaN;
         }
         const n = Number(v);
         return Number.isFinite(n) ? n : NaN;
-    }
+    };
 
-    function resetSelect(sel) {
+    const resetSelect = function (sel) {
         DashboardApp._clearElement(sel);
         const opt = document.createElement('option');
         opt.value = '';
         opt.textContent = noneText;
         sel.appendChild(opt);
-    }
+    };
 
-    function chunkOptionLabel(chunk, index) {
+    const chunkOptionLabel = function (chunk, index) {
         let base = txt('findingChunkLabel', 'Chunk') + ' ' + (index + 1);
         if (chunk && chunk.start_line != null && chunk.end_line != null) {
             base += ' (lines ' + chunk.start_line + '–' + chunk.end_line + ')';
         }
         return DashboardApp._truncateAssistantLabel(base, 96);
-    }
+    };
 
-    function renderChunksForFile(files, fi) {
+    const renderChunksForFile = function (files, fi) {
         resetSelect(selCi);
         resetSelect(selGi);
         if (!Number.isFinite(fi) || fi < 0 || fi >= files.length) {
@@ -591,9 +823,9 @@ DashboardApp._assistantBindFindingSelectorEvents = function (panelRoot, txt) {
             opt.textContent = chunkOptionLabel(ch, j);
             selCi.appendChild(opt);
         });
-    }
+    };
 
-    function renderFindingsForChunk(files, fi, ci) {
+    const renderFindingsForChunk = function (files, fi, ci) {
         resetSelect(selGi);
         if (!Number.isFinite(fi) || fi < 0 || fi >= files.length) {
             return;
@@ -613,9 +845,9 @@ DashboardApp._assistantBindFindingSelectorEvents = function (panelRoot, txt) {
             opt.textContent = DashboardApp._truncateAssistantLabel(title, 88);
             selGi.appendChild(opt);
         });
-    }
+    };
 
-    function onFileChange() {
+    const onFileChange = function () {
         const files = panelRoot._oasisAssistantFiles || [];
         const fi = selectedIndex(selFi);
         if (!Number.isFinite(fi) || fi < 0 || fi >= files.length) {
@@ -624,17 +856,30 @@ DashboardApp._assistantBindFindingSelectorEvents = function (panelRoot, txt) {
             return;
         }
         renderChunksForFile(files, fi);
-    }
+    };
 
-    function onChunkChange() {
+    const onChunkChange = function () {
         const files = panelRoot._oasisAssistantFiles || [];
         const fi = selectedIndex(selFi);
         const ci = selectedIndex(selCi);
         renderFindingsForChunk(files, fi, ci);
-    }
+    };
 
-    selFi.addEventListener('change', onFileChange);
-    selCi.addEventListener('change', onChunkChange);
+    const notifyFindingSelection = function () {
+        if (typeof panelRoot._oasisAssistantFindingSelectionCallback === 'function') {
+            panelRoot._oasisAssistantFindingSelectionCallback();
+        }
+    };
+
+    selFi.addEventListener('change', function () {
+        onFileChange();
+        notifyFindingSelection();
+    });
+    selCi.addEventListener('change', function () {
+        onChunkChange();
+        notifyFindingSelection();
+    });
+    selGi.addEventListener('change', notifyFindingSelection);
 };
 
 /**
@@ -651,6 +896,9 @@ DashboardApp.wireAssistantFindingSelectors = function (panelRoot, txt, reportPat
             }
             DashboardApp.populateAssistantFindingSelectorsFromPayload(panelRoot, txt, payload);
             DashboardApp._assistantBindFindingSelectorEvents(panelRoot, txt);
+            if (typeof panelRoot._oasisAssistantFindingSelectionCallback === 'function') {
+                panelRoot._oasisAssistantFindingSelectionCallback();
+            }
         })
         .catch(function () {
             /* keep none-only selects */
@@ -669,7 +917,7 @@ DashboardApp.wireAssistantExecutiveFindingSelectors = function (panelRoot, txt, 
     DashboardApp.populateAssistantFindingSelectorsFromPayload(panelRoot, txt, { files: [] });
     DashboardApp._assistantBindFindingSelectorEvents(panelRoot, txt);
 
-    function fillVulnReportList(rows) {
+    const fillVulnReportList = function (rows) {
         DashboardApp._clearElement(selVi);
         const opt0 = document.createElement('option');
         opt0.value = '';
@@ -690,7 +938,7 @@ DashboardApp.wireAssistantExecutiveFindingSelectors = function (panelRoot, txt, 
             opt.textContent = DashboardApp._truncateAssistantLabel(lb, 72);
             selVi.appendChild(opt);
         });
-    }
+    };
 
     DashboardApp.fetchExecutivePreviewMeta(String(rawMetaPath || '').trim())
         .then(function (meta) {
@@ -710,6 +958,9 @@ DashboardApp.wireAssistantExecutiveFindingSelectors = function (panelRoot, txt, 
         const rel = String(selVi.value || '').trim();
         if (!rel || typeof DashboardApp.fetchReportJsonPayload !== 'function') {
             DashboardApp.populateAssistantFindingSelectorsFromPayload(panelRoot, txt, { files: [] });
+            if (typeof panelRoot._oasisAssistantFindingSelectionCallback === 'function') {
+                panelRoot._oasisAssistantFindingSelectionCallback();
+            }
             return;
         }
         DashboardApp.fetchReportJsonPayload(rel)
@@ -718,12 +969,18 @@ DashboardApp.wireAssistantExecutiveFindingSelectors = function (panelRoot, txt, 
                     DashboardApp.populateAssistantFindingSelectorsFromPayload(panelRoot, txt, {
                         files: [],
                     });
-                    return;
+                } else {
+                    DashboardApp.populateAssistantFindingSelectorsFromPayload(panelRoot, txt, payload);
                 }
-                DashboardApp.populateAssistantFindingSelectorsFromPayload(panelRoot, txt, payload);
+                if (typeof panelRoot._oasisAssistantFindingSelectionCallback === 'function') {
+                    panelRoot._oasisAssistantFindingSelectionCallback();
+                }
             })
             .catch(function () {
                 DashboardApp.populateAssistantFindingSelectorsFromPayload(panelRoot, txt, { files: [] });
+                if (typeof panelRoot._oasisAssistantFindingSelectionCallback === 'function') {
+                    panelRoot._oasisAssistantFindingSelectionCallback();
+                }
             });
     });
 };
@@ -766,6 +1023,7 @@ DashboardApp.mountReportAssistantPanel = function () {
         ? txt('contextExecutiveAggregate', 'Context: full scan (aggregate JSON)')
         : txt('contextSingleVuln', 'Context: single vulnerability report');
     const findingHiddenClass = showFindingRefBlock ? '' : ' oasis-assistant-finding-ref--hidden';
+    const validateTargetWrapClass = showFindingRefBlock ? '' : ' oasis-assistant-validate-target-wrap--hidden';
     const viRowHtml = execSummary
         ? `
                         <label class="oasis-assistant-finding-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingVulnReportLabel', 'Vulnerability'))}</span>
@@ -818,6 +1076,9 @@ DashboardApp.mountReportAssistantPanel = function () {
                     </div>
                 </div>
                 <div class="oasis-assistant-validate-row">
+                    <div class="oasis-assistant-validate-target-wrap${validateTargetWrapClass}">
+                        <div id="oasis-assistant-validate-target" class="oasis-assistant-validate-target" aria-live="polite"></div>
+                    </div>
                     <button type="button" class="btn btn-secondary" id="oasis-assistant-validate-btn">${DashboardApp._escapeHtml(txt('validateButton', 'Validate this finding'))}</button>
                     <div id="oasis-assistant-validate-panel" class="oasis-assistant-validate-panel" hidden></div>
                 </div>
@@ -873,6 +1134,12 @@ DashboardApp.mountReportAssistantPanel = function () {
     }
     mountPoint.appendChild(panel);
 
+    const refreshFindingUi = function () {
+        DashboardApp.updateAssistantValidateTargetSummary(panel, txt);
+        return DashboardApp.refreshAssistantVerdictPanelFromSession(panel, txt);
+    };
+    panel._oasisAssistantFindingSelectionCallback = refreshFindingUi;
+
     /* report_template.html puts .report-footer before the injected assistant in DOM order; relocate below the panel. */
     wrapper.querySelectorAll('footer.report-footer').forEach(function (footer) {
         if (!footer.parentNode) {
@@ -888,9 +1155,15 @@ DashboardApp.mountReportAssistantPanel = function () {
     if (execSummary) {
         DashboardApp.wireAssistantExecutiveFindingSelectors(panel, txt, rawPath);
     }
+    if (showFindingRefBlock) {
+        refreshFindingUi();
+    }
 
     const chatModelLsKey = DashboardApp._assistantChatModelStorageKey(reportPath);
     const chatModelSelect = panel.querySelector('#oasis-assistant-chat-model');
+    let activeChatModel = '';
+    /** Monotonic guard so overlapping model-switch chains cannot reorder UI state. */
+    let chatModelSwitchSeq = 0;
     const budgetHintEl = panel.querySelector('#oasis-assistant-budget-hint');
 
     const formatBudgetHint = function (chars) {
@@ -908,11 +1181,142 @@ DashboardApp.mountReportAssistantPanel = function () {
 
     if (chatModelSelect) {
         chatModelSelect.addEventListener('change', function () {
+            const next = chatModelSelect.value ? String(chatModelSelect.value).trim() : '';
             try {
-                window.localStorage.setItem(chatModelLsKey, chatModelSelect.value || '');
+                window.localStorage.setItem(chatModelLsKey, next || '');
             } catch (e) {
                 /* ignore */
             }
+            const prev = activeChatModel || '';
+            const sid = DashboardApp._assistantSessionId;
+            const payloadPreview = panel._oasisAssistantPayload;
+            const vnSwitch =
+                payloadPreview && typeof payloadPreview.vulnerability_name === 'string'
+                    ? payloadPreview.vulnerability_name.trim()
+                    : '';
+            const validateBtnSwitch = panel.querySelector('#oasis-assistant-validate-btn');
+
+            if (!prev || prev === next) {
+                activeChatModel = next;
+                return;
+            }
+            if (!sid) {
+                activeChatModel = next;
+                return;
+            }
+
+            const switchSeq = ++chatModelSwitchSeq;
+            const staleModelSwitch = { _oasisStaleModelSwitch: true };
+            const assertFreshSwitch = function () {
+                if (switchSeq !== chatModelSwitchSeq) {
+                    return Promise.reject(staleModelSwitch);
+                }
+                return Promise.resolve();
+            };
+
+            chatModelSelect.disabled = true;
+            if (validateBtnSwitch) {
+                validateBtnSwitch.disabled = true;
+            }
+            sendBtn.disabled = true;
+            DashboardApp.postAssistantSessionBranch({
+                report_path: reportPath,
+                session_id: sid,
+                model: prev,
+                messages: DashboardApp._assistantMessagesForApi(),
+                vulnerability_name: vnSwitch,
+            })
+                .then(function () {
+                    return assertFreshSwitch().then(function () {
+                        return DashboardApp.fetchAssistantSession(reportPath, sid);
+                    });
+                })
+                .then(function (doc) {
+                    return assertFreshSwitch().then(function () {
+                        if (!doc || typeof doc !== 'object') {
+                            throw new Error('session');
+                        }
+                        const branches =
+                            doc.model_branches && typeof doc.model_branches === 'object'
+                                ? doc.model_branches
+                                : {};
+                        const br = branches[next];
+                        const rawMsgs = br && Array.isArray(br.messages) ? br.messages : [];
+                        const trimmed = DashboardApp._trimAssistantMessages(rawMsgs);
+                        DashboardApp._assistantConversation = trimmed.map(function (m) {
+                            if (!m || typeof m !== 'object') {
+                                return { role: 'user', content: '', at: '' };
+                            }
+                            const base = {
+                                role: m.role,
+                                content: typeof m.content === 'string' ? m.content : '',
+                                at: typeof m.at === 'string' ? m.at : '',
+                            };
+                            if (m.role === 'assistant') {
+                                if (typeof m.visible_markdown === 'string') {
+                                    base.visible_markdown = m.visible_markdown;
+                                }
+                                if (Array.isArray(m.thought_segments)) {
+                                    base.thought_segments = m.thought_segments;
+                                }
+                            }
+                            return base;
+                        });
+                        activeChatModel = next;
+                        chatModelSelect.value = next;
+                        renderLog();
+                        DashboardApp.updateAssistantValidateTargetSummary(panel, txt);
+                        const vPanelSw = panel.querySelector('#oasis-assistant-validate-panel');
+                        const fkSw = DashboardApp.findingValidationStorageKey(
+                            DashboardApp._gatherAssistantFindingIndices(panel)
+                        );
+                        const rawMapSw = br && br.finding_validations;
+                        const fvSw =
+                            fkSw &&
+                            rawMapSw &&
+                            typeof rawMapSw === 'object' &&
+                            typeof rawMapSw[fkSw] === 'object'
+                                ? rawMapSw[fkSw]
+                                : null;
+                        if (vPanelSw) {
+                            if (fvSw) {
+                                vPanelSw.hidden = false;
+                                DashboardApp.renderAssistantVerdictPanel(vPanelSw, fvSw, txt);
+                            } else {
+                                vPanelSw.hidden = true;
+                                DashboardApp._clearElement(vPanelSw);
+                            }
+                        }
+                        return DashboardApp.postAssistantSessionBranch({
+                            report_path: reportPath,
+                            session_id: sid,
+                            model: next,
+                            messages: DashboardApp._assistantMessagesForApi(),
+                            vulnerability_name: vnSwitch,
+                            set_as_active: true,
+                        });
+                    });
+                })
+                .catch(function (err) {
+                    if (err && err._oasisStaleModelSwitch) {
+                        return;
+                    }
+                    try {
+                        chatModelSelect.value = prev;
+                    } catch (e2) {
+                        /* ignore */
+                    }
+                })
+                .finally(function () {
+                    if (switchSeq !== chatModelSwitchSeq) {
+                        return;
+                    }
+                    chatModelSelect.disabled = false;
+                    if (validateBtnSwitch) {
+                        validateBtnSwitch.disabled = false;
+                    }
+                    sendBtn.disabled = false;
+                });
         });
     }
 
@@ -1067,9 +1471,20 @@ DashboardApp.mountReportAssistantPanel = function () {
         userQuestionSeq = 0;
         DashboardApp._clearElement(logEl);
         rebuildQuestionIndex();
+        const vClear = panel.querySelector('#oasis-assistant-validate-panel');
+        if (vClear) {
+            vClear.hidden = true;
+            DashboardApp._clearElement(vClear);
+        }
+        const vTargetEl = panel.querySelector('#oasis-assistant-validate-target');
+        if (vTargetEl) {
+            DashboardApp._clearElement(vTargetEl);
+        }
         if (chatModelSelect && cachedSortedChatModels.length) {
             applyAssistantChatModelSeed(cachedSortedChatModels, reportPreferredModelStr);
         }
+        activeChatModel =
+            chatModelSelect && chatModelSelect.value ? String(chatModelSelect.value).trim() : '';
         refreshSessionList(DashboardApp._assistantSessionId);
     };
 
@@ -1153,6 +1568,38 @@ DashboardApp.mountReportAssistantPanel = function () {
                 DashboardApp._assistantSessionId = doc.session_id || sessionId;
                 syncChatModelFromSessionDoc(doc);
                 renderLog();
+                activeChatModel =
+                    chatModelSelect && chatModelSelect.value
+                        ? String(chatModelSelect.value).trim()
+                        : '';
+                const vPanelLd = panel.querySelector('#oasis-assistant-validate-panel');
+                if (vPanelLd) {
+                    DashboardApp.updateAssistantValidateTargetSummary(panel, txt);
+                    const mk = activeChatModel;
+                    const branches =
+                        doc.model_branches && typeof doc.model_branches === 'object'
+                            ? doc.model_branches
+                            : {};
+                    const br = mk ? branches[mk] : null;
+                    const fkLd = DashboardApp.findingValidationStorageKey(
+                        DashboardApp._gatherAssistantFindingIndices(panel)
+                    );
+                    const rawMapLd = br && br.finding_validations;
+                    const fvLd =
+                        fkLd &&
+                        rawMapLd &&
+                        typeof rawMapLd === 'object' &&
+                        typeof rawMapLd[fkLd] === 'object'
+                            ? rawMapLd[fkLd]
+                            : null;
+                    if (fvLd) {
+                        vPanelLd.hidden = false;
+                        DashboardApp.renderAssistantVerdictPanel(vPanelLd, fvLd, txt);
+                    } else {
+                        vPanelLd.hidden = true;
+                        DashboardApp._clearElement(vPanelLd);
+                    }
+                }
             })
             .catch(function () {
                 startNewChat();
@@ -1206,42 +1653,11 @@ DashboardApp.mountReportAssistantPanel = function () {
             });
     });
 
-    const gatherFindingIndices = function (panelRoot) {
-        if (!panelRoot) {
-            return {
-                finding_scope_report_path: '',
-                file_index: null,
-                chunk_index: null,
-                finding_index: null,
-            };
-        }
-        const vi = panelRoot.querySelector('#oasis-assistant-vi');
-        const fi = panelRoot.querySelector('#oasis-assistant-fi');
-        const ci = panelRoot.querySelector('#oasis-assistant-ci');
-        const gi = panelRoot.querySelector('#oasis-assistant-gi');
-        const num = function (el) {
-            const v = el && el.value;
-            if (v === '' || v === undefined || v === null) {
-                return null;
-            }
-            const n = Number(v);
-            return Number.isFinite(n) ? n : null;
-        };
-        const scopeRel =
-            vi && typeof vi.value === 'string' && vi.value.trim() ? vi.value.trim() : '';
-        return {
-            finding_scope_report_path: scopeRel,
-            file_index: num(fi),
-            chunk_index: num(ci),
-            finding_index: num(gi),
-        };
-    };
-
     const validateBtn = panel.querySelector('#oasis-assistant-validate-btn');
     const validatePanel = panel.querySelector('#oasis-assistant-validate-panel');
     if (validateBtn && validatePanel) {
         validateBtn.addEventListener('click', function () {
-            const indices = gatherFindingIndices(panel);
+            const indices = DashboardApp._gatherAssistantFindingIndices(panel);
             // Resolve the selected file/chunk/finding locally so the request
             // is self-contained (visible in Network tab) and the server can
             // cross-check indices against the declared sink hints.
@@ -1294,6 +1710,9 @@ DashboardApp.mountReportAssistantPanel = function () {
                 chunk_index: indices.chunk_index,
                 finding_index: indices.finding_index,
             };
+            if (indices.finding_scope_report_path) {
+                validatePayload.finding_scope_report_path = indices.finding_scope_report_path;
+            }
             if (payloadVulnName) {
                 validatePayload.vulnerability_name = payloadVulnName;
             }
@@ -1310,6 +1729,10 @@ DashboardApp.mountReportAssistantPanel = function () {
             if (validateModel) {
                 validatePayload.model = validateModel;
             }
+            if (!DashboardApp._assistantSessionId) {
+                DashboardApp._assistantSessionId = DashboardApp._newAssistantSessionId();
+            }
+            validatePayload.session_id = DashboardApp._assistantSessionId;
             const originalLabel = validateBtn.textContent;
             validateBtn.disabled = true;
             validateBtn.textContent = txt('validateRunning', 'Validating…');
@@ -1318,6 +1741,40 @@ DashboardApp.mountReportAssistantPanel = function () {
             DashboardApp.postAssistantInvestigate(validatePayload)
                 .then(function (result) {
                     DashboardApp.renderAssistantVerdictPanel(validatePanel, result, txt);
+                    const anchor =
+                        'OASIS finding validation finished for the selected finding. The full structured verdict (status, evidence, narrative) is stored for this chat model — ask for a PoC, clarifications, or next steps.';
+                    const nowIso = new Date().toISOString();
+                    appendUserMsg(anchor);
+                    DashboardApp._assistantConversation.push({
+                        role: 'user',
+                        content: anchor,
+                        at: nowIso,
+                    });
+                    DashboardApp._assistantConversation = DashboardApp._trimAssistantMessages(
+                        DashboardApp._assistantConversation
+                    );
+                    rebuildQuestionIndex();
+                    wireMdCodeCopy();
+                    const vnPersist = payloadVulnName || '';
+                    const cmPersist =
+                        validateModel ||
+                        (chatModelSelect && chatModelSelect.value
+                            ? String(chatModelSelect.value).trim()
+                            : '');
+                    return DashboardApp.postAssistantSessionBranch({
+                        report_path: reportPath,
+                        session_id: DashboardApp._assistantSessionId,
+                        model: cmPersist,
+                        messages: DashboardApp._assistantMessagesForApi(),
+                        vulnerability_name: vnPersist,
+                        set_as_active: true,
+                    })
+                        .then(function () {
+                            return refreshSessionList(DashboardApp._assistantSessionId);
+                        })
+                        .catch(function () {
+                            return refreshSessionList(DashboardApp._assistantSessionId);
+                        });
                 })
                 .catch(function (err) {
                     const msg = DashboardApp._errorMessage(err) || 'unknown error';
@@ -1348,7 +1805,7 @@ DashboardApp.mountReportAssistantPanel = function () {
 
         const ragEl = panel.querySelector('#oasis-assistant-rag');
         const expandEl = panel.querySelector('#oasis-assistant-expand');
-        const indices = gatherFindingIndices(panel);
+        const indices = DashboardApp._gatherAssistantFindingIndices(panel);
         const payload = {
             messages: DashboardApp._assistantMessagesForApi(),
             report_path: reportPath,
@@ -1490,6 +1947,8 @@ DashboardApp.mountReportAssistantPanel = function () {
                 seed = String(rows[0].model).trim();
             }
             applyAssistantChatModelSeed(sorted, seed);
+            activeChatModel =
+                chatModelSelect && chatModelSelect.value ? String(chatModelSelect.value).trim() : '';
 
             if (rows.length > 0) {
                 const firstId = rows[0].session_id;

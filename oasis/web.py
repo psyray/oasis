@@ -83,13 +83,20 @@ from .helpers.assistant_api_validate import (
     resolve_assistant_primary_payload,
     validate_assistant_messages,
 )
+from .helpers.assistant_chat_context import append_validation_then_balance_rag
 from .helpers.assistant_persistence import (
     delete_all_chat_sessions,
     delete_chat_session,
+    ensure_session_views,
+    finding_validation_storage_key,
+    get_finding_validation_for_branch,
     list_chat_sessions,
     load_chat_session,
+    merge_finding_validation_into_session,
     new_session_id,
+    normalize_validated_messages_for_storage,
     save_chat_session,
+    save_session_branch_messages,
     utc_now_iso,
     validate_session_id,
 )
@@ -531,8 +538,7 @@ class WebServer:
         ):
             if raw is None:
                 continue
-            candidate = str(raw).strip()
-            if candidate:
+            if candidate := str(raw).strip():
                 return candidate
         return str(OLLAMA_URL).strip()
 
@@ -994,6 +1000,17 @@ class WebServer:
                 excerpt_truncated = True
 
             fi, ci, gi = coerce_finding_indices(data)
+            finding_scope_for_key = ''
+            if aggregate_mode:
+                scope_raw = data.get('finding_scope_report_path')
+                if isinstance(scope_raw, str) and scope_raw.strip():
+                    finding_scope_for_key = scope_raw.strip()
+            finding_key_for_prompt = finding_validation_storage_key(
+                finding_scope_for_key,
+                fi,
+                ci,
+                gi,
+            )
             used_after_excerpt = len(self._ASSISTANT_SYSTEM_INTRO_PREFIX) + len(excerpt)
             remaining_for_prompt = max(0, total_budget - used_after_excerpt)
             finding_header_len = len('\n\nSELECTED_FINDING_JSON:\n')
@@ -1049,13 +1066,40 @@ class WebServer:
             prompt_chunks: List[str] = [self._ASSISTANT_SYSTEM_INTRO_PREFIX + excerpt]
             if finding_json:
                 prompt_chunks.extend(['', 'SELECTED_FINDING_JSON:', finding_json])
-            if rag_block:
-                prompt_chunks.extend(['', 'RETRIEVAL_CONTEXT:', rag_block])
+            prompt_core = '\n'.join(prompt_chunks)
+
+            finding_validation_for_prompt: Optional[Dict[str, Any]] = None
+            sid_ctx = data.get('session_id')
+            try:
+                if isinstance(sid_ctx, str) and validate_session_id(sid_ctx.strip()):
+                    loaded_sess = load_chat_session(
+                        self.security_dir, report_rel, sid_ctx.strip()
+                    )
+                    finding_validation_for_prompt = get_finding_validation_for_branch(
+                        loaded_sess,
+                        chat_model,
+                        finding_key_for_prompt,
+                    )
+                core_so_far = append_validation_then_balance_rag(
+                    prompt_core=prompt_core,
+                    finding_validation=finding_validation_for_prompt,
+                    rag_block=rag_block,
+                    total_budget=total_budget,
+                )
+            except Exception:
+                logger.warning(
+                    'Assistant chat context build failed; continuing without persisted finding validation',
+                    exc_info=True,
+                )
+                rag_fallback = ''
+                if rag_block:
+                    rag_fallback = '\n\nRETRIEVAL_CONTEXT:\n' + rag_block
+                core_so_far = prompt_core + rag_fallback
 
             labels_note = data.get('user_finding_labels')
             labels_header = '\n\nUSER_LOCAL_TRIAGE_NOTES:\n'
-            core_so_far = '\n'.join(prompt_chunks)
             labels_cap = max(0, total_budget - len(core_so_far) - len(labels_header))
+            system_content = core_so_far
             if isinstance(labels_note, str) and labels_note.strip():
                 note = labels_note.strip()
                 if labels_cap > 0 and len(note) > labels_cap:
@@ -1063,9 +1107,7 @@ class WebServer:
                 elif labels_cap <= 0:
                     note = ''
                 if note:
-                    prompt_chunks.extend(['', 'USER_LOCAL_TRIAGE_NOTES:', note])
-
-            system_content = '\n'.join(prompt_chunks)
+                    system_content = core_so_far + '\n\nUSER_LOCAL_TRIAGE_NOTES:\n' + note
             if len(system_content) > total_budget:
                 logger.info(
                     "Assistant system prompt capped (chars=%s budget=%s excerpt_truncated=%s)",
@@ -1105,17 +1147,7 @@ class WebServer:
             else:
                 sess_id = new_session_id()
             ts = utc_now_iso()
-            persist_msgs: List[Dict[str, Any]] = []
-            for m in messages:
-                if not isinstance(m, dict):
-                    continue
-                mc: Dict[str, Any] = {
-                    'role': str(m.get('role', '')),
-                    'content': m.get('content') if isinstance(m.get('content'), str) else '',
-                }
-                att = m.get('at')
-                mc['at'] = att.strip() if isinstance(att, str) and att.strip() else ts
-                persist_msgs.append(mc)
+            persist_msgs = normalize_validated_messages_for_storage(messages, default_at=ts)
             persist_msgs.append({'role': 'assistant', 'content': raw if isinstance(raw, str) else '', 'at': ts})
             if aggregate_mode:
                 vuln_label = 'Executive summary (aggregate)'
@@ -1189,11 +1221,7 @@ class WebServer:
             if not isinstance(primary_payload, dict):
                 return jsonify({'error': 'Invalid report'}), 422
 
-            vulnerability_name = str(data.get('vulnerability_name') or '').strip()
-            if not vulnerability_name:
-                vulnerability_name = str(primary_payload.get('vulnerability_name') or '').strip()
-            if vulnerability_name not in ALL_VULN_NAMES:
-                return jsonify({'error': 'Unknown vulnerability_name'}), 400
+            vulnerability_name = str(data.get('vulnerability_name') or '').strip() or str(primary_payload.get('vulnerability_name') or '').strip()
 
             # Candidate scan roots, in priority order:
             #   1. explicit ``scan_root`` from the request payload
@@ -1222,6 +1250,12 @@ class WebServer:
                 return jsonify({'error': 'scan_root does not exist'}), 404
 
             fi, ci, gi = coerce_finding_indices(data)
+            scope_merge = data.get('finding_scope_report_path')
+            finding_scope_merge = (
+                scope_merge.strip()
+                if isinstance(scope_merge, str) and scope_merge.strip()
+                else ''
+            )
             sink_file: Optional[Path] = None
             sink_line: Optional[int] = None
             try:
@@ -1331,7 +1365,119 @@ class WebServer:
                             }
                         )
 
+            report_rel_save = str(resolved_report.relative_to(security_root)).replace('\\', '/')
+            sid_merge = data.get('session_id')
+            chat_model_merge = data.get('model')
+            if isinstance(chat_model_merge, str) and chat_model_merge.strip():
+                chat_model_merge = chat_model_merge.strip()
+            else:
+                mn_m = primary_payload.get('model_name')
+                chat_model_merge = (
+                    mn_m.strip() if isinstance(mn_m, str) and mn_m.strip() else ''
+                )
+            merge_fk = finding_validation_storage_key(
+                finding_scope_merge,
+                fi,
+                ci,
+                gi,
+            )
+            if (
+                isinstance(sid_merge, str)
+                and validate_session_id(sid_merge.strip())
+                and chat_model_merge
+                and merge_fk
+            ):
+                try:
+                    merge_finding_validation_into_session(
+                        security_root,
+                        report_rel_save,
+                        sid_merge.strip(),
+                        chat_model_merge,
+                        result.model_dump(mode='json'),
+                        vulnerability_name,
+                        finding_key=merge_fk,
+                    )
+                except (ValueError, OSError) as exc:
+                    logger.warning(
+                        'merge finding validation into session failed: %s',
+                        exc,
+                        exc_info=True,
+                    )
+
             return jsonify(result.model_dump())
+
+        @app.route('/api/assistant/session-branch', methods=['POST'])
+        @login_required
+        def assistant_session_branch():
+            try:
+                body = request.get_json(silent=True)
+            except Exception:
+                body = None
+            if not isinstance(body, dict):
+                return jsonify({'error': 'Invalid JSON'}), 400
+
+            report_rel_raw = str(body.get('report_path') or '').strip()
+            if not report_rel_raw:
+                return jsonify({'error': 'report_path required'}), 400
+
+            security_root = self.security_dir.resolve()
+            resolved_report, primary_synthetic, path_err = resolve_assistant_primary_payload(
+                self.security_dir,
+                report_rel_raw,
+            )
+            if path_err is not None:
+                err_body, status = path_err
+                return jsonify(err_body), status
+            assert resolved_report is not None
+
+            if primary_synthetic is not None:
+                primary_payload = primary_synthetic
+            else:
+                try:
+                    with open(resolved_report, 'r', encoding='utf-8') as rf:
+                        primary_payload = json.load(rf)
+                except Exception:
+                    primary_payload = {}
+            if not isinstance(primary_payload, dict):
+                primary_payload = {}
+
+            report_rel = str(resolved_report.relative_to(security_root)).replace('\\', '/')
+
+            sid = body.get('session_id', '')
+            if not isinstance(sid, str) or not validate_session_id(sid.strip()):
+                return jsonify({'error': 'session_id required'}), 400
+            model = body.get('model')
+            if not isinstance(model, str) or not model.strip():
+                return jsonify({'error': 'model required'}), 400
+
+            msgs, msg_err = validate_assistant_messages(
+                body.get('messages'),
+                max_messages=self._ASSISTANT_MAX_MESSAGES,
+                max_message_chars=self._ASSISTANT_MAX_MESSAGE_CHARS,
+            )
+            if msg_err is not None:
+                err_body, status = msg_err
+                return jsonify(err_body), status
+            assert msgs is not None
+
+            ts = utc_now_iso()
+            persist_msgs = normalize_validated_messages_for_storage(msgs, default_at=ts)
+
+            vn = str(body.get('vulnerability_name') or '').strip() or str(primary_payload.get('vulnerability_name') or '').strip()
+
+            try:
+                save_session_branch_messages(
+                    self.security_dir,
+                    report_rel,
+                    sid.strip(),
+                    model.strip(),
+                    persist_msgs,
+                    vn,
+                    set_as_active=bool(body.get('set_as_active')),
+                )
+            except (ValueError, OSError) as exc:
+                return jsonify({'error': str(exc)}), 400
+            return jsonify({'ok': True})
 
         @app.route('/api/assistant/sessions', methods=['GET'])
         @login_required
@@ -1356,6 +1502,7 @@ class WebServer:
             doc = load_chat_session(self.security_dir, report_rel, sid)
             if not doc:
                 return jsonify({'error': 'session not found'}), 404
+            doc = ensure_session_views(doc)
             msgs = doc.get('messages')
             if isinstance(msgs, list):
                 doc = dict(doc)
@@ -2201,6 +2348,17 @@ class WebServer:
     def _latest_scan_progress_from_filtered_reports(reports_to_analyze) -> dict:
         return WebServer._latest_scan_progress_from_reports(reports_to_analyze)
 
+    @staticmethod
+    def _merge_json_report_stats_into_risk_summary(
+        risk_summary: Dict[str, int], report_stats: Dict[str, Any]
+    ) -> None:
+        """Accumulate vulnerability JSON ``stats`` into dashboard ``risk_summary`` counters."""
+        risk_summary["total_findings"] += report_stats.get("total_findings", 0)
+        risk_summary["critical"] += report_stats.get("critical_risk", 0)
+        risk_summary["high"] += report_stats.get("high_risk", 0)
+        risk_summary["medium"] += report_stats.get("medium_risk", 0)
+        risk_summary["low"] += report_stats.get("low_risk", 0)
+
     def _update_stats_for_report(self, stats: dict, report: dict) -> None:
         stats["total_reports"] += 1
         if model := report.get("model"):
@@ -2219,10 +2377,7 @@ class WebServer:
             stats["dates"][date_only] = stats["dates"].get(date_only, 0) + 1
 
         if "stats" in report and report["stats"]:
-            report_stats = report["stats"]
-            stats["risk_summary"]["total_findings"] += report_stats.get("total_findings", 0)
-            stats["risk_summary"]["critical"] += report_stats.get("critical_risk", 0)
-            stats["risk_summary"]["high"] += report_stats.get("high_risk", 0)
-            stats["risk_summary"]["medium"] += report_stats.get("medium_risk", 0)
-            stats["risk_summary"]["low"] += report_stats.get("low_risk", 0)
+            WebServer._merge_json_report_stats_into_risk_summary(
+                stats["risk_summary"], report["stats"]
+            )
 

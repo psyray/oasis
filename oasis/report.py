@@ -771,7 +771,7 @@ class Report:
             tier_id: len(similarity_groups.get(tier_id) or [])
             for tier_id, _ in EXEC_SUMMARY_EMBEDDING_TIER_ORDER
         }
-        primary_model = deep_model_name.strip() if deep_model_name.strip() else str(model_name or "").strip()
+        primary_model = deep_model_name.strip() or str(model_name or "").strip()
         return {
             "report_type": "executive_summary",
             "schema_version": 1,

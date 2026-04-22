@@ -1,70 +1,69 @@
-## 🚀 [0.5.1] - 2026-04-21
+## 🚀 [0.5.1] - 2026-04-22
 
 ### ✨ Added
-- 🛡️ **Assistant validation of findings** (`POST /api/assistant/investigate`): a deterministic, code-driven agent that classifies each vulnerability into one of three families (**flow**, **access**, **config**) and assembles a verdict (`confirmed_exploitable` / `likely_exploitable` / `needs_review` / `not_exploitable`) with confidence and full citations. It discovers framework-specific **entry points**, traces **call paths** to the sink, detects **taint flows** (source → sink inside the enclosing function), identifies **nullifying mitigations** (parameterized SQL, path normalizers, sanitizers, ORMs, etc.), verifies **required controls** (auth/CSRF/session/JWT/CORS), and runs **config/secret/crypto/log-leak** audits. Orchestrated with **LangGraph** when available, with a pure-Python fallback. Dashboard exposes a **Validate this finding** button and a verdict panel rendering every piece of collected evidence.
-- 📝 **Validation LLM narrative** (`oasis/helpers/assistant_investigation_synth.py`): after the deterministic verdict, the server optionally calls the dashboard **chat model** (same Ollama endpoint as `/api/assistant/chat`) to produce `narrative_markdown` that explains the evidence without overriding `status` / `confidence` / `summary`. JSON field `synthesize_narrative` defaults to true; pass `model` or rely on the report’s `model_name`.
-- 🧩 **Validation helpers** (`oasis/helpers/assistant_entrypoints.py`, `assistant_trace.py`, `assistant_taint.py`, `assistant_mitigations.py`, `assistant_authz.py`, `assistant_controls.py`, `assistant_config_audit.py`, `assistant_secret_scan.py`, `assistant_crypto_scan.py`, `assistant_log_filter.py`, `assistant_verdict.py`, `assistant_scan_utils.py`, `validation_patterns.py`, `vuln_taxonomy.py`): single-source-of-truth regex catalog for entry points / sources / sinks / mitigations / controls, ripgrep-accelerated scanning with a pure-Python fallback, and a taxonomy registry covering the 25 OASIS vulnerability types
-- 📐 **Validation schemas** (`oasis/schemas/analysis.py`): `EntryPointHit`, `CallHop`, `ExecutionPath`, `TaintFlow`, `MitigationHit`, `AuthzCheckHit`, `ControlCheck`, `ConfigFinding`, `AssistantInvestigationResult`
-- ✅ **Tests** `tests/test_assistant_validation.py`: per-helper units (entry-points, trace, taint, mitigations, authz, config/secrets/crypto/logs, verdict), end-to-end invocation scenarios (SQLi, IDOR, debug/secrets), and schema roundtrip
+- 🛡️ **Validate findings**: deterministic investigation (flow / access / config families) with verdict, confidence, and citations — entry points, paths to the sink, taint, mitigations, access and protocol controls, plus config/secret/crypto/log-style checks. **LangGraph** when available, otherwise a sequential fallback. Dashboard: **Validate this finding** and a verdict panel.
+- 📝 **Validation narrative**: optional follow-up call to the same **Ollama** chat model to produce readable Markdown; it does not override the deterministic verdict. Request flag to disable; model from the request or the report.
+- 💬 **Chat sessions per model**: session JSON **schema_version 3** stores separate threads per chat model plus a **`finding_validations`** map (keyed by file/chunk/finding indices and executive scope path) so multiple validated findings coexist; switching chat model saves the previous thread and reloads the verdict for the currently selected finding. **`POST /api/assistant/chat`** selects the validation entry matching the request finding indices for **`FINDING_VALIDATION_JSON`** in the system prompt. **`POST /api/assistant/investigate`** merges with the same key (includes **`finding_scope_report_path`** in executive mode). Dashboard: pills above **Validate this finding** show the active finding scope.
+- 🧩 **Validation support**: shared pattern catalog and taxonomy for all OASIS vulnerability types, with ripgrep-backed scanning and a code fallback.
+- 📐 Structured types for validation evidence and investigation results in the analysis schema.
+- ✅ Automated tests for validation helpers, APIs, and schema round-trips.
 
 ### 🐛 Fixed
-- 🖼️ Dashboard HTML preview: render **Executive Summary** canonical JSON payloads (`report_type: executive_summary`) instead of raising `Unsupported canonical report type`
+- 🖼️ Dashboard HTML preview: **Executive Summary** reports in canonical JSON no longer error in the preview path.
 
 ## 🚀 [0.5.0] - 2026-04-20
 
 ### Breaking
 
-- **CLI**: Removed **`--adaptive` / `-ad`**; vulnerability analysis is orchestrated exclusively by **LangGraph** (Discover → Scan → Expand → Deep → Verify → Report → optional PoC stage).
-- **CLI**: Removed **`--analyze-type` / `-at`** (`standard` | `deep`). Embedding similarity cache segment uses **`file`/`function`** only (`--embeddings-analyze-type` / `-eat`).
+- **CLI**: Removed **adaptive** mode; analysis runs only through **LangGraph** (discover → scan → expand → deep → verify → report, optional PoC).
+- **CLI**: Removed **analyze-type** (`standard` / `deep`); embedding similarity cache uses **file** vs **function** only.
 
 ### ✨ Added
-- 🤖 **Dashboard assistant** (JSON and **executive** MD/JSON): triage chat in the report modal; **executive** opens **scan-wide aggregate** context (run JSON under the model directory) with a **severity** Chart.js rollup, **chat model** list from Ollama (`/api/assistant/chat-models`), **context / system-budget** hints, and optional **embedding-cache RAG** with a **union of file paths** from vulnerability reports in the run (`--web-assistant-rag` / `--no-web-assistant-rag`, overridable per request). Single-vulnerability mode still supports focus on a structured finding via indices, Markdown answers with sanitized HTML, and collapsible **model thinking** blocks when the model emits tagged thinking sections
-- 💾 **Assistant chat persistence**: conversations stored under `security_reports/<run>/json/.../chat/` (one session file per chat); list, resume, start new, and delete sessions via REST (`GET`/`DELETE` `/api/assistant/session(s)`, `POST /api/assistant/chat`)
-- 🧩 **Assistant stack**: helpers for API validation, path containment, session I/O, RAG retrieval, and thinking parse (`oasis/helpers/assistant_*.py`, `path_containment.py`, `prompt_compose.py`); contract tests in `tests/test_web_assistant_api.py`, `tests/test_assistant_*.py`, `tests/test_path_containment.py`, `tests/test_prompt_compose.py`
-- 📎 **CLI custom instructions** for analysis: `--custom-instructions` and `--custom-instructions-file` append user guidance to deep-analysis and **`--poc-assist`** prompts (`resolved_custom_instructions` / `append_user_instructions`)
-- 🧠 Added **LangGraph** orchestration (`langgraph` + compatible **langchain-core** as required dependencies) as the sole vulnerability analysis pipeline
-- 🎛️ Added **`--langgraph-max-expand`** (`N`): maximum context-expand retries after verify detects structured-output issues (default: **2**)
-- 📎 Added **`--poc-hints`** and repurposed **`--poc-assist`**: hints are derived from structured findings only; PoC assist asks the deep model for executable PoC text (**no** automated execution by OASIS)
-- 📄 Added canonical JSON reports (`report.json`) via `--output-format` (with `all` and comma-separated lists)
-- 🛡️ Added SARIF 2.1.0 export (`sarif/*.sarif`) and dashboard downloads for SARIF
-- ⚡ Added incremental reporting during analysis: vulnerability reports are written as each vulnerability completes instead of waiting for end-of-scan
-- 📈 Added progressive executive summary updates with scan progress metadata (`completed_vulnerabilities`, `total_vulnerabilities`, `is_partial`) and a `/api/progress` endpoint
-- 🧠 Added multi-embed audit execution in one run (`--audit -em model_a,model_b`) with per-model report generation
-- 📊 Added `Audit Metrics Summary` generation in audit markdown reports (`Count`, similarity stats, high/medium/low match tiers)
-- 🧩 Added dashboard audit comparison table to compare embedding-model metrics from the latest comparable audit run
-- 🏷️ Added multi-model selection state in vulnerability cards (badge + model emoji in date chips)
-- 📋 Added structured vulnerability analysis (Pydantic) with JSON normalization and repair for flaky model output
-- 📍 Added source line metadata: chunk `start_line` / `end_line`, optional per-finding `snippet_start_line` / `snippet_end_line` when the vulnerable snippet is found in the chunk text, SARIF `region` (snippet span preferred over chunk span), and report hints (analysis schema version **3**)
-- 🤔 Added Ollama thinking toggles for scan vs deep models (`--model-thinking` / `-mt`, `--small-model-thinking` / `-smt`)
-- 🌍 Added report language metadata (`language`) in canonical JSON and dashboard language flags sourced from report data
-- 🌐 Added dashboard language filter with emoji-flag display aligned with report language badges
-- 🧭 Added `.cursor/` rules and agent skills for implementation, releases, and git conventions
-- 📦 **CLI updates from GitHub releases** (no PyPI): **`--check-update`** compares the installed version to the **latest stable** release via the GitHub API (**draft** and **prerelease** releases are ignored); **`--self-update`** reinstalls from `git+https://github.com/psyray/oasis.git@<tag>` using **pipx** when the package is installed under **site-packages** (editable/dev installs get `git pull` guidance). Optional **stderr** notice when a newer stable release exists, with **24 h** on-disk cache under `XDG_CACHE_HOME` / `~/.cache/oasis/`; set **`OASIS_NO_UPDATE_CHECK=1`** to disable. Adds **`packaging`** as a declared runtime dependency for version ordering
+- 🤖 **Dashboard assistant**: triage chat from the report modal; **executive** mode uses scan-wide aggregate context, severity rollup, Ollama chat model list, system-budget hints, and optional **RAG** over the embedding cache; per-request flags to disable RAG. Single-report mode can target a finding by indices; Markdown replies, sanitized HTML, and optional collapsible **thinking** blocks.
+- 💾 **Chat persistence**: conversations saved beside reports; list, open, start new, and delete via REST.
+- 🧩 **Assistant plumbing**: validation, safe paths, sessions, retrieval, and parsing helpers with contract tests.
+- 📎 **CLI custom instructions** for analysis and for **PoC assist** prompts.
+- 🧠 **LangGraph** as the only vulnerability analysis pipeline (with matching dependencies).
+- 🎛️ **LangGraph max-expand**: cap on context-expand retries after verify (default **2**).
+- 📎 **PoC hints** and **PoC assist**: hints from structured findings only; assist produces suggested PoC text (**no** execution).
+- 📄 Canonical **JSON** reports via **output-format** (`all` or comma-separated formats).
+- 🛡️ **SARIF 2.1** export and dashboard download support.
+- ⚡ **Incremental reporting**: vulnerability JSON written as each type finishes.
+- 📈 **Progressive Executive Summary** with scan metadata and a **progress** API.
+- 🧠 **Multi-embed audit** in one run with per-model reports.
+- 📊 **Audit metrics** in markdown (counts, similarity tiers) and a dashboard **comparison** table across runs.
+- 🏷️ **Multi-model** state on vulnerability cards (badges, emojis).
+- 📋 **Structured analysis** (Pydantic) with normalization and repair for bad model JSON.
+- 📍 Richer **source / snippet line** metadata and SARIF regions; analysis schema bump.
+- 🤔 Ollama **thinking** toggles for scan vs deep models.
+- 🌍 Report **language** in JSON; dashboard language filter and flags.
+- 🧭 Workspace **rules and agent skills** for implementation, releases, and git conventions.
+- 📦 **GitHub-based CLI updates**: check and self-update against stable releases (pipx / git), optional update notice with cache, env flag to disable; **packaging** dependency for version ordering.
 
 ### 🐛 Fixed
-- 🔧 Fixed **`--embeddings-analyze-type`** default: was incorrectly tied to the removed analyze-type default; default is now **`file`** (`EMBEDDING_ANALYSIS_TYPE`)
-- 📝 Fixed vulnerability cards: title/summary shown before the code snippet
-- 🔗 Fixed broken download links in the report modal
-- 🖥️ Fixed small dashboard issues (types display, parallel refresh, debug logging)
-- 🧭 Fixed vulnerability filtering in dashboard so `Executive Summary` remains visible when vulnerability filters are applied
-- 🧹 Fixed atomic text writer edge case by cleaning temporary files when write/replace fails
-- 🧮 Fixed dashboard progress payload handling to keep only high-level pipeline phases and hide low-level adaptive subphase noise
-- 🔎 Fixed report date filtering to support repeated `model` query params and list-based model filtering on the backend
-- 🧷 Fixed date-chip model filtering to prefer local report index data and use API fallback only when needed
+- 🔧 **Embeddings analyze-type** default aligned with the new model (**file**).
+- 📝 Vulnerability cards: title and summary before the snippet.
+- 🔗 Report modal download links.
+- 🖥️ Minor dashboard issues (types, refresh, logging).
+- 🧭 Filters no longer hide **Executive Summary** inappropriately.
+- 🧹 Safer atomic file writes on failure.
+- 🧮 Progress UI: high-level LangGraph phases only, less noisy sub-phases.
+- 🔎 Report date filtering and model query handling.
+- 🧷 Date-chip model filter prefers local index, API as fallback.
 
 ### ⚡ Changed
-- 📄 Canonical JSON and export templates carry **assistant-oriented metadata** where applicable (e.g. embedding model and analysis root context) so the dashboard assistant can align RAG and explanations with the run that produced the report
-- 🎨 Dashboard **report preview** styling updates for assistant UX (`dashboard.css`, `report_preview.css`, login polish)
-- 🎛️ Tunable **`OASIS_*`** environment variables for Ollama timeouts, `num_predict`, PoC digest/log caps, LangGraph context-expand budgets, and structured-output degeneracy heuristics (documented in README + `oasis/config.py`)
-- 🔑 Embedding analyzer per-vulnerability result cache key suffix is **`file`** or **`function`** (replaces obsolete `standard`/`deep` segment from `-at`)
-- 💾 Changed cache layout: per-project folders under `.oasis_cache`, schema-aware cleanup for structured outputs
-- 🗂️ Changed export writes into `oasis.export` to slim down `report.py`
-- 📚 Changed README: `--input` docs, `--output-format`/thinking flags, pipx editable reinstall workflow, vulnerability tag list alignment (`pathtra` and added tags), report folder layout, LangGraph workflow and new flags (replaces adaptive-mode documentation)
-- 📈 Changed progressive executive-summary payloads: **`scan_mode=graph`**, LangGraph-aligned **`phases`** rows, and **`EXEC_SUMMARY_PROGRESS_EVENT_VERSION` = 3** for the dashboard wire contract
-- 🎨 Changed logo asset
-- ♻️ Refactored embedding manager indexing flow into smaller helper methods (argument preparation, result storage, and input preparation reuse)
-- 📚 Updated dashboard sorting/filtering helpers to centralize vulnerability ordering and model-selection encoding/decoding
-- 🧪 Expanded test coverage for multi-embed audit CLI parsing, audit metrics extraction, dashboard filtering/comparison behavior, and progress payload normalization
+- 📄 Canonical JSON and exports include **assistant-oriented** metadata (embed model, analysis root) for RAG alignment.
+- 🎨 Report preview and login styling for assistant UX.
+- 🎛️ More **OASIS_*** env tunables (Ollama timeouts, generation caps, LangGraph budgets, structured-output heuristics); defaults described in the shipped documentation.
+- 🔑 Embedding result cache keys use **file** / **function** only.
+- 💾 Cache layout: per-project folders with schema-aware cleanup.
+- 🗂️ Export logic moved into a dedicated subpackage to slim core reporting code.
+- 📚 Documentation refreshed for input/output, thinking flags, pipx workflow, tags, report layout, LangGraph, and removed adaptive-mode docs.
+- 📈 Executive-summary progress payload version and **phases** aligned with LangGraph.
+- 🎨 Logo update.
+- ♻️ Embedding manager refactor into smaller steps.
+- 📚 Centralized dashboard sorting/filtering and model encoding.
+- 🧪 Broader tests for audit CLI, metrics, dashboard filters, and progress payloads.
 
 ## 🚀 [0.4.0] - 2025-03-21
 
