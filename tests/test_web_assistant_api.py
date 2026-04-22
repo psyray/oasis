@@ -110,6 +110,181 @@ class TestWebAssistantRoutes(unittest.TestCase):
             )
             self.assertEqual(del_resp.status_code, 200)
 
+    @staticmethod
+    def _parse_ndjson_events(raw: bytes):
+        events = []
+        for line in raw.decode("utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            events.append(json.loads(line))
+        return events
+
+    def test_assistant_chat_stream_yields_events_and_persists_reply(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            rel = "rep_stream.json"
+            payload = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "t",
+                "generated_at": "2026-01-01",
+                "model_name": "m1",
+                "vulnerability_name": "SQL Injection",
+                "files": [],
+                "stats": {"total_findings": 0},
+            }
+            (sec / rel).write_text(json.dumps(payload), encoding="utf-8")
+
+            mock_om = server._get_assistant_ollama_manager()
+            mock_om.chat_stream.return_value = iter(
+                [
+                    {"message": {"content": "Hel"}},
+                    {"message": {"content": "lo, "}},
+                    {"message": {"content": "world"}},
+                    {"done": True},
+                ]
+            )
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            resp = client.post(
+                "/api/assistant/chat-stream",
+                data=json.dumps(
+                    {"messages": [{"role": "user", "content": "hi"}], "report_path": rel}
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertTrue(
+                resp.mimetype.startswith("application/x-ndjson"),
+                resp.mimetype,
+            )
+
+            events = self._parse_ndjson_events(resp.get_data())
+            self.assertGreaterEqual(len(events), 3)
+            self.assertEqual(events[0].get("type"), "start")
+            deltas = [e for e in events if e.get("type") == "delta"]
+            self.assertEqual(
+                [d.get("content") for d in deltas], ["Hel", "lo, ", "world"]
+            )
+            done = events[-1]
+            self.assertEqual(done.get("type"), "done")
+            self.assertEqual(done.get("message"), "Hello, world")
+            self.assertEqual(done.get("visible_markdown"), "Hello, world")
+            sid = done.get("session_id")
+            self.assertIsInstance(sid, str)
+            self.assertEqual(len(sid), 36)
+
+            doc = json.loads(
+                client.get(
+                    f"/api/assistant/session?report_path={rel}&session_id={sid}"
+                ).get_data(as_text=True)
+            )
+            msgs = doc.get("messages")
+            self.assertIsInstance(msgs, list)
+            assistant_entries = [m for m in msgs if m.get("role") == "assistant"]
+            self.assertTrue(assistant_entries)
+            self.assertEqual(assistant_entries[-1].get("content"), "Hello, world")
+
+    def test_assistant_chat_stream_emits_error_event_on_ollama_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            rel = "rep_stream_err.json"
+            payload = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "t",
+                "generated_at": "2026-01-01",
+                "model_name": "m1",
+                "vulnerability_name": "SQL Injection",
+                "files": [],
+                "stats": {"total_findings": 0},
+            }
+            (sec / rel).write_text(json.dumps(payload), encoding="utf-8")
+
+            mock_om = server._get_assistant_ollama_manager()
+
+            def _raise(*_args, **_kwargs):
+                raise RuntimeError("boom")
+
+            mock_om.chat_stream.side_effect = _raise
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            resp = client.post(
+                "/api/assistant/chat-stream",
+                data=json.dumps(
+                    {"messages": [{"role": "user", "content": "hi"}], "report_path": rel}
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            events = self._parse_ndjson_events(resp.get_data())
+            self.assertEqual(events[0].get("type"), "start")
+            self.assertEqual(events[-1].get("type"), "error")
+            self.assertIn("RuntimeError", events[-1].get("error", ""))
+
+    def test_assistant_chat_stream_emits_error_when_stream_yields_error_chunk(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            rel = "rep_stream_chunk_err.json"
+            payload = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "t",
+                "generated_at": "2026-01-01",
+                "model_name": "m1",
+                "vulnerability_name": "SQL Injection",
+                "files": [],
+                "stats": {"total_findings": 0},
+            }
+            (sec / rel).write_text(json.dumps(payload), encoding="utf-8")
+
+            mock_om = server._get_assistant_ollama_manager()
+            mock_om.chat_stream.return_value = iter(
+                [
+                    {"message": {"content": "x"}},
+                    {"type": "error", "error": "mid-stream failure"},
+                ]
+            )
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            resp = client.post(
+                "/api/assistant/chat-stream",
+                data=json.dumps(
+                    {"messages": [{"role": "user", "content": "hi"}], "report_path": rel}
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            events = self._parse_ndjson_events(resp.get_data())
+            self.assertEqual(events[0].get("type"), "start")
+            self.assertEqual(events[-1].get("type"), "error")
+            self.assertIn("mid-stream", events[-1].get("error", ""))
+            dones = [e for e in events if e.get("type") == "done"]
+            self.assertFalse(dones)
+
+            sessions = json.loads(
+                client.get(
+                    f"/api/assistant/sessions?report_path={rel}"
+                ).get_data(as_text=True)
+            )
+            self.assertEqual(sessions, [])
+
     def test_assistant_chat_injects_finding_validation_json(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
@@ -325,6 +500,60 @@ class TestWebAssistantRoutes(unittest.TestCase):
                 client.get(f"/api/assistant/session?report_path={rel}&session_id={sid}").get_data(as_text=True)
             )
             self.assertEqual(doc["model_branches"]["mx"]["messages"][0]["content"], "u1")
+
+    def test_assistant_session_branch_accepts_empty_messages(self):
+        """Model switch may flush an empty thread; session-branch must persist []."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            rel = "branch_empty.json"
+            payload = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "t",
+                "generated_at": "2026-01-01",
+                "model_name": "m-a",
+                "vulnerability_name": "XSS",
+                "files": [],
+                "stats": {"total_findings": 0},
+            }
+            (sec / rel).write_text(json.dumps(payload), encoding="utf-8")
+
+            from oasis.helpers.assistant_persistence import new_session_id, save_chat_session
+
+            sid = new_session_id()
+            save_chat_session(
+                sec,
+                rel,
+                sid,
+                [{"role": "user", "content": "hi", "at": "t"}],
+                "m-a",
+                "XSS",
+            )
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            resp = client.post(
+                "/api/assistant/session-branch",
+                data=json.dumps(
+                    {
+                        "report_path": rel,
+                        "session_id": sid,
+                        "model": "m-a",
+                        "messages": [],
+                        "vulnerability_name": "XSS",
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            doc = json.loads(
+                client.get(f"/api/assistant/session?report_path={rel}&session_id={sid}").get_data(as_text=True)
+            )
+            self.assertEqual(doc["model_branches"]["m-a"]["messages"], [])
 
     def test_assistant_chat_visible_and_thought_split(self):
         with tempfile.TemporaryDirectory() as td:

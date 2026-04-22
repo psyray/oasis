@@ -120,6 +120,22 @@ class TestNormalizeClientResponse(unittest.TestCase):
         out = mgr.chat("m", [{"role": "user", "content": "x"}])
         self.assertEqual(out, {"model": "m", "message": {"role": "assistant", "content": "hi"}})
 
+    def test_chat_stream_yields_error_chunk_when_iterator_raises(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr.client = MagicMock()
+
+        def _chunks():
+            yield {"message": {"content": "partial"}}
+            raise RuntimeError("stream dropped")
+
+        mgr.client.chat.return_value = _chunks()
+
+        out = list(mgr.chat_stream("m", [{"role": "user", "content": "x"}]))
+        self.assertGreaterEqual(len(out), 2)
+        self.assertEqual(out[0].get("message", {}).get("content"), "partial")
+        self.assertEqual(out[-1].get("type"), "error")
+        self.assertIn("stream dropped", str(out[-1].get("error", "")))
+
 
 class TestModelInfoNumCtx(unittest.TestCase):
     """Chunk sizing: Modelfile ``num_ctx`` first, else GGUF ``*.context_length``."""

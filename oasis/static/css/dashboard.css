@@ -2316,6 +2316,42 @@ body.modal-open {
     box-sizing: border-box;
     font-family: inherit;
 }
+.oasis-assistant-compose-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border-color, #dee2e6);
+}
+.oasis-assistant-compose-row > button {
+    align-self: flex-end;
+}
+.oasis-assistant-stream {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: inherit;
+    font-size: inherit;
+    line-height: 1.45;
+    background: transparent;
+    border: 0;
+    padding: 0;
+}
+.oasis-assistant-stream-cursor {
+    display: inline-block;
+    margin-left: 0.15rem;
+    color: var(--turquoise, #38b2ac);
+    animation: oasis-assistant-stream-blink 1s steps(2, start) infinite;
+}
+@keyframes oasis-assistant-stream-blink {
+    to {
+        visibility: hidden;
+    }
+}
+.oasis-assistant-msg--streaming {
+    opacity: 0.97;
+}
 .oasis-assistant-convo-row {
     display: grid;
     grid-template-columns: minmax(168px, 240px) minmax(0, 1fr);

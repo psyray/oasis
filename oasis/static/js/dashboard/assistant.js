@@ -1082,15 +1082,6 @@ DashboardApp.mountReportAssistantPanel = function () {
                     <button type="button" class="btn btn-secondary" id="oasis-assistant-validate-btn">${DashboardApp._escapeHtml(txt('validateButton', 'Validate this finding'))}</button>
                     <div id="oasis-assistant-validate-panel" class="oasis-assistant-validate-panel" hidden></div>
                 </div>
-                <div class="oasis-assistant-chips">
-                    <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryFalsePositive', ''))}">${DashboardApp._escapeHtml(txt('chipFalsePositive', ''))}</button>
-                    <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryNextChecks', ''))}">${DashboardApp._escapeHtml(txt('chipNextChecks', ''))}</button>
-                    <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryPreconditions', ''))}">${DashboardApp._escapeHtml(txt('chipPreconditions', ''))}</button>
-                    <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryExploit', ''))}">${DashboardApp._escapeHtml(txt('chipExploit', 'Exploit'))}</button>
-                    <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryHttpRequest', ''))}">${DashboardApp._escapeHtml(txt('chipHttpRequest', 'HTTP request'))}</button>
-                </div>
-                <textarea id="oasis-assistant-input" class="oasis-assistant-input" rows="3" placeholder="${DashboardApp._escapeHtml(txt('inputPlaceholder', ''))}"></textarea>
-                <button type="button" class="btn btn-primary" id="oasis-assistant-send">${DashboardApp._escapeHtml(txt('send', 'Send'))}</button>
             </div>
             <div class="oasis-assistant-convo-row">
                 <aside class="oasis-assistant-index-column" aria-label="${DashboardApp._escapeHtml(txt('ariaQuestionsIndex', 'Question index'))}">
@@ -1100,6 +1091,17 @@ DashboardApp.mountReportAssistantPanel = function () {
                 <div class="oasis-assistant-log-column">
                     <div id="oasis-assistant-log" class="oasis-assistant-log" aria-live="polite"></div>
                 </div>
+            </div>
+            <div class="oasis-assistant-compose-row">
+                <div class="oasis-assistant-chips">
+                    <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryFalsePositive', ''))}">${DashboardApp._escapeHtml(txt('chipFalsePositive', ''))}</button>
+                    <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryNextChecks', ''))}">${DashboardApp._escapeHtml(txt('chipNextChecks', ''))}</button>
+                    <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryPreconditions', ''))}">${DashboardApp._escapeHtml(txt('chipPreconditions', ''))}</button>
+                    <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryExploit', ''))}">${DashboardApp._escapeHtml(txt('chipExploit', 'Exploit'))}</button>
+                    <button type="button" class="btn btn-secondary oasis-chip" data-q="${DashboardApp._escapeHtml(txt('chipQueryHttpRequest', ''))}">${DashboardApp._escapeHtml(txt('chipHttpRequest', 'HTTP request'))}</button>
+                </div>
+                <textarea id="oasis-assistant-input" class="oasis-assistant-input" rows="3" placeholder="${DashboardApp._escapeHtml(txt('inputPlaceholder', ''))}"></textarea>
+                <button type="button" class="btn btn-primary" id="oasis-assistant-send">${DashboardApp._escapeHtml(txt('send', 'Send'))}</button>
             </div>
     `;
 
@@ -1416,6 +1418,97 @@ DashboardApp.mountReportAssistantPanel = function () {
         logEl.appendChild(row);
         logEl.scrollTop = logEl.scrollHeight;
         wireMdCodeCopy();
+    };
+
+    /**
+     * Append a live assistant message placeholder whose body is updated
+     * incrementally as streaming deltas arrive. Returns accessors to
+     * append raw text (``appendText``), drop the placeholder if the
+     * stream never produced anything usable (``remove``) and finalize
+     * the row with a rich assistant payload (``finalize``).
+     *
+     * Auto-scroll is throttled via ``requestAnimationFrame`` so that
+     * high-frequency deltas do not jank the log. The placeholder keeps
+     * the raw streamed text inside a ``<pre>`` block during streaming
+     * and switches to full markdown rendering on finalize.
+     */
+    const appendLiveAssistantMsg = function () {
+        const row = document.createElement('div');
+        row.className = 'oasis-assistant-msg oasis-assistant-msg--assistant oasis-assistant-msg--streaming';
+        const hd = document.createElement('div');
+        hd.className = 'oasis-assistant-msg-hd';
+        hd.textContent = txt('msgLabelAssistant', 'Assistant');
+        const body = document.createElement('div');
+        body.className = 'oasis-assistant-msg-body oasis-assistant-msg-body--rich';
+        const streamNode = document.createElement('pre');
+        streamNode.className = 'oasis-assistant-stream';
+        const cursor = document.createElement('span');
+        cursor.className = 'oasis-assistant-stream-cursor';
+        cursor.setAttribute('aria-hidden', 'true');
+        cursor.textContent = '▍';
+        body.appendChild(streamNode);
+        body.appendChild(cursor);
+        row.appendChild(hd);
+        row.appendChild(body);
+        logEl.appendChild(row);
+        logEl.scrollTop = logEl.scrollHeight;
+
+        let accumulated = '';
+        let scrollScheduled = false;
+        const scheduleScroll = function () {
+            if (scrollScheduled) {
+                return;
+            }
+            scrollScheduled = true;
+            window.requestAnimationFrame(function () {
+                scrollScheduled = false;
+                logEl.scrollTop = logEl.scrollHeight;
+            });
+        };
+
+        return {
+            row: row,
+            appendText: function (text) {
+                if (!text) {
+                    return;
+                }
+                accumulated += String(text);
+                streamNode.textContent = accumulated;
+                scheduleScroll();
+            },
+            getAccumulated: function () {
+                return accumulated;
+            },
+            remove: function () {
+                if (row.parentNode) {
+                    row.parentNode.removeChild(row);
+                }
+            },
+            finalize: function (payload) {
+                row.classList.remove('oasis-assistant-msg--streaming');
+                if (cursor.parentNode) {
+                    cursor.parentNode.removeChild(cursor);
+                }
+                const acc = accumulated.trim();
+                const merged =
+                    payload && typeof payload === 'object'
+                        ? Object.assign({}, payload)
+                        : { message: typeof payload === 'string' ? payload : '' };
+                const msgStr = typeof merged.message === 'string' ? merged.message : '';
+                const visStr =
+                    typeof merged.visible_markdown === 'string' ? merged.visible_markdown : '';
+                if (
+                    acc &&
+                    (!msgStr || !msgStr.trim()) &&
+                    (!visStr || !visStr.trim())
+                ) {
+                    merged.message = acc;
+                }
+                body.innerHTML = DashboardApp.renderAssistantMessageHtml(merged);
+                logEl.scrollTop = logEl.scrollHeight;
+                wireMdCodeCopy();
+            },
+        };
     };
 
     const renderLog = function () {
@@ -1839,38 +1932,77 @@ DashboardApp.mountReportAssistantPanel = function () {
         }
 
         sendBtn.disabled = true;
-        DashboardApp.postAssistantChat(payload)
-            .then(function (data) {
-                if (budgetHintEl) {
-                    budgetHintEl.textContent = formatBudgetHint(data.system_budget_chars);
-                }
-                const answer = typeof data.message === 'string' ? data.message : '';
-                const replyPayload = {
-                    message: answer,
-                    visible_markdown: data.visible_markdown,
-                    thought_segments: data.thought_segments,
-                };
+
+        let live = null;
+
+        const applyFinalReply = function (data) {
+            if (budgetHintEl) {
+                budgetHintEl.textContent = formatBudgetHint(data.system_budget_chars);
+            }
+            const answer = typeof data.message === 'string' ? data.message : '';
+            const replyPayload = {
+                message: answer,
+                visible_markdown: data.visible_markdown,
+                thought_segments: data.thought_segments,
+            };
+            if (live) {
+                live.finalize(replyPayload);
+            } else {
                 appendAssistantMsg(replyPayload);
-                const ts = new Date().toISOString();
-                DashboardApp._assistantConversation.push({
-                    role: 'assistant',
-                    content: answer,
-                    at: ts,
-                    visible_markdown:
-                        typeof data.visible_markdown === 'string' ? data.visible_markdown : undefined,
-                    thought_segments: Array.isArray(data.thought_segments) ? data.thought_segments : undefined,
-                });
-                DashboardApp._assistantConversation = DashboardApp._trimAssistantMessages(
-                    DashboardApp._assistantConversation
-                );
-                if (typeof data.session_id === 'string' && data.session_id) {
-                    DashboardApp._assistantSessionId = data.session_id;
+            }
+            const ts = new Date().toISOString();
+            DashboardApp._assistantConversation.push({
+                role: 'assistant',
+                content: answer,
+                at: ts,
+                visible_markdown:
+                    typeof data.visible_markdown === 'string' ? data.visible_markdown : undefined,
+                thought_segments: Array.isArray(data.thought_segments) ? data.thought_segments : undefined,
+            });
+            DashboardApp._assistantConversation = DashboardApp._trimAssistantMessages(
+                DashboardApp._assistantConversation
+            );
+            if (typeof data.session_id === 'string' && data.session_id) {
+                DashboardApp._assistantSessionId = data.session_id;
+            }
+            return refreshSessionList(DashboardApp._assistantSessionId);
+        };
+
+        const applyError = function (err) {
+            if (live) {
+                live.remove();
+            }
+            const msg = DashboardApp._errorMessage(err);
+            appendAssistantMsg({ message: 'Error: ' + msg });
+        };
+
+        const runNonStreamingFallback = function () {
+            return DashboardApp.postAssistantChat(payload).then(applyFinalReply);
+        };
+
+        const streamPromise = DashboardApp.streamAssistantChat(payload, {
+            onStart: function (evt) {
+                if (!live) {
+                    live = appendLiveAssistantMsg();
                 }
-                return refreshSessionList(DashboardApp._assistantSessionId);
-            })
-            .catch(function (err) {
-                const msg = DashboardApp._errorMessage(err);
-                appendAssistantMsg({ message: 'Error: ' + msg });
+                if (evt && typeof evt.session_id === 'string' && evt.session_id) {
+                    DashboardApp._assistantSessionId = evt.session_id;
+                }
+                if (budgetHintEl && evt) {
+                    budgetHintEl.textContent = formatBudgetHint(evt.system_budget_chars);
+                }
+            },
+            onDelta: function (evt) {
+                if (evt && typeof evt.content === 'string' && evt.content && live) {
+                    live.appendText(evt.content);
+                }
+            },
+        });
+
+        streamPromise
+            .then(applyFinalReply)
+            .catch(function () {
+                return runNonStreamingFallback().catch(applyError);
             })
             .finally(function () {
                 sendBtn.disabled = false;

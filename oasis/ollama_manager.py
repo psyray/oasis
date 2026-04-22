@@ -297,6 +297,60 @@ class OllamaManager:
             **kwargs
         )
 
+    def chat_stream(
+        self,
+        model: str,
+        messages: List[dict],
+        options: Optional[dict] = None,
+        **kwargs: Any,
+    ):
+        """
+        Streaming chat wrapper yielding normalized dict chunks.
+
+        Uses ``client.chat(stream=True, ...)`` under the hood and mirrors
+        :meth:`chat` for thinking support. Falls back gracefully on older
+        ollama-python clients that do not accept ``think``.
+        """
+        client = self.get_client()
+        request_kwargs: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+        }
+        if options is not None:
+            request_kwargs["options"] = options
+        request_kwargs |= kwargs
+
+        thinking = self._resolve_model_thinking(model)
+        if thinking is not None:
+            request_kwargs["think"] = thinking
+
+        try:
+            iterator = client.chat(**request_kwargs)
+        except TypeError as error:
+            error_message = error.args[0] if error.args else ""
+            if (
+                "think" not in request_kwargs
+                or "unexpected keyword argument 'think'" not in str(error_message)
+            ):
+                raise
+            request_kwargs.pop("think", None)
+            iterator = client.chat(**request_kwargs)
+
+        try:
+            for chunk in iterator:
+                yield self._normalize_client_response(chunk)
+        except Exception as error:
+            logger.exception("Error while streaming response from ollama client")
+            yield self._normalize_client_response(
+                {
+                    "type": "error",
+                    "error": (
+                        f"Error while streaming response from model: {type(error).__name__}: {error}"
+                    ),
+                }
+            )
+
     def generate(self, model: str, prompt: str, options: Optional[dict] = None, **kwargs):
         """
         Text generation wrapper with per-model thinking support.

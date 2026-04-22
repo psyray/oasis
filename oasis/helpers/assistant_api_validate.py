@@ -20,10 +20,18 @@ def validate_assistant_messages(
     *,
     max_messages: int,
     max_message_chars: int,
+    allow_empty: bool = False,
 ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[JsonErr]]:
-    """Validate ``messages`` for ``/api/assistant/chat``. Returns ``(None, err)`` on failure."""
-    if not isinstance(messages, list) or not messages:
+    """Validate ``messages`` for ``/api/assistant/chat`` (and session-branch when *allow_empty*).
+
+    Returns ``(None, err)`` on failure.
+    """
+    if not isinstance(messages, list):
         return None, ({'error': 'messages required'}, 400)
+    if not messages and not allow_empty:
+        return None, ({'error': 'messages required'}, 400)
+    if not messages:
+        return [], None
     if len(messages) > max_messages:
         return None, ({'error': 'too many messages'}, 400)
     out: List[Dict[str, Any]] = []

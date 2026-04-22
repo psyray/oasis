@@ -72,7 +72,6 @@ from .report import Report, executive_summary_progress_sidecar_path, is_executiv
 from .ollama_manager import OllamaManager
 from .helpers.assistant_rag import (
     embedding_cache_file_path,
-    json_finding_slice,
     load_embedding_code_base,
     resolve_assistant_cache_root,
     retrieve_relevant_snippets,
@@ -85,6 +84,11 @@ from .helpers.assistant_api_validate import (
     validate_assistant_messages,
 )
 from .helpers.assistant_chat_context import append_validation_then_balance_rag
+from .helpers.assistant_web_prepare import (
+    build_assistant_finding_json_prompt_block,
+    json_excerpt_for_assistant_prompt,
+    resolve_assistant_chat_model,
+)
 from .helpers.assistant_persistence import (
     delete_all_chat_sessions,
     delete_chat_session,
@@ -113,7 +117,6 @@ from .helpers.assistant_scan_aggregate import (
 from .helpers.executive_dashboard_preview import augment_executive_markdown_preview_html
 from .helpers.executive_modal_chart_meta import rollup_severity_counts_from_model_dir
 from .helpers.executive_assistant_scope import (
-    resolve_aggregate_finding_scope_payload,
     synthetic_executive_primary_payload,
     vulnerability_reports_for_executive_assistant,
 )
@@ -651,6 +654,365 @@ class WebServer:
 
         return rag_block, False
 
+    def _prepare_assistant_chat_context(self, data: Any):
+        """Build the assistant chat context shared by JSON and streaming endpoints.
+
+        Returns either a context dict ready for an LLM call or a ``(err_body, status)``
+        tuple the route can surface to the client via ``jsonify``.
+
+        The dict contains: ``full_messages`` (list for ollama), ``chat_model``,
+        ``messages`` (validated user-visible), ``primary_payload``, ``report_rel``,
+        ``aggregate_mode``, ``rag_unavailable``, ``total_budget``, ``excerpt_truncated``
+        and ``session_id_hint`` (raw session_id from request, may be ``None``).
+        """
+        if not isinstance(data, dict):
+            return {'error': 'Invalid JSON'}, 400
+
+        messages, msg_err = validate_assistant_messages(
+            data.get('messages'),
+            max_messages=self._ASSISTANT_MAX_MESSAGES,
+            max_message_chars=self._ASSISTANT_MAX_MESSAGE_CHARS,
+        )
+        if msg_err is not None:
+            return msg_err
+        assert messages is not None
+
+        approx_msg_chars = sum(
+            len(str(m.get('content') or '')) for m in messages if isinstance(m, dict)
+        )
+
+        report_rel_raw = str(data.get('report_path') or '').strip()
+        if not report_rel_raw:
+            return {'error': 'report_path required'}, 400
+
+        security_root = self.security_dir.resolve()
+        resolved_report, primary_synthetic, path_err = resolve_assistant_primary_payload(
+            self.security_dir,
+            report_rel_raw,
+        )
+        if path_err is not None:
+            return path_err
+        assert resolved_report is not None
+
+        aggregate_mode = bool(data.get('aggregate_model_json'))
+        if aggregate_mode and resolved_report.stem.lower() != '_executive_summary':
+            return (
+                {
+                    'error': 'aggregate_model_json requires json/_executive_summary.json (or its md sibling)',
+                },
+                400,
+            )
+
+        if primary_synthetic is not None:
+            primary_payload = primary_synthetic
+        else:
+            try:
+                with open(resolved_report, 'r', encoding='utf-8') as rf:
+                    primary_payload = json.load(rf)
+            except Exception:
+                return {'error': 'Could not read report'}, 500
+        if not isinstance(primary_payload, dict):
+            return {'error': 'Invalid report'}, 422
+
+        report_rel = str(resolved_report.relative_to(security_root)).replace('\\', '/')
+
+        json_paths_for_union: List[Path] = []
+        extra_rag_paths: Optional[List[str]] = None
+        rag_source_payload: Dict[str, Any] = primary_payload
+        md_obj: Optional[Path] = None
+
+        if aggregate_mode:
+            md_obj = model_directory_from_security_report_file(security_root, resolved_report)
+            if md_obj is None:
+                return {'error': 'Could not resolve model directory for aggregate assistant'}, 400
+            json_paths_for_union = iter_json_report_paths_in_model_dir(md_obj)
+            if not json_paths_for_union:
+                return {'error': 'No JSON reports found for aggregate assistant'}, 404
+            vp = first_vulnerability_payload_from_paths(json_paths_for_union)
+            rag_source_payload = vp if vp is not None else primary_payload
+            extra_rag_paths = union_file_paths_from_vulnerability_payloads(json_paths_for_union)
+
+        chat_model = resolve_assistant_chat_model(
+            data,
+            primary_payload,
+            aggregate_mode,
+            json_paths_for_union,
+            rag_source_payload,
+        )
+        if not chat_model:
+            return (
+                {'error': 'model required (pass model or ensure report has model_name)'},
+                400,
+            )
+
+        total_budget, _budget_meta = assistant_total_system_budget_chars(
+            fallback_total=self._ASSISTANT_MAX_TOTAL_REPORT_CHARS,
+            ollama_manager=self._get_assistant_ollama_manager(),
+            chat_model=chat_model,
+            approx_message_chars_in_request=approx_msg_chars,
+        )
+        reserved_extras = self._assistant_reserved_chars_for_total_budget(total_budget)
+        excerpt_budget = max(total_budget - reserved_extras, 0)
+
+        excerpt_truncated = False
+        if aggregate_mode:
+            report_payload, _agg_meta = build_aggregate_assistant_document(
+                json_paths_for_union,
+                security_root,
+                total_char_budget=excerpt_budget,
+            )
+            excerpt_truncated = bool(_agg_meta.get('truncated'))
+        else:
+            report_payload = primary_payload
+
+        excerpt, excerpt_truncated = json_excerpt_for_assistant_prompt(
+            report_payload,
+            excerpt_budget,
+            excerpt_truncated,
+        )
+
+        fi, ci, gi = coerce_finding_indices(data)
+        finding_scope_for_key = ''
+        if aggregate_mode:
+            scope_raw = data.get('finding_scope_report_path')
+            if isinstance(scope_raw, str) and scope_raw.strip():
+                finding_scope_for_key = scope_raw.strip()
+        finding_key_for_prompt = finding_validation_storage_key(
+            finding_scope_for_key,
+            fi,
+            ci,
+            gi,
+        )
+        used_after_excerpt = len(self._ASSISTANT_SYSTEM_INTRO_PREFIX) + len(excerpt)
+        remaining_for_prompt = max(0, total_budget - used_after_excerpt)
+        finding_header_len = len('\n\nSELECTED_FINDING_JSON:\n')
+        finding_max = max(0, min(12000, remaining_for_prompt - finding_header_len - 200))
+        finding_json, finding_scope_err = build_assistant_finding_json_prompt_block(
+            aggregate_mode=aggregate_mode,
+            primary_payload=primary_payload,
+            data=data,
+            security_root=security_root,
+            resolved_report=resolved_report,
+            md_obj=md_obj,
+            fi=fi,
+            ci=ci,
+            gi=gi,
+            finding_max=finding_max,
+        )
+        if finding_scope_err is not None:
+            return {'error': finding_scope_err}, 400
+        assert finding_json is not None
+
+        use_rag = self.web_assistant_rag and not bool(data.get('rag_disabled'))
+        rag_block = ''
+        rag_unavailable = False
+        if use_rag:
+            last_user = ''
+            for m in reversed(messages):
+                if isinstance(m, dict) and m.get('role') == 'user':
+                    c = m.get('content', '')
+                    last_user = c if isinstance(c, str) else ''
+                    break
+            if last_user.strip():
+                rag_block, rag_unavailable = self._assistant_run_rag_retrieval(
+                    last_user=last_user,
+                    report_payload=rag_source_payload,
+                    report_rel=report_rel,
+                    rag_expand_project=bool(data.get('rag_expand_project')),
+                    extra_report_file_paths=extra_rag_paths,
+                )
+
+        prompt_chunks: List[str] = [self._ASSISTANT_SYSTEM_INTRO_PREFIX + excerpt]
+        if finding_json:
+            prompt_chunks.extend(['', 'SELECTED_FINDING_JSON:', finding_json])
+        prompt_core = '\n'.join(prompt_chunks)
+
+        finding_validation_for_prompt: Optional[Dict[str, Any]] = None
+        sid_ctx = data.get('session_id')
+        try:
+            if isinstance(sid_ctx, str) and validate_session_id(sid_ctx.strip()):
+                loaded_sess = load_chat_session(
+                    self.security_dir, report_rel, sid_ctx.strip()
+                )
+                finding_validation_for_prompt = get_finding_validation_for_branch(
+                    loaded_sess,
+                    chat_model,
+                    finding_key_for_prompt,
+                )
+            core_so_far = append_validation_then_balance_rag(
+                prompt_core=prompt_core,
+                finding_validation=finding_validation_for_prompt,
+                rag_block=rag_block,
+                total_budget=total_budget,
+            )
+        except Exception:
+            logger.warning(
+                'Assistant chat context build failed; continuing without persisted finding validation',
+                exc_info=True,
+            )
+            rag_fallback = ''
+            if rag_block:
+                rag_fallback = '\n\nRETRIEVAL_CONTEXT:\n' + rag_block
+            core_so_far = prompt_core + rag_fallback
+
+        labels_note = data.get('user_finding_labels')
+        labels_header = '\n\nUSER_LOCAL_TRIAGE_NOTES:\n'
+        labels_cap = max(0, total_budget - len(core_so_far) - len(labels_header))
+        system_content = core_so_far
+        if isinstance(labels_note, str) and labels_note.strip():
+            note = labels_note.strip()
+            if labels_cap > 0 and len(note) > labels_cap:
+                note = note[:labels_cap] + '\n…(truncated)…'
+            elif labels_cap <= 0:
+                note = ''
+            if note:
+                system_content = core_so_far + '\n\nUSER_LOCAL_TRIAGE_NOTES:\n' + note
+        if len(system_content) > total_budget:
+            logger.info(
+                "Assistant system prompt capped (chars=%s budget=%s excerpt_truncated=%s)",
+                len(system_content),
+                total_budget,
+                excerpt_truncated,
+            )
+            system_content = system_content[:total_budget] + '\n…(truncated)…'
+        elif excerpt_truncated:
+            logger.info(
+                "Assistant report JSON excerpt truncated (budget=%s reserved_extras=%s)",
+                excerpt_budget,
+                reserved_extras,
+            )
+        full_messages: List[Dict[str, str]] = [{'role': 'system', 'content': system_content}]
+        for m in messages:
+            role = str(m.get('role', ''))
+            content = m.get('content', '')
+            if isinstance(content, str):
+                full_messages.append({'role': role, 'content': content})
+
+        return {
+            'full_messages': full_messages,
+            'chat_model': chat_model,
+            'messages': messages,
+            'primary_payload': primary_payload,
+            'report_rel': report_rel,
+            'aggregate_mode': aggregate_mode,
+            'rag_unavailable': bool(rag_unavailable),
+            'total_budget': total_budget,
+            'excerpt_truncated': excerpt_truncated,
+            'session_id_hint': data.get('session_id'),
+        }
+
+    def _resolve_assistant_session_id(self, session_id_hint: Any) -> str:
+        if isinstance(session_id_hint, str) and validate_session_id(session_id_hint.strip()):
+            return session_id_hint.strip()
+        return new_session_id()
+
+    def _persist_assistant_reply(self, prep: Dict[str, Any], raw: str, sess_id: str) -> None:
+        ts = utc_now_iso()
+        persist_msgs = normalize_validated_messages_for_storage(prep['messages'], default_at=ts)
+        persist_msgs.append({'role': 'assistant', 'content': raw, 'at': ts})
+        if prep['aggregate_mode']:
+            vuln_label = 'Executive summary (aggregate)'
+        else:
+            vn = prep['primary_payload'].get('vulnerability_name')
+            vuln_label = vn.strip() if isinstance(vn, str) else ''
+        try:
+            save_chat_session(
+                self.security_dir,
+                prep['report_rel'],
+                sess_id,
+                persist_msgs,
+                prep['chat_model'],
+                vuln_label,
+            )
+        except (ValueError, OSError):
+            logger.warning('Assistant session save failed', exc_info=True)
+
+    def _finalize_assistant_chat_response(self, prep: Dict[str, Any], raw: str) -> Dict[str, Any]:
+        split = parse_assistant_think(raw)
+        sess_id = self._resolve_assistant_session_id(prep.get('session_id_hint'))
+        self._persist_assistant_reply(prep, raw, sess_id)
+        return {
+            'message': raw,
+            'visible_markdown': split.visible_markdown,
+            'thought_segments': split.thought_segments,
+            'session_id': sess_id,
+            'model': prep['chat_model'],
+            'rag_unavailable': bool(prep['rag_unavailable']),
+            'system_budget_chars': prep['total_budget'],
+            'assistant_aggregate': prep['aggregate_mode'],
+        }
+
+    def _stream_assistant_chat_response(self, prep: Dict[str, Any]):
+        """Return a Flask streaming response yielding NDJSON assistant events."""
+        from flask import Response, stream_with_context
+
+        def ndjson(event: Dict[str, Any]) -> str:
+            return json.dumps(event, ensure_ascii=False) + '\n'
+
+        def event_stream():
+            sess_id = self._resolve_assistant_session_id(prep.get('session_id_hint'))
+            yield ndjson(
+                {
+                    'type': 'start',
+                    'session_id': sess_id,
+                    'model': prep['chat_model'],
+                    'rag_unavailable': bool(prep['rag_unavailable']),
+                    'system_budget_chars': prep['total_budget'],
+                    'assistant_aggregate': prep['aggregate_mode'],
+                }
+            )
+            raw_parts: List[str] = []
+            try:
+                om = self._get_assistant_ollama_manager()
+                for chunk in om.chat_stream(
+                    prep['chat_model'],
+                    prep['full_messages'],
+                    options={'temperature': 0.2},
+                ):
+                    if isinstance(chunk, dict) and chunk.get('type') == 'error':
+                        err = chunk.get('error')
+                        err_msg = err if isinstance(err, str) else f'{type(err).__name__}'
+                        yield ndjson({'type': 'error', 'error': err_msg})
+                        return
+                    msg = chunk.get('message') if isinstance(chunk, dict) else None
+                    delta = ''
+                    if isinstance(msg, dict):
+                        delta = msg.get('content') or ''
+                    if delta:
+                        raw_parts.append(delta)
+                        yield ndjson({'type': 'delta', 'content': delta})
+            except Exception as exc:
+                logger.exception('Assistant chat stream failed')
+                yield ndjson(
+                    {
+                        'type': 'error',
+                        'error': f'Assistant request failed: {type(exc).__name__}',
+                    }
+                )
+                return
+            raw = ''.join(raw_parts)
+            split = parse_assistant_think(raw)
+            self._persist_assistant_reply(prep, raw, sess_id)
+            yield ndjson(
+                {
+                    'type': 'done',
+                    'message': raw,
+                    'visible_markdown': split.visible_markdown,
+                    'thought_segments': split.thought_segments,
+                    'session_id': sess_id,
+                    'model': prep['chat_model'],
+                    'rag_unavailable': bool(prep['rag_unavailable']),
+                    'system_budget_chars': prep['total_budget'],
+                    'assistant_aggregate': prep['aggregate_mode'],
+                }
+            )
+
+        return Response(
+            stream_with_context(event_stream()),
+            mimetype='application/x-ndjson',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+        )
+
     def register_routes(self, app, server, login_required):
         # Logout route
         @app.route('/logout', methods=['GET'])
@@ -876,262 +1238,18 @@ class WebServer:
         @app.route('/api/assistant/chat', methods=['POST'])
         @login_required
         def assistant_chat():
-            try:
-                data = request.get_json(silent=True)
-            except Exception:
-                data = None
-            if not isinstance(data, dict):
-                return jsonify({'error': 'Invalid JSON'}), 400
-
-            messages, msg_err = validate_assistant_messages(
-                data.get('messages'),
-                max_messages=self._ASSISTANT_MAX_MESSAGES,
-                max_message_chars=self._ASSISTANT_MAX_MESSAGE_CHARS,
-            )
-            if msg_err is not None:
-                err_body, status = msg_err
+            prep = self._prepare_assistant_chat_context(request.get_json(silent=True))
+            if isinstance(prep, tuple):
+                err_body, status = prep
                 return jsonify(err_body), status
-            assert messages is not None
-
-            approx_msg_chars = sum(
-                len(str(m.get('content') or '')) for m in messages if isinstance(m, dict)
-            )
-
-            report_rel_raw = str(data.get('report_path') or '').strip()
-            if not report_rel_raw:
-                return jsonify({'error': 'report_path required'}), 400
-
-            security_root = self.security_dir.resolve()
-            resolved_report, primary_synthetic, path_err = resolve_assistant_primary_payload(
-                self.security_dir,
-                report_rel_raw,
-            )
-            if path_err is not None:
-                err_body, status = path_err
-                return jsonify(err_body), status
-            assert resolved_report is not None
-
-            aggregate_mode = bool(data.get('aggregate_model_json'))
-            if aggregate_mode and resolved_report.stem.lower() != '_executive_summary':
-                return jsonify(
-                    {
-                        'error': 'aggregate_model_json requires json/_executive_summary.json (or its md sibling)',
-                    }
-                ), 400
-
-            if primary_synthetic is not None:
-                primary_payload = primary_synthetic
-            else:
-                try:
-                    with open(resolved_report, 'r', encoding='utf-8') as rf:
-                        primary_payload = json.load(rf)
-                except Exception:
-                    return jsonify({'error': 'Could not read report'}), 500
-            if not isinstance(primary_payload, dict):
-                return jsonify({'error': 'Invalid report'}), 422
-
-            report_rel = str(resolved_report.relative_to(security_root)).replace('\\', '/')
-
-            json_paths_for_union: List[Path] = []
-            extra_rag_paths: Optional[List[str]] = None
-            rag_source_payload: Dict[str, Any] = primary_payload
-            md_obj: Optional[Path] = None
-
-            if aggregate_mode:
-                md_obj = model_directory_from_security_report_file(security_root, resolved_report)
-                if md_obj is None:
-                    return jsonify({'error': 'Could not resolve model directory for aggregate assistant'}), 400
-                json_paths_for_union = iter_json_report_paths_in_model_dir(md_obj)
-                if not json_paths_for_union:
-                    return jsonify({'error': 'No JSON reports found for aggregate assistant'}), 404
-                vp = first_vulnerability_payload_from_paths(json_paths_for_union)
-                rag_source_payload = vp if vp is not None else primary_payload
-                extra_rag_paths = union_file_paths_from_vulnerability_payloads(json_paths_for_union)
-
-            chat_model = data.get('model')
-            if isinstance(chat_model, str) and chat_model.strip():
-                chat_model = chat_model.strip()
-            else:
-                mn = primary_payload.get('model_name')
-                chat_model = mn.strip() if isinstance(mn, str) and mn.strip() else ''
-                if not chat_model and aggregate_mode:
-                    for jp in json_paths_for_union:
-                        try:
-                            jd = json.loads(jp.read_text(encoding='utf-8'))
-                        except Exception:
-                            continue
-                        if isinstance(jd, dict):
-                            mnx = jd.get('model_name')
-                            if isinstance(mnx, str) and mnx.strip():
-                                chat_model = mnx.strip()
-                                break
-                if not chat_model:
-                    mn2 = rag_source_payload.get('model_name')
-                    chat_model = mn2.strip() if isinstance(mn2, str) and mn2.strip() else ''
-            if not chat_model:
-                return jsonify({'error': 'model required (pass model or ensure report has model_name)'}), 400
-
-            total_budget, _budget_meta = assistant_total_system_budget_chars(
-                fallback_total=self._ASSISTANT_MAX_TOTAL_REPORT_CHARS,
-                ollama_manager=self._get_assistant_ollama_manager(),
-                chat_model=chat_model,
-                approx_message_chars_in_request=approx_msg_chars,
-            )
-            reserved_extras = self._assistant_reserved_chars_for_total_budget(total_budget)
-            excerpt_budget = max(total_budget - reserved_extras, 0)
-
-            excerpt_truncated = False
-            if aggregate_mode:
-                report_payload, _agg_meta = build_aggregate_assistant_document(
-                    json_paths_for_union,
-                    security_root,
-                    total_char_budget=excerpt_budget,
-                )
-                excerpt_truncated = bool(_agg_meta.get('truncated'))
-            else:
-                report_payload = primary_payload
-
-            excerpt = json.dumps(report_payload, ensure_ascii=False)
-            if excerpt_budget > 0 and len(excerpt) > excerpt_budget:
-                excerpt = excerpt[:excerpt_budget] + '\n…(truncated)…'
-                excerpt_truncated = True
-            elif excerpt_budget <= 0:
-                excerpt = ''
-                excerpt_truncated = True
-
-            fi, ci, gi = coerce_finding_indices(data)
-            finding_scope_for_key = ''
-            if aggregate_mode:
-                scope_raw = data.get('finding_scope_report_path')
-                if isinstance(scope_raw, str) and scope_raw.strip():
-                    finding_scope_for_key = scope_raw.strip()
-            finding_key_for_prompt = finding_validation_storage_key(
-                finding_scope_for_key,
-                fi,
-                ci,
-                gi,
-            )
-            used_after_excerpt = len(self._ASSISTANT_SYSTEM_INTRO_PREFIX) + len(excerpt)
-            remaining_for_prompt = max(0, total_budget - used_after_excerpt)
-            finding_header_len = len('\n\nSELECTED_FINDING_JSON:\n')
-            finding_max = max(0, min(12000, remaining_for_prompt - finding_header_len - 200))
-            finding_json = ''
-            if not aggregate_mode:
-                finding_json = json_finding_slice(
-                    primary_payload,
-                    fi,
-                    ci,
-                    gi,
-                    max_chars=finding_max,
-                )
-            elif aggregate_mode:
-                scope_raw = data.get('finding_scope_report_path')
-                if isinstance(scope_raw, str) and scope_raw.strip():
-                    scope_payload, scope_err = resolve_aggregate_finding_scope_payload(
-                        scope_raw.strip(),
-                        security_root=security_root,
-                        executive_report_path=resolved_report,
-                        model_dir=md_obj,
-                    )
-                    if scope_err is not None:
-                        return jsonify({'error': scope_err}), 400
-                    if scope_payload is not None:
-                        finding_json = json_finding_slice(
-                            scope_payload,
-                            fi,
-                            ci,
-                            gi,
-                            max_chars=finding_max,
-                        )
-
-            use_rag = self.web_assistant_rag and not bool(data.get('rag_disabled'))
-            rag_block = ''
-            rag_unavailable = False
-            if use_rag:
-                last_user = ''
-                for m in reversed(messages):
-                    if isinstance(m, dict) and m.get('role') == 'user':
-                        c = m.get('content', '')
-                        last_user = c if isinstance(c, str) else ''
-                        break
-                if last_user.strip():
-                    rag_block, rag_unavailable = self._assistant_run_rag_retrieval(
-                        last_user=last_user,
-                        report_payload=rag_source_payload,
-                        report_rel=report_rel,
-                        rag_expand_project=bool(data.get('rag_expand_project')),
-                        extra_report_file_paths=extra_rag_paths,
-                    )
-
-            prompt_chunks: List[str] = [self._ASSISTANT_SYSTEM_INTRO_PREFIX + excerpt]
-            if finding_json:
-                prompt_chunks.extend(['', 'SELECTED_FINDING_JSON:', finding_json])
-            prompt_core = '\n'.join(prompt_chunks)
-
-            finding_validation_for_prompt: Optional[Dict[str, Any]] = None
-            sid_ctx = data.get('session_id')
-            try:
-                if isinstance(sid_ctx, str) and validate_session_id(sid_ctx.strip()):
-                    loaded_sess = load_chat_session(
-                        self.security_dir, report_rel, sid_ctx.strip()
-                    )
-                    finding_validation_for_prompt = get_finding_validation_for_branch(
-                        loaded_sess,
-                        chat_model,
-                        finding_key_for_prompt,
-                    )
-                core_so_far = append_validation_then_balance_rag(
-                    prompt_core=prompt_core,
-                    finding_validation=finding_validation_for_prompt,
-                    rag_block=rag_block,
-                    total_budget=total_budget,
-                )
-            except Exception:
-                logger.warning(
-                    'Assistant chat context build failed; continuing without persisted finding validation',
-                    exc_info=True,
-                )
-                rag_fallback = ''
-                if rag_block:
-                    rag_fallback = '\n\nRETRIEVAL_CONTEXT:\n' + rag_block
-                core_so_far = prompt_core + rag_fallback
-
-            labels_note = data.get('user_finding_labels')
-            labels_header = '\n\nUSER_LOCAL_TRIAGE_NOTES:\n'
-            labels_cap = max(0, total_budget - len(core_so_far) - len(labels_header))
-            system_content = core_so_far
-            if isinstance(labels_note, str) and labels_note.strip():
-                note = labels_note.strip()
-                if labels_cap > 0 and len(note) > labels_cap:
-                    note = note[:labels_cap] + '\n…(truncated)…'
-                elif labels_cap <= 0:
-                    note = ''
-                if note:
-                    system_content = core_so_far + '\n\nUSER_LOCAL_TRIAGE_NOTES:\n' + note
-            if len(system_content) > total_budget:
-                logger.info(
-                    "Assistant system prompt capped (chars=%s budget=%s excerpt_truncated=%s)",
-                    len(system_content),
-                    total_budget,
-                    excerpt_truncated,
-                )
-                system_content = system_content[:total_budget] + '\n…(truncated)…'
-            elif excerpt_truncated:
-                logger.info(
-                    "Assistant report JSON excerpt truncated (budget=%s reserved_extras=%s)",
-                    excerpt_budget,
-                    reserved_extras,
-                )
-            full_messages: List[Dict[str, str]] = [{'role': 'system', 'content': system_content}]
-            for m in messages:
-                role = str(m.get('role', ''))
-                content = m.get('content', '')
-                if isinstance(content, str):
-                    full_messages.append({'role': role, 'content': content})
 
             try:
                 om = self._get_assistant_ollama_manager()
-                resp = om.chat(chat_model, full_messages, options={'temperature': 0.2})
+                resp = om.chat(
+                    prep['chat_model'],
+                    prep['full_messages'],
+                    options={'temperature': 0.2},
+                )
             except Exception as exc:
                 logger.exception('Assistant chat failed')
                 return jsonify({'error': f'Assistant request failed: {type(exc).__name__}'}), 502
@@ -1140,44 +1258,17 @@ class WebServer:
             raw = ''
             if isinstance(msg, dict):
                 raw = msg.get('content') or ''
-            split = parse_assistant_think(raw if isinstance(raw, str) else '')
-            sid_raw = data.get('session_id')
-            if isinstance(sid_raw, str) and validate_session_id(sid_raw.strip()):
-                sess_id = sid_raw.strip()
-            else:
-                sess_id = new_session_id()
-            ts = utc_now_iso()
-            persist_msgs = normalize_validated_messages_for_storage(messages, default_at=ts)
-            persist_msgs.append({'role': 'assistant', 'content': raw if isinstance(raw, str) else '', 'at': ts})
-            if aggregate_mode:
-                vuln_label = 'Executive summary (aggregate)'
-            else:
-                vn = primary_payload.get('vulnerability_name')
-                vuln_label = vn.strip() if isinstance(vn, str) else ''
-            try:
-                save_chat_session(
-                    self.security_dir,
-                    report_rel,
-                    sess_id,
-                    persist_msgs,
-                    chat_model,
-                    vuln_label,
-                )
-            except (ValueError, OSError):
-                logger.warning('Assistant session save failed', exc_info=True)
+            body = self._finalize_assistant_chat_response(prep, raw if isinstance(raw, str) else '')
+            return jsonify(body)
 
-            return jsonify(
-                {
-                    'message': raw,
-                    'visible_markdown': split.visible_markdown,
-                    'thought_segments': split.thought_segments,
-                    'session_id': sess_id,
-                    'model': chat_model,
-                    'rag_unavailable': bool(rag_unavailable),
-                    'system_budget_chars': total_budget,
-                    'assistant_aggregate': aggregate_mode,
-                }
-            )
+        @app.route('/api/assistant/chat-stream', methods=['POST'])
+        @login_required
+        def assistant_chat_stream():
+            prep = self._prepare_assistant_chat_context(request.get_json(silent=True))
+            if isinstance(prep, tuple):
+                err_body, status = prep
+                return jsonify(err_body), status
+            return self._stream_assistant_chat_response(prep)
 
         @app.route('/api/assistant/investigate', methods=['POST'])
         @login_required
@@ -1454,6 +1545,7 @@ class WebServer:
                 body.get('messages'),
                 max_messages=self._ASSISTANT_MAX_MESSAGES,
                 max_message_chars=self._ASSISTANT_MAX_MESSAGE_CHARS,
+                allow_empty=True,
             )
             if msg_err is not None:
                 err_body, status = msg_err

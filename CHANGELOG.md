@@ -1,6 +1,7 @@
 ## 🚀 [0.5.1] - 2026-04-22
 
 ### ✨ Added
+- 💬 **Assistant streaming**: **`POST /api/assistant/chat-stream`** (NDJSON) emits `start`, `delta`, `done` / `error` events; dashboard renders the reply progressively under the chat with auto-scroll and falls back to the non-streaming endpoint when the stream is unavailable. Chat composition (chips, input, send) moved below the conversation log.
 - 🛡️ **Validate findings**: deterministic investigation (flow / access / config families) with verdict, confidence, and citations — entry points, paths to the sink, taint, mitigations, access and protocol controls, plus config/secret/crypto/log-style checks. **LangGraph** when available, otherwise a sequential fallback. Dashboard: **Validate this finding** and a verdict panel.
 - 📝 **Validation narrative**: optional follow-up call to the same **Ollama** chat model to produce readable Markdown; it does not override the deterministic verdict. Request flag to disable; model from the request or the report.
 - 💬 **Chat sessions per model**: session JSON **schema_version 3** stores separate threads per chat model plus a **`finding_validations`** map (keyed by file/chunk/finding indices and executive scope path) so multiple validated findings coexist; switching chat model saves the previous thread and reloads the verdict for the currently selected finding. **`POST /api/assistant/chat`** selects the validation entry matching the request finding indices for **`FINDING_VALIDATION_JSON`** in the system prompt. **`POST /api/assistant/investigate`** merges with the same key (includes **`finding_scope_report_path`** in executive mode). Dashboard: pills above **Validate this finding** show the active finding scope.
@@ -9,6 +10,7 @@
 - ✅ Automated tests for validation helpers, APIs, and schema round-trips.
 
 ### 🐛 Fixed
+- 💬 Assistant: **`POST /api/assistant/session-branch`** accepts **`messages: []`** (e.g. changing chat model before any message) instead of 400 *messages required*.
 - 🖼️ Dashboard HTML preview: **Executive Summary** reports in canonical JSON no longer error in the preview path.
 
 ## 🚀 [0.5.0] - 2026-04-20
