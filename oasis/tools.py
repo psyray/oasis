@@ -493,10 +493,10 @@ def create_cache_dir(input_path: str | Path) -> Path:
     # Create base cache directory
     input_path = Path(input_path).resolve()  # Get absolute path
     base_cache_dir = input_path.parent / '.oasis_cache'
-    base_cache_dir.mkdir(exist_ok=True)
+    base_cache_dir.mkdir(parents=True, exist_ok=True)
     
     # Create project-specific cache directory using the final folder name
     project_name = sanitize_name(input_path.name)
     cache_dir = base_cache_dir / project_name
-    cache_dir.mkdir(exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir

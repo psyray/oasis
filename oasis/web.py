@@ -74,6 +74,7 @@ from .helpers.assistant_rag import (
     embedding_cache_file_path,
     json_finding_slice,
     load_embedding_code_base,
+    resolve_assistant_cache_root,
     retrieve_relevant_snippets,
 )
 from .helpers.path_containment import is_path_within_root
@@ -577,8 +578,7 @@ class WebServer:
     ) -> Tuple[str, bool]:
         """Return ``(rag_block, rag_unavailable)`` for assistant context."""
         em_model = self._embed_model_for_assistant(report_payload)
-        ar = report_payload.get("analysis_root")
-        root_path = Path(ar).resolve() if isinstance(ar, str) and ar.strip() else self.input_path_absolute
+        root_path = resolve_assistant_cache_root(report_payload, self.input_path_absolute)
         cache_path = embedding_cache_file_path(root_path, em_model)
 
         try:

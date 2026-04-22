@@ -48,6 +48,28 @@ def embedding_cache_file_path(input_path: Path | str, embed_model: str) -> Path:
     return cache_dir / f"{path_id}_{sanitize_name(embed_model)}.cache"
 
 
+def resolve_assistant_cache_root(
+    report_payload: Optional[Dict[str, Any]],
+    fallback_root: Path | str,
+) -> Path:
+    """Return a local project root for assistant embedding cache lookup.
+
+    ``analysis_root`` from report payload can be stale when reports are moved
+    across machines. We only trust it when it resolves to an existing local
+    directory; otherwise we fallback to the current server root.
+    """
+    fallback = Path(fallback_root).resolve()
+    if not isinstance(report_payload, dict):
+        return fallback
+    raw = report_payload.get("analysis_root")
+    if not isinstance(raw, str) or not raw.strip():
+        return fallback
+    candidate = Path(raw.strip()).expanduser().resolve(strict=False)
+    if candidate.exists() and candidate.is_dir():
+        return candidate
+    return fallback
+
+
 def load_embedding_code_base(cache_path: Path) -> Optional[Dict[str, Any]]:
     """Load pickle cache produced by EmbeddingManager; return None on failure."""
     if not cache_path.is_file():

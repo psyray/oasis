@@ -222,6 +222,53 @@ class TestWebAssistantRoutes(unittest.TestCase):
             self.assertEqual(data.get("message"), "assistant-reply")
             mock_om.chat.assert_called_once()
 
+    def test_assistant_chat_uses_local_root_when_report_analysis_root_is_stale(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            inp = base / "scan_root"
+            inp.mkdir()
+            report = Report(str(inp), ["json"])
+            server = WebServer(report, web_password="x", web_assistant_rag=True)
+            mock_om = MagicMock()
+            mock_om.chat.return_value = {"message": {"content": "assistant-reply"}}
+            mock_om.get_effective_context_token_count.return_value = None
+            mock_om.list_chat_model_names.return_value = []
+            server._get_assistant_ollama_manager = lambda: mock_om
+
+            sec = base / "security_reports"
+            rel = "rep_stale_root.json"
+            payload = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "t",
+                "generated_at": "2026-01-01",
+                "model_name": "m1",
+                "vulnerability_name": "SQL Injection",
+                "analysis_root": "/root/code-audit/Tchatche/Code",
+                "files": [],
+                "stats": {"total_findings": 0},
+            }
+            (sec / rel).write_text(json.dumps(payload), encoding="utf-8")
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            resp = client.post(
+                "/api/assistant/chat",
+                data=json.dumps(
+                    {
+                        "messages": [{"role": "user", "content": "Hello"}],
+                        "report_path": rel,
+                        "model": "m1",
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            data = json.loads(resp.get_data(as_text=True))
+            self.assertEqual(data.get("message"), "assistant-reply")
+
     def test_assistant_session_branch_persists_messages(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
@@ -620,6 +667,29 @@ class TestResolveAssistantOllamaUrl(unittest.TestCase):
         server._default_ollama_url = "   "
         with patch.dict(os.environ, {"OASIS_WEB_OLLAMA_URL": " \n "}):
             self.assertEqual(server._resolve_assistant_ollama_url(), str(OLLAMA_URL).strip())
+
+
+class TestAssistantRagRootResolution(unittest.TestCase):
+    def test_resolve_assistant_cache_root_falls_back_for_stale_root(self):
+        from oasis.helpers.assistant_rag import resolve_assistant_cache_root
+
+        with tempfile.TemporaryDirectory() as td:
+            fallback = Path(td)
+            payload = {"analysis_root": "/root/code-audit/Tchatche/Code"}
+            out = resolve_assistant_cache_root(payload, fallback)
+            self.assertEqual(out, fallback.resolve())
+
+    def test_resolve_assistant_cache_root_keeps_valid_local_root(self):
+        from oasis.helpers.assistant_rag import resolve_assistant_cache_root
+
+        with tempfile.TemporaryDirectory() as td:
+            fallback = Path(td) / "fallback"
+            fallback.mkdir(parents=True, exist_ok=True)
+            local_root = Path(td) / "project_root"
+            local_root.mkdir(parents=True, exist_ok=True)
+            payload = {"analysis_root": str(local_root)}
+            out = resolve_assistant_cache_root(payload, fallback)
+            self.assertEqual(out, local_root.resolve())
 
 
 if __name__ == "__main__":
