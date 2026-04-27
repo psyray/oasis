@@ -267,8 +267,18 @@ class OasisScanner:
         
         # Input/Output Options
         io_group = parser.add_argument_group('Input/Output Options')
-        io_group.add_argument('-i', '--input', dest='input_path', type=str, 
-                            help='Path to file, directory, or .txt file containing paths to analyze')
+        io_group.add_argument(
+            '-i',
+            '--input',
+            dest='input_path',
+            type=str,
+            help=(
+                'Path to file, directory, or .txt file containing paths to analyze. '
+                'Report output is grouped by a project name taken from the last directory segment '
+                'when you pass a directory (recommended), or the parent folder of a file. '
+                'Avoid using only . or / so runs stay easy to find in the dashboard.'
+            ),
+        )
         io_group.add_argument(
             '-of',
             '--output-format',

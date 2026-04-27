@@ -28,6 +28,11 @@ from .schemas.analysis import (
     chunk_analysis_to_markdown,
 )
 from .tools import extract_clean_path, logger, sanitize_name, generate_timestamp
+from .helpers.report_project import (
+    log_input_path_project_naming_warnings,
+    project_label_for_report_storage,
+    project_slug_for_report_storage,
+)
 
 # Package metadata (process constant; avoid lazy imports in hot paths)
 from . import __version__ as oasis_version
@@ -143,6 +148,9 @@ class Report:
         self._executive_summary_sidecar_write_failed = False
         self.executive_summary_scan_model: str = ""
         self.executive_summary_embedding_model: str = ""
+        self.project: Optional[str] = None
+        self.project_slug: Optional[str] = None
+        self._initialize_project_metadata(input_path)
 
 
         # Configure the Jinja2 environment
@@ -207,6 +215,10 @@ class Report:
         """
         if isinstance(input_path, str):
             input_path = Path(input_path)
+
+        clean = extract_clean_path(input_path)
+        clean_path = clean if isinstance(clean, Path) else Path(clean)
+        log_input_path_project_naming_warnings(logger, clean_path)
 
         self.output_base_dir = input_path.resolve().parent / REPORT['OUTPUT_DIR']
         self.output_dir = self.get_output_directory(input_path, self.output_base_dir)
@@ -333,6 +345,7 @@ class Report:
             stats=stats,
             analysis_root=str(root) if root else None,
             embed_model=self.embed_model,
+            project=self.project,
         )
 
     @staticmethod
@@ -809,6 +822,7 @@ class Report:
             "oasis_version": oasis_version,
             "vulnerability_summary": vuln_summary,
             "similarity_tier_counts": tier_counts,
+            "project": self.project,
         }
 
     def generate_executive_summary(
@@ -893,6 +907,7 @@ class Report:
                     "progress": dict(self._last_progress_payload),
                     "generated_at": progress_timestamp_iso(),
                     "oasis_version": oasis_version,
+                    "project": self.project,
                 }
                 write_utf8_text(
                     progress_path,
@@ -1183,26 +1198,22 @@ class Report:
 
     def get_output_directory(self, input_path: str | Path, base_reports_dir: Path) -> Path:
         """
-        Generate a unique output directory name based on input path and timestamp
-        
-        Args:
-            input_path: Input path (string or Path) that may contain arguments
-            base_reports_dir: Base directory for reports
-            
-        Returns:
-            Unique output directory path
+        Build ``security_reports/<project_slug>/<YYYYMMDD_HHMMSS>/`` with inner layout unchanged.
+
+        ``output_dir_name`` is ``<project_slug>_<timestamp>`` for ``run_id`` and error logs
+        (globally unique across project folders).
         """
-        # Make sure we have a clean path
-        clean_path = extract_clean_path(input_path)
-            
-        # Get basename for naming the output directory
-        input_name = clean_path.name if clean_path.is_file() else clean_path.stem
-        
-        # Add timestamp for uniqueness
+        self._initialize_project_metadata(input_path)
         timestamp = generate_timestamp(for_file=True)
-        self.output_dir_name = f"{input_name}_{timestamp}"
-        
-        return base_reports_dir / self.output_dir_name
+        self.output_dir_name = f"{self.project_slug}_{timestamp}"
+        return base_reports_dir / self.project_slug / timestamp
+
+    def _initialize_project_metadata(self, input_path: str | Path) -> None:
+        """Derive stable project label and slug from an input path."""
+        clean = extract_clean_path(input_path)
+        clean_path = clean if isinstance(clean, Path) else Path(clean)
+        self.project = project_label_for_report_storage(clean_path)
+        self.project_slug = project_slug_for_report_storage(self.project)
 
 
 def publish_incremental_summary(

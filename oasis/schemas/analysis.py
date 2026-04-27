@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 # Bump when changing chunk or report shapes (cache invalidation).
-ANALYSIS_SCHEMA_VERSION = 4
+ANALYSIS_SCHEMA_VERSION = 5
 
 
 class ScanVerdict(BaseModel):
@@ -145,6 +145,10 @@ class VulnerabilityReportDocument(BaseModel):
     embed_model: Optional[str] = Field(
         default=None,
         description="Embedding model used during the scan when recorded",
+    )
+    project: Optional[str] = Field(
+        default=None,
+        description="Project label: scanned directory basename, or the folder name when --input is a file.",
     )
 
 

@@ -249,7 +249,7 @@ For **JSON** reports, the dashboard modal includes an **Assistant** panel (triag
 
 Assistant replies are rendered as **Markdown** (sanitized HTML). Model “thinking” sections wrapped in tags such as `<think>…</think>` are stripped from the visible answer and shown in collapsible blocks when present.
 
-**Chat persistence** stores each conversation under `security_reports/<timestamp>/json/.../<report>.json` in a sibling `chat/` folder (one JSON file per session). The UI can resume the latest session, start a new chat, or delete saved sessions. Data stays on the server filesystem next to your reports (no separate database). REST endpoints: `GET /api/assistant/sessions`, `GET /api/assistant/session`, `POST /api/assistant/chat`, `DELETE /api/assistant/session`, `DELETE /api/assistant/sessions`.
+**Chat persistence** stores each conversation under `security_reports/<project_slug>/<run_timestamp>/.../json/.../<report>.json` in a sibling `chat/` folder (one JSON file per session). The UI can resume the latest session, start a new chat, or delete saved sessions. Data stays on the server filesystem next to your reports (no separate database). REST endpoints: `GET /api/assistant/sessions`, `GET /api/assistant/session`, `POST /api/assistant/chat`, `DELETE /api/assistant/session`, `DELETE /api/assistant/sessions`.
 
 ### Logging and Debug
 - `--debug` `-d`: Enable debug output
@@ -381,24 +381,25 @@ For the best results with OASIS:
 
 ## 📁 Output Structure
 
-Vulnerability runs are stored under a timestamped directory. For each model, per-format folders include a **canonical JSON** report (`json/*.json`) used by the web dashboard for statistics and previews. Chunk objects may include **`start_line` / `end_line`** (1-based inclusive bounds for the analyzed source segment, computed at split time, not inferred by the model). Each finding may include **`snippet_start_line` / `snippet_end_line`** when the tool can match `vulnerable_code` inside that chunk (otherwise SARIF falls back to the chunk span). **SARIF 2.1.0** (`sarif/*.sarif`) is generated from the same document for toolchains (DefectDojo, SonarQube, IDE SARIF viewers) and maps those spans to `region.startLine` / `region.endLine` when available. HTML and PDF are rendered from that JSON via Jinja2; Markdown is an additional human-readable export.
+Vulnerability runs are stored under **`security_reports/<project_slug>/YYYYMMDD_HHMMSS/`**, where `project_slug` is derived from the **last segment of your `--input` path** when it points to a **directory** (e.g. `example/test_files` → `test_files`), or from the **folder that contains the file** when you pass a file path, then sanitized for safe folder names. For predictable grouping in the web UI, prefer `--input` on a project folder, not a single file, and avoid generic paths like `.` or `/` as the sole argument (the CLI will warn in those cases). Older scans may still use the previous flat layout, **`security_reports/<input_basename>_YYYYMMDD_HHMMSS/`**; the dashboard reads both. For each model, per-format folders include a **canonical JSON** report (`json/*.json`) used by the web dashboard for statistics and previews. Chunk objects may include **`start_line` / `end_line`** (1-based inclusive bounds for the analyzed source segment, computed at split time, not inferred by the model). Each finding may include **`snippet_start_line` / `snippet_end_line`** when the tool can match `vulnerable_code` inside that chunk (otherwise SARIF falls back to the chunk span). **SARIF 2.1.0** (`sarif/*.sarif`) is generated from the same document for toolchains (DefectDojo, SonarQube, IDE SARIF viewers) and maps those spans to `region.startLine` / `region.endLine` when available. HTML and PDF are rendered from that JSON via Jinja2; Markdown is an additional human-readable export. Canonical JSON includes a top-level **`project`** field (human-readable label) alongside `report_type`, `title`, etc.
 
 ```
 security_reports/
-└── [input_basename]_YYYYMMDD_HHMMSS/
-    ├── logs/
-    │   └── oasis_errors_[run_id].log
-    └── [sanitized_model_name]/
-        ├── json/
-        │   └── vulnerability_type.json
-        ├── sarif/
-        │   └── vulnerability_type.sarif
-        ├── md/
-        │   └── vulnerability_type.md
-        ├── html/
-        │   └── vulnerability_type.html
-        └── pdf/
-            └── vulnerability_type.pdf
+└── [project_slug]/
+    └── YYYYMMDD_HHMMSS/
+        ├── logs/
+        │   └── oasis_errors_[run_id].log
+        └── [sanitized_model_name]/
+            ├── json/
+            │   └── vulnerability_type.json
+            ├── sarif/
+            │   └── vulnerability_type.sarif
+            ├── md/
+            │   └── vulnerability_type.md
+            ├── html/
+            │   └── vulnerability_type.html
+            └── pdf/
+                └── vulnerability_type.pdf
 ```
 
 ## 🐋 Run with Docker
@@ -467,7 +468,7 @@ Use this priority order to reduce invalid JSON responses (`Field required`, `jso
    - Keep final fallback behavior deterministic when retries fail.
 4. **Operational safeguards**
    - Track invalid JSON ratio per run and alert when it exceeds your acceptance threshold.
-   - Review `security_reports/<run_id>/logs/oasis_errors_<run_id>.log` after each scan to identify the failing model/phase/chunk quickly.
+   - Review `security_reports/<project_slug>/<run_timestamp>/logs/oasis_errors_<project_slug>_<run_timestamp>.log` after each scan to identify the failing model/phase/chunk quickly.
 
 Each structured-output error log line includes context fields such as run identifier, model, phase, vulnerability (if available), file path, chunk index, exception type, and a truncated raw preview.
 Retry-aware logs also include `retry_attempt` and `retry_max` so you can distinguish first failure from final fallback.

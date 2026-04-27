@@ -77,6 +77,12 @@ from .helpers.assistant.web.rag import (
     retrieve_relevant_snippets,
 )
 from .helpers.context.path_containment import is_path_within_root
+from .helpers.report_project import (
+    is_legacy_run_dirname,
+    is_run_timestamp_dirname,
+    report_date_display_from_run_key,
+)
+from .helpers.dashboard.json_sibling import json_sibling_for_format_artifact
 from .helpers.assistant.web.api_validate import (
     coerce_finding_indices,
     normalize_report_rel_query_arg,
@@ -236,6 +242,7 @@ class WebServer:
         self._progress_monitor_started = False
         self._stop_progress_monitor = False
         self._last_emitted_progress_key = None
+        self._project_field_cache: Dict[Path, Optional[str]] = {}
         if not isinstance(report, Report):
             raise ValueError("Report must be an instance of Report")
         
@@ -293,6 +300,7 @@ class WebServer:
         self._stop_progress_monitor = False
         self._last_emitted_progress_key = None
         self._assistant_ollama_manager = None
+        self._project_field_cache.clear()
 
         app = Flask(
             __name__, template_folder=str(Path(__file__).parent / "templates"),
@@ -1271,8 +1279,7 @@ class WebServer:
                 if len(rel_parts) < 2:
                     return jsonify({'error': 'Invalid report path'}), 400
 
-                json_rel_path = Path("json", *rel_parts[1:]).with_suffix(".json")
-                json_path = security_root / json_rel_path
+                json_path = json_sibling_for_format_artifact(resolved_path)
                 if json_path.exists() and not allow_canonical_json_preview:
                     return (
                         jsonify(
@@ -2248,33 +2255,63 @@ class WebServer:
         
     def _collect_reports_from_directories(self):
         """Extract reports data from directory structure"""
-        reports = []
+        reports: List[Dict[str, Any]] = []
         security_reports_dir = self.security_dir
-            
-        # Explore reports in each subdirectory (based on date/timestamp directories)
-        for report_dir in [d for d in security_reports_dir.iterdir() if d.is_dir()]:
-            # Extract date from directory name
-            report_date = self._extract_date_from_dirname(report_dir.name)
-            
-            # Explore model directories
-            for model_dir in [d for d in report_dir.iterdir() if d.is_dir()]:
-                # Desanitize model name
+        if not security_reports_dir.is_dir():
+            return reports
+
+        for run_dir, run_key, report_date in self._iter_run_directories(security_reports_dir):
+            for model_dir in (d for d in run_dir.iterdir() if d.is_dir()):
                 model_name = self._desanitize_name(model_dir.name)
-                reports.extend(self._process_model_directory(model_dir, model_name, report_date, report_dir.name))
-                
-        # Sort reports by date (from newest to oldest)
-        reports.sort(key=lambda x: x['date'] or "", reverse=True)
+                reports.extend(
+                    self._process_model_directory(
+                        model_dir, model_name, report_date, run_key
+                    )
+                )
+
+        reports.sort(key=lambda x: x["date"] or "", reverse=True)
         return reports
-        
-    def _process_model_directory(self, model_dir, model_name, report_date, timestamp_dir):
+
+    def _iter_run_directories(self, security_reports_dir: Path):
+        """
+        Legacy top-level run dirs, top-level ``YYYYMMDD_HHMMSS`` runs, and
+        ``<project_slug>/<YYYYMMDD_HHMMSS>/`` nested runs.
+        """
+        for report_dir in sorted(
+            (d for d in security_reports_dir.iterdir() if d.is_dir()),
+            key=lambda p: p.name,
+        ):
+            name = report_dir.name
+            if is_legacy_run_dirname(name) or is_run_timestamp_dirname(name):
+                run_key = name
+                report_date = report_date_display_from_run_key(run_key)
+                yield report_dir, run_key, report_date
+                continue
+            try:
+                nested_dirs = sorted(
+                    (d for d in report_dir.iterdir() if d.is_dir()),
+                    key=lambda p: p.name,
+                )
+            except OSError:
+                logger.debug(
+                    "Skipping unreadable project reports directory: %s",
+                    report_dir,
+                    exc_info=True,
+                )
+                continue
+            for sub in nested_dirs:
+                if is_run_timestamp_dirname(sub.name):
+                    run_key = f"{name}/{sub.name}"
+                    report_date = report_date_display_from_run_key(run_key)
+                    yield sub, run_key, report_date
+
+    def _process_model_directory(self, model_dir, model_name, report_date, run_key: str):
         """Process all formats in a model directory"""
         model_reports = []
 
-        # Explore format directories
-        for fmt_dir in [d for d in model_dir.iterdir() if d.is_dir()]:
+        for fmt_dir in (d for d in model_dir.iterdir() if d.is_dir()):
             fmt = fmt_dir.name
 
-            # Check if it's a valid format
             if fmt not in REPORT["OUTPUT_FORMATS"]:
                 continue
 
@@ -2285,7 +2322,7 @@ class WebServer:
                     model_name,
                     fmt,
                     report_date,
-                    timestamp_dir,
+                    run_key,
                     model_dir,
                 )
                 for report_file in globber
@@ -2293,8 +2330,10 @@ class WebServer:
                 or not is_executive_summary_progress_sidecar(report_file)
             )
         return model_reports
-        
-    def _process_report_file(self, report_file, model_name, fmt, report_date, timestamp_dir, model_dir):
+
+    def _process_report_file(
+        self, report_file, model_name, fmt, report_date, run_key: str, model_dir
+    ):
         """Process a single report file and extract metadata"""
         # Extract vulnerability type from filename
         vulnerability_type = self._extract_vulnerability_type(report_file.stem)
@@ -2313,20 +2352,29 @@ class WebServer:
         # Build relative path for web access
         relative_path = report_file.relative_to(self.security_dir)
 
-        # Find alternative formats available (including timestamp)
-        alternative_formats = self._find_alternative_formats(model_dir, report_file.stem, timestamp_dir)
+        alternative_formats = self._find_alternative_formats(model_dir, report_file.stem)
 
         language = None
-        if fmt == 'json':
+        if fmt == "json":
             language = self._language_from_json_report_file(report_file)
         else:
-            sibling_json = model_dir / 'json' / f"{report_file.stem}.json"
+            sibling_json = model_dir / "json" / f"{report_file.stem}.json"
             if sibling_json.exists():
                 language = self._language_from_json_report_file(sibling_json)
         if language is None:
             language = self._language_from_legacy_file(report_file)
         if language is None:
-            language = 'en'
+            language = "en"
+
+        project: Optional[str] = None
+        if fmt == "json":
+            project = self._project_field_from_json_path(report_file)
+        else:
+            json_side = model_dir / "json" / f"{report_file.stem}.json"
+            if json_side.is_file():
+                project = self._project_field_from_json_path(json_side)
+        if project is None:
+            project = self._project_inferred_from_run_key(run_key)
 
         return {
             "model": model_name,
@@ -2337,10 +2385,11 @@ class WebServer:
             "stats": stats,
             "alternative_formats": alternative_formats,
             "date": report_date,
-            "timestamp_dir": timestamp_dir,
+            "timestamp_dir": run_key,
             "language": language,
             "progress": progress,
             "audit_metrics": audit_metrics,
+            "project": project,
         }
         
     def _calculate_global_statistics(self, reports):
@@ -2396,37 +2445,63 @@ class WebServer:
         name = sanitized_name.replace('_', ' ')
         return name.title()
 
-    def _extract_date_from_dirname(self, dirname):
-        """Extract date from directory name format [input_path]_[%Y%m%d_%H%M%S]"""
+    @staticmethod
+    def _extract_date_from_dirname(run_key: str) -> str:
+        """Back-compat: extract date from a run folder name or ``project/run_ts`` key."""
+        return report_date_display_from_run_key(run_key)
+
+    @staticmethod
+    def _project_field_cache_key(json_path: Path) -> Path:
+        """
+        Return a stable absolute cache key without symlink resolution.
+
+        Using ``absolute()`` keeps a consistent key shape for relative and absolute
+        inputs even when ``resolve()`` is unavailable or raises.
+        """
+        return json_path.expanduser().absolute()
+
+    def _project_field_from_json_path(self, json_path: Path) -> Optional[str]:
+        key = self._project_field_cache_key(json_path)
+        if key in self._project_field_cache:
+            return self._project_field_cache[key]
         try:
-            # Search for a pattern that resembles YYYYmmdd_HHMMSS at the end of the name
-            if match := re.search(r'_(\d{8}_\d{6})$', dirname):
-                date_str = match[1]
-                # Convert to datetime object
-                date_obj = datetime.strptime(date_str, '%Y%m%d_%H%M%S')
-                return date_obj.strftime('%Y-%m-%d %H:%M:%S')  # Readable format
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError, TypeError):
+            self._project_field_cache[key] = None
+            return None
+        if not isinstance(data, dict):
+            self._project_field_cache[key] = None
+            return None
+        p = data.get("project")
+        if isinstance(p, str) and p.strip():
+            value = p.strip()
+            self._project_field_cache[key] = value
+            return value
+        self._project_field_cache[key] = None
+        return None
 
-            return ""  # If no match, return empty string
-        except Exception as e:
-            print(f"Error extracting date from {dirname}: {e}")
-            return ""
+    @staticmethod
+    def _project_inferred_from_run_key(run_key: str) -> Optional[str]:
+        s = (run_key or "").replace("\\", "/").strip("/")
+        if "/" in s:
+            return s.split("/")[0] or None
+        return None
 
-    def _find_alternative_formats(self, model_dir, report_stem, timestamp_dir=None):
-        """Find all available formats for a specific report"""
-        formats = {}
-        
-        for fmt in REPORT['OUTPUT_FORMATS']:
+    def _find_alternative_formats(self, model_dir, report_stem):
+        """Find all available formats for a specific report (paths relative to ``security_dir``)."""
+        formats: Dict[str, str] = {}
+        security_root = self.security_dir.resolve()
+        for fmt in REPORT["OUTPUT_FORMATS"]:
             fmt_dir = model_dir / fmt
             if fmt_dir.exists() and fmt_dir.is_dir():
                 file_path = fmt_dir / artifact_filename(report_stem, fmt)
                 if file_path.exists():
-                    # Include timestamp directory in the path
-                    if timestamp_dir:
-                        relative_path = file_path.relative_to(model_dir.parent.parent)
-                        formats[fmt] = str(relative_path)
-                    else:
-                        formats[fmt] = str(file_path.relative_to(model_dir.parent))
-        
+                    try:
+                        relative_path = file_path.relative_to(security_root)
+                    except ValueError:
+                        continue
+                    formats[fmt] = str(relative_path)
         return formats
     
     def _extract_vulnerability_type(self, filename):

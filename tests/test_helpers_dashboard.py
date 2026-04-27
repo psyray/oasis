@@ -15,6 +15,7 @@ from oasis.helpers.dashboard import (
     preferred_detail_relative_path_and_format,
     rewrite_report_preview_anchor_hrefs,
 )
+from oasis.helpers.dashboard.json_sibling import json_sibling_for_format_artifact
 
 
 class TestHelpersDashboard(unittest.TestCase):
@@ -42,7 +43,16 @@ class TestHelpersDashboard(unittest.TestCase):
         self.assertEqual(expanded, ["http://fixed:5000"])
 
     def test_dashboard_reports_href_normalizes_leading_slash(self):
-        self.assertEqual(dashboard_reports_href("run1/embed_model/json/x.json"), "/reports/run1/embed_model/json/x.json")
+        self.assertEqual(
+            dashboard_reports_href("p/run1/embed_model/json/x.json"), "/reports/p/run1/embed_model/json/x.json"
+        )
+
+    def test_json_sibling_resolves_beside_model_dir(self):
+        md = Path("sec/p/run1/embed_model/md/sqli.md")
+        self.assertEqual(
+            json_sibling_for_format_artifact(md),
+            Path("sec/p/run1/embed_model/json/sqli.json"),
+        )
 
     def test_preferred_detail_prefers_existing_json_over_pdf(self):
         import tempfile
@@ -58,9 +68,9 @@ class TestHelpersDashboard(unittest.TestCase):
 
     def _run_preferred_detail_prefers_existing_json_over_pdf_test(self, Path, tmp, artifact_filename, SimpleNamespace):
         base = Path(tmp) / "security_reports"
-   
+
         model_key = "embed_model"
-        md = base / "proj_20260101_120000" / model_key
+        md = base / "proj" / "20260101_120000" / model_key
         (md / "json").mkdir(parents=True)
         stem = "sql_injection"
         json_file = md / "json" / artifact_filename(stem, "json")
