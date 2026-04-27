@@ -22,8 +22,11 @@ from oasis.helpers.report_project import (
     project_slug_for_report_storage,
     report_date_display_from_run_key,
     run_timestamp_from_path_or_key,
+    validate_project_alias_for_cli,
 )
+from oasis.helpers.naming import sanitize_name as shared_sanitize_name
 from oasis.schemas.analysis import DashboardStats, VulnerabilityReportDocument
+from oasis.tools import create_cache_dir, sanitize_name
 
 try:
     from oasis.web import WebServer
@@ -54,6 +57,11 @@ class TestReportProjectHelpers(unittest.TestCase):
         self.assertEqual(project_slug_for_report_storage("A B!"), "A_B")
         self.assertEqual(project_slug_for_report_storage("####"), "project")
 
+    def test_validate_project_alias_for_cli(self):
+        self.assertEqual(validate_project_alias_for_cli("proj_1-main"), "proj_1-main")
+        with self.assertRaises(ValueError):
+            validate_project_alias_for_cli("proj name!")
+
     def test_run_key_parsing(self):
         self.assertEqual(run_timestamp_from_path_or_key("o/p/20260110_120000"), "20260110_120000")
         self.assertEqual(run_timestamp_from_path_or_key("x_20260110_120000"), "20260110_120000")
@@ -78,6 +86,41 @@ class TestReportProjectHelpers(unittest.TestCase):
         with self.assertLogs(log, level="WARNING") as cm:
             log_input_path_project_naming_warnings(log, Path("."))
         self.assertTrue(any("generic path" in m.lower() for m in cm.output))
+
+    def test_create_cache_dir_uses_directory_basename(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td) / "example" / "test_files"
+            proj.mkdir(parents=True)
+            cache_dir = create_cache_dir(proj)
+            self.assertEqual(cache_dir.name, "test_files")
+
+    def test_create_cache_dir_uses_alias_override(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td) / "example" / "test_files"
+            proj.mkdir(parents=True)
+            cache_dir = create_cache_dir(proj, project_name="my-proj_1")
+            self.assertEqual(cache_dir.name, "my_proj_1")
+
+    def test_create_cache_dir_alias_uses_project_slug_transform(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td) / "example" / "test_files"
+            proj.mkdir(parents=True)
+            alias = "A B!/team"
+            cache_dir = create_cache_dir(proj, project_name=alias)
+            self.assertEqual(cache_dir.name, project_slug_for_report_storage(alias))
+
+    def test_create_cache_dir_whitespace_only_alias_falls_back_to_derived(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td) / "example" / "test_files"
+            proj.mkdir(parents=True)
+            without_alias = create_cache_dir(proj)
+            with_whitespace = create_cache_dir(proj, project_name="   ")
+            self.assertEqual(with_whitespace.name, without_alias.name)
+            self.assertEqual(with_whitespace.name, "test_files")
+
+    def test_shared_sanitize_name_matches_tools_contract(self):
+        sample = "group/sub/Vuln Name!.md"
+        self.assertEqual(shared_sanitize_name(sample), sanitize_name(sample))
 
 
 @unittest.skipIf(
@@ -158,6 +201,28 @@ class TestWebCollectRunLayouts(unittest.TestCase):
         p = r.get_output_directory(self.scan, out_base)
         self.assertEqual(r.project, "scan")
         self.assertEqual(p.parent, out_base / (r.project_slug or ""))
+
+    def test_get_output_directory_uses_project_name_override(self):
+        r = Report(str(self.scan), ["json"])
+        out_base = self.parent / "out_sec"
+        p = r.get_output_directory(self.scan, out_base, project_name="alias_proj-1")
+        self.assertEqual(r.project, "alias_proj-1")
+        self.assertEqual(r.project_slug, "alias_proj_1")
+        self.assertEqual(p.parent, out_base / "alias_proj_1")
+
+    def test_get_output_directory_ignores_whitespace_only_project_override(self):
+        r = Report(str(self.scan), ["json"])
+        out_base = self.parent / "out_sec"
+        p = r.get_output_directory(self.scan, out_base, project_name="   ")
+        self.assertEqual(r.project, "scan")
+        self.assertEqual(r.project_slug, "scan")
+        self.assertEqual(p.parent, out_base / "scan")
+
+    def test_get_output_directory_rejects_invalid_explicit_project_name(self):
+        r = Report(str(self.scan), ["json"])
+        out_base = self.parent / "out_sec"
+        with self.assertRaises(ValueError):
+            r.get_output_directory(self.scan, out_base, project_name="bad alias!")
 
     def test_iter_run_directories_skips_unreadable_nested_project_directory(self):
         nested_ok = self.security / "ok_project" / "20100303_120000"

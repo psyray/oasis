@@ -32,6 +32,7 @@ from .helpers.embedding import (
     resolve_embed_models,
 )
 from .helpers.langgraph_cli import LG_PIPELINE_INFO, cli_bold, cli_emit_section_banner
+from .helpers.report_project import validate_project_alias_for_cli
 from .report import Report
 from .web import WebServer
 
@@ -65,6 +66,14 @@ class OasisScanner:
         try:
             return OasisScanner._parse_embed_models_csv(value)
         except EmbedModelValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from exc
+
+    @staticmethod
+    def _project_name_cli_type(value: str) -> str:
+        """argparse ``type`` for ``--project-name``."""
+        try:
+            return validate_project_alias_for_cli(value)
+        except ValueError as exc:
             raise argparse.ArgumentTypeError(str(exc)) from exc
 
     @staticmethod
@@ -277,6 +286,18 @@ class OasisScanner:
                 'Report output is grouped by a project name taken from the last directory segment '
                 'when you pass a directory (recommended), or the parent folder of a file. '
                 'Avoid using only . or / so runs stay easy to find in the dashboard.'
+            ),
+        )
+        io_group.add_argument(
+            '-pn',
+            '--project-name',
+            dest='project_name',
+            type=OasisScanner._project_name_cli_type,
+            default=None,
+            help=(
+                "Optional project alias used for report grouping/filtering in the dashboard. "
+                "When provided, it overrides the default project name derived from --input. "
+                "Allowed characters: letters, digits, '_' and '-'."
             ),
         )
         io_group.add_argument(
@@ -593,7 +614,11 @@ class OasisScanner:
 
         embed_models = list(self.embed_models or [DEFAULT_ARGS["EMBED_MODEL"]])
         self.report.models = list(embed_models)
-        self.report.create_report_directories(self.args.input_path, models=embed_models)
+        self.report.create_report_directories(
+            self.args.input_path,
+            models=embed_models,
+            project_name=getattr(self.args, "project_name", None),
+        )
         base_embedding_manager = EmbeddingManager(self.args, self.ollama_manager)
         prepared_input_files = base_embedding_manager.prepare_input_files(
             self.args,
@@ -1013,7 +1038,11 @@ class OasisScanner:
 
         # Create the report directories for all main models
         self.report.models = main_models
-        self.report.create_report_directories(self.args.input_path, models=main_models)
+        self.report.create_report_directories(
+            self.args.input_path,
+            models=main_models,
+            project_name=getattr(self.args, "project_name", None),
+        )
         self.args.run_id = getattr(self.report, "output_dir_name", None)
         self._configure_run_error_logging()
 

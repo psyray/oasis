@@ -1807,7 +1807,7 @@ DashboardApp.mountReportAssistantPanel = function () {
     };
 
     const loadSessionById = function (sessionId, loadOpts) {
-        loadOpts = loadOpts && typeof loadOpts === 'object' ? loadOpts : {};
+        const opts = loadOpts && typeof loadOpts === 'object' ? loadOpts : {};
         if (!sessionId) {
             startNewChat();
             return Promise.resolve();
@@ -1820,7 +1820,7 @@ DashboardApp.mountReportAssistantPanel = function () {
                 let useReportWhenNoStore = false;
                 // No chat-model localStorage: prefer the conversation stored under the report's model.
                 if (
-                    loadOpts.useReportModelIfNoStored === true &&
+                    opts.useReportModelIfNoStored === true &&
                     reportPreferredModelStr
                 ) {
                     // (1) Branch selection: map report JSON model string → a key in model_branches (via

@@ -336,54 +336,72 @@ def build_dashboard_stats(files: List[FileReportEntry]) -> DashboardStats:
     return stats
 
 
+def _chunk_source_line_hint(chunk: ChunkDeepAnalysis) -> str:
+    if chunk.start_line is not None and chunk.end_line is not None:
+        return f" _(source lines {chunk.start_line}-{chunk.end_line})_"
+    return ""
+
+
+def _markdown_for_chunk_without_findings(
+    chunk: ChunkDeepAnalysis, chunk_index: int, line_hint: str
+) -> str:
+    parts = [
+        f"#### Chunk {chunk_index + 1}{line_hint}\n\nNo vulnerabilities identified in structured output.\n"
+    ]
+    if chunk.notes:
+        parts.append(f"\n**Notes**: {chunk.notes}\n")
+    return "\n".join(parts)
+
+
+def _markdown_sections_for_finding(
+    finding: VulnerabilityFinding,
+    finding_index: int,
+    chunk_index: int,
+    line_hint: str,
+) -> List[str]:
+    parts: List[str] = [
+        f"#### Finding {finding_index + 1} (chunk {chunk_index + 1}){line_hint}: {finding.title}\n",
+        f"- **Severity**: {finding.severity}\n",
+    ]
+    if finding.vulnerable_code:
+        parts.append("```\n" + finding.vulnerable_code.strip() + "\n```\n")
+    parts.append(f"\n{finding.explanation}\n")
+    if finding.impact:
+        parts.append(f"\n**Impact**: {finding.impact}\n")
+    if finding.entry_point:
+        parts.append(f"\n**Entry point**: {finding.entry_point}\n")
+    if finding.execution_path_diagram:
+        parts.append("\n## Execution Path\n\n```\n" + finding.execution_path_diagram.strip() + "\n```\n")
+    if finding.http_methods:
+        parts.append("\n**HTTP methods**: " + ", ".join(finding.http_methods) + "\n")
+    if finding.manipulable_parameters:
+        parts.append("\n**Parameters**: " + ", ".join(finding.manipulable_parameters) + "\n")
+    if finding.exploitation_steps:
+        parts.append("\n**Exploitation steps**:\n" + "\n".join(f"- {s}" for s in finding.exploitation_steps) + "\n")
+    if finding.example_payloads:
+        parts.append("\n**Example payloads**:\n" + "\n".join(f"- `{p}`" for p in finding.example_payloads) + "\n")
+    if finding.http_raw_requests:
+        parts.append(
+            "\n**HTTP raw requests (proxy tools)**:\n"
+            + "\n".join("```http\n" + h.strip() + "\n```" for h in finding.http_raw_requests)
+            + "\n"
+        )
+    if finding.exploitation_conditions:
+        parts.append(f"\n**Conditions**: {finding.exploitation_conditions}\n")
+    if finding.remediation:
+        parts.append(f"\n**Remediation**: {finding.remediation}\n")
+    if finding.secure_code_example:
+        parts.append("\n**Secure example**:\n```\n" + finding.secure_code_example.strip() + "\n```\n")
+    parts.append('\n<div class="page-break"></div>\n')
+    return parts
+
+
 def chunk_analysis_to_markdown(chunk: ChunkDeepAnalysis, chunk_index: int) -> str:
     """Render chunk structured analysis as Markdown for vulnerability report sections."""
-    parts: List[str] = []
-    line_hint = ""
-    if chunk.start_line is not None and chunk.end_line is not None:
-        line_hint = f" _(source lines {chunk.start_line}-{chunk.end_line})_"
+    line_hint = _chunk_source_line_hint(chunk)
     if not chunk.findings:
-        parts.append(
-            f"#### Chunk {chunk_index + 1}{line_hint}\n\nNo vulnerabilities identified in structured output.\n"
-        )
-        if chunk.notes:
-            parts.append(f"\n**Notes**: {chunk.notes}\n")
-        return "\n".join(parts)
+        return _markdown_for_chunk_without_findings(chunk, chunk_index, line_hint)
+    sections: List[str] = []
     for i, finding in enumerate(chunk.findings):
-        parts.extend(
-            (
-                f"#### Finding {i + 1} (chunk {chunk_index + 1}){line_hint}: {finding.title}\n",
-                f"- **Severity**: {finding.severity}\n",
-            )
-        )
-        if finding.vulnerable_code:
-            parts.append("```\n" + finding.vulnerable_code.strip() + "\n```\n")
-        parts.append(f"\n{finding.explanation}\n")
-        if finding.impact:
-            parts.append(f"\n**Impact**: {finding.impact}\n")
-        if finding.entry_point:
-            parts.append(f"\n**Entry point**: {finding.entry_point}\n")
-        if finding.execution_path_diagram:
-            parts.append("\n## Execution Path\n\n```\n" + finding.execution_path_diagram.strip() + "\n```\n")
-        if finding.http_methods:
-            parts.append("\n**HTTP methods**: " + ", ".join(finding.http_methods) + "\n")
-        if finding.manipulable_parameters:
-            parts.append("\n**Parameters**: " + ", ".join(finding.manipulable_parameters) + "\n")
-        if finding.exploitation_steps:
-            parts.append("\n**Exploitation steps**:\n" + "\n".join(f"- {s}" for s in finding.exploitation_steps) + "\n")
-        if finding.example_payloads:
-            parts.append("\n**Example payloads**:\n" + "\n".join(f"- `{p}`" for p in finding.example_payloads) + "\n")
-        if finding.http_raw_requests:
-            parts.append(
-                "\n**HTTP raw requests (proxy tools)**:\n"
-                + "\n".join("```http\n" + h.strip() + "\n```" for h in finding.http_raw_requests)
-                + "\n"
-            )
-        if finding.exploitation_conditions:
-            parts.append(f"\n**Conditions**: {finding.exploitation_conditions}\n")
-        if finding.remediation:
-            parts.append(f"\n**Remediation**: {finding.remediation}\n")
-        if finding.secure_code_example:
-            parts.append("\n**Secure example**:\n```\n" + finding.secure_code_example.strip() + "\n```\n")
-        parts.append('\n<div class="page-break"></div>\n')
-    return "\n".join(parts)
+        sections.extend(_markdown_sections_for_finding(finding, i, chunk_index, line_hint))
+    return "\n".join(sections)

@@ -251,7 +251,8 @@ class SecurityAnalyzer:
             input_path=embedding_manager.input_path,
             llm_model=self.llm_model,
             scan_model=self.scan_model,
-            cache_days=self.cache_days
+            cache_days=self.cache_days,
+            project_name=getattr(args, "project_name", None),
         )
         
         self.structured_output_failure_handler = structured_output_failure_handler

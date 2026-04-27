@@ -1,4 +1,25 @@
-"""Project label and safe directory segment for `security_reports` output layout."""
+"""Project label, explicit alias validation, and slug layout for ``security_reports``.
+
+**Layers**
+
+1. **Derived human-readable label** — :func:`project_label_for_report_storage`: from a
+   cleaned ``--input`` path (directory basename or parent of a file). May contain spaces
+   and characters outside :data:`~oasis.helpers.naming.PROJECT_ALIAS_PATTERN`; used as JSON
+   ``project`` when no explicit alias is set.
+
+2. **Explicit alias** — :func:`validate_project_alias_for_cli`: same rules as CLI
+   ``--project-name`` (alphanumeric, ``_``, ``-``). Use for programmatic overrides passed
+   to :class:`~oasis.report.Report` APIs that accept ``project_name``.
+
+3. **Filesystem slug** — :func:`project_slug_for_report_storage`: applies
+   :func:`~oasis.helpers.naming.sanitize_name`, collapses underscores, strips edges, and
+   falls back to ``"project"`` when the result would be empty. Used for directory segments
+   (reports layout, cache keys after normalization).
+
+:func:`~oasis.helpers.naming.sanitize_name` alone is for generic segments (e.g. model folder
+names); prefer :func:`project_slug_for_report_storage` when the value is a *project*
+label or alias string destined for ``security_reports`` layout consistency.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +29,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final
 
-from oasis.tools import sanitize_name
+from oasis.helpers.naming import (
+    PROJECT_ALIAS_PATTERN,
+    sanitize_name,
+)
 
 # Filesystem run folder: %Y%m%d_%H%M%S
 _RUN_TIMESTAMP_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\d{8}_\d{6}$")
@@ -28,9 +52,7 @@ def _resolved_is_likely_file(clean_path: Path, resolved: Path) -> bool:
     if s.endswith(("/", "\\")):
         return False
     suf = clean_path.suffix
-    if suf and len(suf) <= 6 and "/" not in suf and "\\" not in suf:
-        return True
-    return False
+    return bool(suf and len(suf) <= 6 and "/" not in suf and "\\" not in suf)
 
 
 def project_label_for_report_storage(clean_path: Path) -> str:
@@ -45,13 +67,8 @@ def project_label_for_report_storage(clean_path: Path) -> str:
     except OSError:
         resolved = clean_path
     is_file = _resolved_is_likely_file(clean_path, resolved)
-    if is_file:
-        candidate = resolved.parent.name
-    else:
-        candidate = resolved.name
-    if not _is_usable_segment_name(candidate):
-        return "project"
-    return candidate
+    candidate = resolved.parent.name if is_file else resolved.name
+    return candidate if _is_usable_segment_name(candidate) else "project"
 
 
 def _raw_path_token_for_warnings(path: Path) -> str:
@@ -95,12 +112,37 @@ def log_input_path_project_naming_warnings(logger: logging.Logger, input_path: P
 
 
 def project_slug_for_report_storage(label: str) -> str:
-    """Single path segment under ``security_reports``; safe, non-empty."""
+    """
+    Single path segment under ``security_reports`` / related caches; safe, non-empty.
+
+    Accepts any string (e.g. a derived label with spaces), unlike
+    :func:`validate_project_alias_for_cli`.
+    """
     raw = sanitize_name(label)
     slug = re.sub(r"_+", "_", raw).strip("_")
     if not slug or re.sub(r"[^a-zA-Z0-9]", "", slug) == "":
         return "project"
     return slug
+
+
+def validate_project_alias_for_cli(value: object) -> str:
+    """
+    Validate an explicit project alias (``--project-name`` and programmatic override).
+
+    Shared with :class:`~oasis.oasis.OasisScanner` CLI parsing; same contract as
+    :data:`~oasis.helpers.naming.PROJECT_ALIAS_PATTERN`. Raises :class:`ValueError` when
+    invalid.
+    """
+    if not isinstance(value, str):
+        raise ValueError("Project name must be a string.")
+    candidate = value.strip()
+    if not candidate:
+        raise ValueError("Project name cannot be empty.")
+    if not PROJECT_ALIAS_PATTERN.fullmatch(candidate):
+        raise ValueError(
+            "Project name may contain only alphanumeric characters, '_' or '-'."
+        )
+    return candidate
 
 
 def is_run_timestamp_dirname(name: str) -> bool:
@@ -125,9 +167,7 @@ def run_timestamp_from_path_or_key(path_or_key: str) -> str | None:
     if is_run_timestamp_dirname(last):
         return last
     m = _LEGACY_RUN_SUFFIX.search(last)
-    if m:
-        return m.group("ts")
-    return None
+    return m.group("ts") if m else None
 
 
 def report_date_display_from_run_key(path_or_key: str) -> str:

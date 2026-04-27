@@ -201,6 +201,7 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 
 ### Input/Output Options
 - `--input` `-i`: Path to file, directory, or .txt file containing newline-separated paths to analyze
+- `--project-name` `-pn`: Optional project alias for report grouping/filtering (overrides the name derived from `-i`; allowed chars: `A-Z`, `a-z`, `0-9`, `_`, `-`)
 - `--output-format` `-of`: Comma-separated formats or `all` for json, sarif, pdf, html, md (default: all)
 - `--extensions` `-x`: Custom file extensions to analyze (e.g., "py,js,java")
 - `--language` `-l`: Language for reports (default: en)  
@@ -381,7 +382,7 @@ For the best results with OASIS:
 
 ## 📁 Output Structure
 
-Vulnerability runs are stored under **`security_reports/<project_slug>/YYYYMMDD_HHMMSS/`**, where `project_slug` is derived from the **last segment of your `--input` path** when it points to a **directory** (e.g. `example/test_files` → `test_files`), or from the **folder that contains the file** when you pass a file path, then sanitized for safe folder names. For predictable grouping in the web UI, prefer `--input` on a project folder, not a single file, and avoid generic paths like `.` or `/` as the sole argument (the CLI will warn in those cases). Older scans may still use the previous flat layout, **`security_reports/<input_basename>_YYYYMMDD_HHMMSS/`**; the dashboard reads both. For each model, per-format folders include a **canonical JSON** report (`json/*.json`) used by the web dashboard for statistics and previews. Chunk objects may include **`start_line` / `end_line`** (1-based inclusive bounds for the analyzed source segment, computed at split time, not inferred by the model). Each finding may include **`snippet_start_line` / `snippet_end_line`** when the tool can match `vulnerable_code` inside that chunk (otherwise SARIF falls back to the chunk span). **SARIF 2.1.0** (`sarif/*.sarif`) is generated from the same document for toolchains (DefectDojo, SonarQube, IDE SARIF viewers) and maps those spans to `region.startLine` / `region.endLine` when available. HTML and PDF are rendered from that JSON via Jinja2; Markdown is an additional human-readable export. Canonical JSON includes a top-level **`project`** field (human-readable label) alongside `report_type`, `title`, etc.
+Vulnerability runs are stored under **`security_reports/<project_slug>/YYYYMMDD_HHMMSS/`**, where `project_slug` is derived from the **last segment of your `--input` path** when it points to a **directory** (e.g. `example/test_files` → `test_files`), or from the **folder that contains the file** when you pass a file path, then sanitized for safe folder names. If you provide **`--project-name/-pn`**, that alias overrides the default value derived from `-i` for both folder naming and UI filters. For predictable grouping in the web UI, prefer `--input` on a project folder, not a single file, and avoid generic paths like `.` or `/` as the sole argument (the CLI will warn in those cases). Older scans may still use the previous flat layout, **`security_reports/<input_basename>_YYYYMMDD_HHMMSS/`**; the dashboard reads both. For each model, per-format folders include a **canonical JSON** report (`json/*.json`) used by the web dashboard for statistics and previews. Chunk objects may include **`start_line` / `end_line`** (1-based inclusive bounds for the analyzed source segment, computed at split time, not inferred by the model). Each finding may include **`snippet_start_line` / `snippet_end_line`** when the tool can match `vulnerable_code` inside that chunk (otherwise SARIF falls back to the chunk span). **SARIF 2.1.0** (`sarif/*.sarif`) is generated from the same document for toolchains (DefectDojo, SonarQube, IDE SARIF viewers) and maps those spans to `region.startLine` / `region.endLine` when available. HTML and PDF are rendered from that JSON via Jinja2; Markdown is an additional human-readable export. Canonical JSON includes a top-level **`project`** field (human-readable label) alongside `report_type`, `title`, etc.
 
 ```
 security_reports/
@@ -500,7 +501,7 @@ OASIS implements a sophisticated dual-layer caching system to optimize performan
 ### Embedding Cache
 - Stores vector embeddings of your codebase to avoid recomputing them for repeated analyses
 - Default cache duration: 7 days
-- Cache location: `.oasis_cache/[embedding_model_name]/`
+- Cache location: `.oasis_cache/[project_slug]/` (same project key as `security_reports`, then per-embedding-model cache files)
 - Use `--clear-cache-embeddings` (`-cce`) to force regeneration of embeddings
 
 ### Analysis Cache

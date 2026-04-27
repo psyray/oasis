@@ -671,7 +671,8 @@ class WebServer:
         """Return ``(rag_block, rag_unavailable)`` for assistant context."""
         em_model = self._embed_model_for_assistant(report_payload)
         root_path = resolve_assistant_cache_root(report_payload, self.input_path_absolute)
-        cache_path = embedding_cache_file_path(root_path, em_model)
+        project_name = report_payload.get("project") if isinstance(report_payload, dict) else None
+        cache_path = embedding_cache_file_path(root_path, em_model, project_name=project_name)
 
         try:
             cb = load_embedding_code_base(cache_path)
@@ -743,6 +744,123 @@ class WebServer:
 
         return rag_block, False
 
+    def _assistant_load_primary_payload_from_disk_or_synthetic(
+        self,
+        resolved_report: Path,
+        primary_synthetic: Optional[Any],
+    ):
+        """Return ``(payload_dict, None)`` or ``(None, http_error_tuple)``."""
+        if primary_synthetic is not None:
+            payload = primary_synthetic
+        else:
+            try:
+                with open(resolved_report, 'r', encoding='utf-8') as rf:
+                    payload = json.load(rf)
+            except Exception:
+                return None, assistant_http_error(ERR_COULD_NOT_READ_REPORT, HTTP_INTERNAL)
+        if not isinstance(payload, dict):
+            return None, assistant_http_error(ERR_INVALID_REPORT, HTTP_UNPROCESSABLE)
+        return payload, None
+
+    def _assistant_fetch_rag_block_if_enabled(
+        self,
+        data: Dict[str, Any],
+        messages: List[Dict[str, Any]],
+        rag_source_payload: Dict[str, Any],
+        report_rel: str,
+        rag_budget: int,
+        extra_rag_paths: Optional[List[str]],
+    ) -> Tuple[str, bool]:
+        rag_block = ''
+        rag_unavailable = False
+        if not self.web_assistant_rag or bool(data.get('rag_disabled')):
+            return rag_block, rag_unavailable
+        last_user = extract_last_user_message_text(messages)
+        if not last_user.strip():
+            return rag_block, rag_unavailable
+        rag_block, rag_unavailable = self._assistant_run_rag_retrieval(
+            last_user=last_user,
+            report_payload=rag_source_payload,
+            report_rel=report_rel,
+            rag_expand_project=bool(data.get('rag_expand_project')),
+            extra_report_file_paths=extra_rag_paths,
+        )
+        if rag_block and len(rag_block) > rag_budget:
+            rag_block = shrink_rag_block(rag_block, rag_budget)
+        return rag_block, rag_unavailable
+
+    def _assistant_shrink_user_labels_if_any(
+        self,
+        data: Dict[str, Any],
+        labels_budget: int,
+    ) -> str:
+        labels_note = data.get('user_finding_labels')
+        if isinstance(labels_note, str) and labels_note.strip():
+            return shrink_user_labels_block(labels_note.strip(), labels_budget)
+        return ''
+
+    def _assistant_load_persisted_finding_validation(
+        self,
+        data: Dict[str, Any],
+        report_rel: str,
+        chat_model: str,
+        finding_key_for_prompt: str,
+    ) -> Optional[Dict[str, Any]]:
+        sid_ctx = data.get('session_id')
+        try:
+            if isinstance(sid_ctx, str) and validate_session_id(sid_ctx.strip()):
+                loaded_sess = load_chat_session(
+                    self.security_dir, report_rel, sid_ctx.strip()
+                )
+                return get_finding_validation_for_branch(
+                    loaded_sess,
+                    chat_model,
+                    finding_key_for_prompt,
+                )
+        except Exception:
+            logger.warning(
+                'Assistant chat context build failed; continuing without persisted finding validation',
+                exc_info=True,
+            )
+        return None
+
+    def _assistant_diagnose_runtime_ctx_budget(
+        self,
+        budget_meta: Any,
+        section_lengths: Dict[str, Any],
+        total_budget: int,
+    ) -> Optional[int]:
+        """Best-effort compare assembled prompt size to Ollama runtime ``num_ctx``."""
+        runtime_num_ctx: Optional[int] = None
+        context_source = budget_meta.context_source or ""
+        try:
+            runtime_num_ctx = budget_meta.ollama_runtime_num_ctx()
+            configured = budget_meta.effective_chars_per_token()
+            total_len = int(section_lengths["total"])
+            if (
+                runtime_num_ctx
+                and configured is not None
+                and total_len > runtime_num_ctx * configured
+            ):
+                prompt_chars_per_ctx_token = total_len / runtime_num_ctx
+                logger.warning(
+                    "Assistant system prompt larger than runtime context allows "
+                    "(prompt_chars=%s runtime_num_ctx=%s prompt_chars_per_ctx_token=%.2f "
+                    "configured_chars_per_token=%s context_source=%s budget=%s)",
+                    total_len,
+                    runtime_num_ctx,
+                    prompt_chars_per_ctx_token,
+                    configured,
+                    context_source,
+                    total_budget,
+                )
+        except Exception:
+            logger.warning(
+                "Assistant budget/section length diagnostic failed; skipping ctx-size warning",
+                exc_info=True,
+            )
+        return runtime_num_ctx
+
     def _prepare_assistant_chat_context(self, data: Any):
         """Build the assistant chat context shared by JSON and streaming endpoints.
 
@@ -787,16 +905,13 @@ class WebServer:
         if aggregate_mode and resolved_report.stem.lower() != '_executive_summary':
             return assistant_http_error(ERR_AGGREGATE_REQUIRES_EXECUTIVE, HTTP_BAD_REQUEST)
 
-        if primary_synthetic is not None:
-            primary_payload = primary_synthetic
-        else:
-            try:
-                with open(resolved_report, 'r', encoding='utf-8') as rf:
-                    primary_payload = json.load(rf)
-            except Exception:
-                return assistant_http_error(ERR_COULD_NOT_READ_REPORT, HTTP_INTERNAL)
-        if not isinstance(primary_payload, dict):
-            return assistant_http_error(ERR_INVALID_REPORT, HTTP_UNPROCESSABLE)
+        primary_payload, load_err = self._assistant_load_primary_payload_from_disk_or_synthetic(
+            resolved_report,
+            primary_synthetic,
+        )
+        if load_err is not None:
+            return load_err
+        assert primary_payload is not None
 
         report_rel = str(resolved_report.relative_to(security_root)).replace('\\', '/')
 
@@ -877,47 +992,23 @@ class WebServer:
             return assistant_http_error(finding_scope_err, HTTP_BAD_REQUEST)
         assert finding_json is not None
 
-        use_rag = self.web_assistant_rag and not bool(data.get('rag_disabled'))
-        rag_block = ''
-        rag_unavailable = False
-        if use_rag:
-            last_user = extract_last_user_message_text(messages)
-            if last_user.strip():
-                rag_block, rag_unavailable = self._assistant_run_rag_retrieval(
-                    last_user=last_user,
-                    report_payload=rag_source_payload,
-                    report_rel=report_rel,
-                    rag_expand_project=bool(data.get('rag_expand_project')),
-                    extra_report_file_paths=extra_rag_paths,
-                )
-        if rag_block and len(rag_block) > subbudgets['rag']:
-            rag_block = shrink_rag_block(rag_block, subbudgets['rag'])
+        rag_block, rag_unavailable = self._assistant_fetch_rag_block_if_enabled(
+            data,
+            messages,
+            rag_source_payload,
+            report_rel,
+            subbudgets['rag'],
+            extra_rag_paths,
+        )
 
-        labels_note = data.get('user_finding_labels')
-        user_labels = ''
-        if isinstance(labels_note, str) and labels_note.strip():
-            user_labels = shrink_user_labels_block(
-                labels_note.strip(), subbudgets['user_labels']
-            )
+        user_labels = self._assistant_shrink_user_labels_if_any(data, subbudgets['user_labels'])
 
-        finding_validation_for_prompt: Optional[Dict[str, Any]] = None
-        sid_ctx = data.get('session_id')
-        try:
-            if isinstance(sid_ctx, str) and validate_session_id(sid_ctx.strip()):
-                loaded_sess = load_chat_session(
-                    self.security_dir, report_rel, sid_ctx.strip()
-                )
-                finding_validation_for_prompt = get_finding_validation_for_branch(
-                    loaded_sess,
-                    chat_model,
-                    finding_key_for_prompt,
-                )
-        except Exception:
-            logger.warning(
-                'Assistant chat context build failed; continuing without persisted finding validation',
-                exc_info=True,
-            )
-            finding_validation_for_prompt = None
+        finding_validation_for_prompt = self._assistant_load_persisted_finding_validation(
+            data,
+            report_rel,
+            chat_model,
+            finding_key_for_prompt,
+        )
 
         system_content, section_lengths = assemble_verdict_first_prompt(
             system_intro=self._ASSISTANT_SYSTEM_INTRO_PREFIX,
@@ -929,34 +1020,12 @@ class WebServer:
             total_budget=total_budget,
         )
 
-        runtime_num_ctx: Optional[int] = None
         context_source = budget_meta.context_source or ""
-        try:
-            runtime_num_ctx = budget_meta.ollama_runtime_num_ctx()
-            configured = budget_meta.effective_chars_per_token()
-            total_len = int(section_lengths["total"])
-            if (
-                runtime_num_ctx
-                and configured is not None
-                and total_len > runtime_num_ctx * configured
-            ):
-                prompt_chars_per_ctx_token = total_len / runtime_num_ctx
-                logger.warning(
-                    "Assistant system prompt larger than runtime context allows "
-                    "(prompt_chars=%s runtime_num_ctx=%s prompt_chars_per_ctx_token=%.2f "
-                    "configured_chars_per_token=%s context_source=%s budget=%s)",
-                    total_len,
-                    runtime_num_ctx,
-                    prompt_chars_per_ctx_token,
-                    configured,
-                    context_source,
-                    total_budget,
-                )
-        except Exception:
-            logger.warning(
-                "Assistant budget/section length diagnostic failed; skipping ctx-size warning",
-                exc_info=True,
-            )
+        runtime_num_ctx = self._assistant_diagnose_runtime_ctx_budget(
+            budget_meta,
+            section_lengths,
+            total_budget,
+        )
         if excerpt_truncated:
             logger.info(
                 "Assistant aggregate report summary inputs truncated (budget=%s)",
@@ -2484,9 +2553,7 @@ class WebServer:
     @staticmethod
     def _project_inferred_from_run_key(run_key: str) -> Optional[str]:
         s = (run_key or "").replace("\\", "/").strip("/")
-        if "/" in s:
-            return s.split("/")[0] or None
-        return None
+        return s.split("/")[0] or None if "/" in s else None
 
     def _find_alternative_formats(self, model_dir, report_stem):
         """Find all available formats for a specific report (paths relative to ``security_dir``)."""

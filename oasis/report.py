@@ -32,6 +32,7 @@ from .helpers.report_project import (
     log_input_path_project_naming_warnings,
     project_label_for_report_storage,
     project_slug_for_report_storage,
+    validate_project_alias_for_cli,
 )
 
 # Package metadata (process constant; avoid lazy imports in hot paths)
@@ -202,13 +203,20 @@ class Report:
         """
         directory.mkdir(parents=True, exist_ok=True)
     
-    def create_report_directories(self, input_path: str | Path, sub_dir: str = None, models: List[str] = None) -> Dict[str, Path]:
+    def create_report_directories(
+        self,
+        input_path: str | Path,
+        sub_dir: str = None,
+        models: List[str] = None,
+        project_name: str | None = None,
+    ) -> Dict[str, Path]:
         """
         Create format-specific directories for reports
         
         Args:
             input_path: Path to the input file or directory
             sub_dir: Optional subdirectory name
+            project_name: Optional explicit project alias overriding the -i derived name
             
         Returns:
             Dictionary of format-specific directory paths
@@ -221,7 +229,11 @@ class Report:
         log_input_path_project_naming_warnings(logger, clean_path)
 
         self.output_base_dir = input_path.resolve().parent / REPORT['OUTPUT_DIR']
-        self.output_dir = self.get_output_directory(input_path, self.output_base_dir)
+        self.output_dir = self.get_output_directory(
+            input_path,
+            self.output_base_dir,
+            project_name=project_name,
+        )
         self.ensure_directory(self.output_base_dir)
 
         base_dir = self.output_dir
@@ -1196,23 +1208,41 @@ class Report:
             if fmt in self.report_dirs[model_name]
         }
 
-    def get_output_directory(self, input_path: str | Path, base_reports_dir: Path) -> Path:
+    def get_output_directory(
+        self,
+        input_path: str | Path,
+        base_reports_dir: Path,
+        project_name: str | None = None,
+    ) -> Path:
         """
         Build ``security_reports/<project_slug>/<YYYYMMDD_HHMMSS>/`` with inner layout unchanged.
 
         ``output_dir_name`` is ``<project_slug>_<timestamp>`` for ``run_id`` and error logs
         (globally unique across project folders).
         """
-        self._initialize_project_metadata(input_path)
+        self._initialize_project_metadata(input_path, project_name=project_name)
         timestamp = generate_timestamp(for_file=True)
         self.output_dir_name = f"{self.project_slug}_{timestamp}"
         return base_reports_dir / self.project_slug / timestamp
 
-    def _initialize_project_metadata(self, input_path: str | Path) -> None:
-        """Derive stable project label and slug from an input path."""
-        clean = extract_clean_path(input_path)
-        clean_path = clean if isinstance(clean, Path) else Path(clean)
-        self.project = project_label_for_report_storage(clean_path)
+    def _initialize_project_metadata(
+        self,
+        input_path: str | Path,
+        project_name: str | None = None,
+    ) -> None:
+        """Derive stable project label and slug from input or explicit alias.
+
+        Non-empty ``project_name`` must satisfy the same contract as ``--project-name``
+        (:func:`~oasis.helpers.report_project.validate_project_alias_for_cli`); invalid
+        values raise ``ValueError``.
+        """
+        normalized_project_name = str(project_name).strip() if project_name is not None else ""
+        if normalized_project_name:
+            self.project = validate_project_alias_for_cli(normalized_project_name)
+        else:
+            clean = extract_clean_path(input_path)
+            clean_path = clean if isinstance(clean, Path) else Path(clean)
+            self.project = project_label_for_report_storage(clean_path)
         self.project_slug = project_slug_for_report_storage(self.project)
 
 
