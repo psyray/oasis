@@ -19,6 +19,7 @@ from oasis.enums import PhaseRowStatus
 from oasis.helpers import adaptive_subphases_payload, standard_scan_phases, standard_scan_phases_vuln_types
 from oasis.helpers.dashboard import (
     EXEC_SUMMARY_EMBEDDING_TIER_ORDER,
+    audit_metrics_from_audit_payload,
     audit_metrics_from_markdown_content,
     executive_summary_similarity_tier_id,
     iter_audit_metrics_table_rows,
@@ -61,6 +62,30 @@ except ModuleNotFoundError:
     VulnerabilityReportDocument = _analysis.VulnerabilityReportDocument
     build_dashboard_stats = _analysis.build_dashboard_stats
     chunk_analysis_to_markdown = _analysis.chunk_analysis_to_markdown
+
+try:
+    from oasis.schemas.audit_report import (
+        AuditMatchResult,
+        AuditMetrics,
+        AuditPerVulnStatistics,
+        AuditReportDocument,
+        AuditThresholdRow,
+        AuditVulnerabilitySection,
+    )
+except ModuleNotFoundError:
+    _spec_ar = importlib.util.spec_from_file_location(
+        "oasis_schemas_audit_report",
+        ROOT / "oasis" / "schemas" / "audit_report.py",
+    )
+    _audit_m = importlib.util.module_from_spec(_spec_ar)
+    assert _spec_ar and _spec_ar.loader is not None
+    _spec_ar.loader.exec_module(_audit_m)
+    AuditMatchResult = _audit_m.AuditMatchResult
+    AuditMetrics = _audit_m.AuditMetrics
+    AuditPerVulnStatistics = _audit_m.AuditPerVulnStatistics
+    AuditReportDocument = _audit_m.AuditReportDocument
+    AuditThresholdRow = _audit_m.AuditThresholdRow
+    AuditVulnerabilitySection = _audit_m.AuditVulnerabilitySection
 
 try:
     from oasis.analyze import SecurityAnalyzer
@@ -294,6 +319,150 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(len(restored.files), 1)
         self.assertEqual(restored.schema_version, doc.schema_version)
         self.assertEqual(restored.stats.files_analyzed, doc.stats.files_analyzed)
+
+    def test_audit_report_document_roundtrip(self):
+        doc = AuditReportDocument(
+            generated_at="2026-01-01 12:00:00",
+            oasis_version="0.5.0",
+            embedding_model="test-embed",
+            total_files_analyzed=2,
+            explain_analysis="\n## About\nSample explain.\n",
+            audit_metrics=AuditMetrics(
+                count=2,
+                has_scores=True,
+                total_items=2,
+                scored_items=2,
+                avg_score=0.77,
+                median_score=0.76,
+                max_score=0.79,
+                min_score=0.75,
+                high=1,
+                medium=1,
+                low=0,
+            ),
+            vulnerability_statistics=[
+                {
+                    "name": "Total",
+                    "total": 2,
+                    "high": 1,
+                    "medium": 1,
+                    "low": 0,
+                    "is_total": True,
+                }
+            ],
+            analyses={
+                "SQL Injection": AuditVulnerabilitySection(
+                    threshold_analysis=[
+                        AuditThresholdRow(threshold=0.5, matching_items=2, percentage=100.0)
+                    ],
+                    results=[
+                        AuditMatchResult(similarity_score=0.79, item_id="a.py"),
+                        AuditMatchResult(similarity_score=0.75, item_id="b.py"),
+                    ],
+                    statistics=AuditPerVulnStatistics(
+                        avg_score=0.77,
+                        median_score=0.77,
+                        max_score=0.79,
+                        min_score=0.75,
+                    ),
+                )
+            },
+        )
+        raw = doc.model_dump_json()
+        restored = AuditReportDocument.model_validate_json(raw)
+        self.assertEqual(restored.report_type, "audit")
+        self.assertEqual(restored.analyses["SQL Injection"].statistics.max_score, 0.79)
+
+    def test_audit_metrics_from_audit_payload_maps_dashboard_keys(self):
+        payload = {
+            "report_type": "audit",
+            "audit_metrics": {
+                "count": 4,
+                "avg_score": 0.8125,
+                "median_score": 0.8,
+                "high": 2,
+                "medium": 1,
+                "low": 1,
+                "total_items": 10,
+                "scored_items": 4,
+                "has_scores": True,
+            },
+        }
+        metrics = audit_metrics_from_audit_payload(payload)
+        self.assertEqual(metrics["count"], 4)
+        self.assertAlmostEqual(metrics["avg_score"], 0.8125)
+        self.assertEqual(metrics["total_items"], 10)
+        self.assertNotIn("has_scores", metrics)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_audit_metrics_markdown_matches_json_metrics_overlapping_keys(self):
+        """Markdown table parsing and canonical JSON expose the same numeric dashboard keys."""
+
+        class _FakeEmbeddingManager:
+            embedding_model = "emb-test"
+
+            def get_embeddings_info(self):
+                return {"total_files": 4}
+
+        analyzer_results = {
+            "vulnerability_statistics": [
+                {
+                    "name": "Total",
+                    "total": 10,
+                    "high": 3,
+                    "medium": 4,
+                    "low": 3,
+                    "is_total": True,
+                },
+            ],
+            "SQL Injection": {
+                "threshold_analysis": [
+                    {"threshold": 0.5, "matching_items": 2, "percentage": 40.0}
+                ],
+                "results": [
+                    {"similarity_score": 0.91, "item_id": "x.py"},
+                    {"similarity_score": 0.72, "item_id": "y.py"},
+                ],
+                "statistics": {
+                    "avg_score": 0.815,
+                    "median_score": 0.815,
+                    "max_score": 0.91,
+                    "min_score": 0.72,
+                },
+            },
+        }
+
+        report = Report(input_path=".", output_format=["md", "json"])
+        doc = report._build_audit_document(analyzer_results, _FakeEmbeddingManager())
+        md_text = "\n".join(report._audit_report_markdown_lines_from_document(doc))
+        from_md = audit_metrics_from_markdown_content(md_text)
+        from_json = audit_metrics_from_audit_payload(doc.model_dump(mode="json"))
+        overlap = sorted(set(from_md.keys()) & set(from_json.keys()))
+        self.assertTrue(overlap)
+        for key in overlap:
+            self.assertAlmostEqual(float(from_md[key]), float(from_json[key]), places=5)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_render_report_html_from_json_payload_supports_audit(self):
+        report = Report(input_path=".", output_format=["md"])
+        payload = {
+            "report_type": "audit",
+            "schema_version": 1,
+            "title": "Embeddings Distribution Analysis Report",
+            "generated_at": "2026-04-28 12:00:00",
+            "language": "en",
+            "project": None,
+            "oasis_version": "0.5.0",
+            "embedding_model": "nomic",
+            "total_files_analyzed": 1,
+            "explain_analysis": "## About\nTest.",
+            "audit_metrics": {"count": 1, "avg_score": 0.5, "high": 0, "medium": 1, "low": 0},
+            "vulnerability_statistics": [],
+            "analyses": {},
+        }
+        html = report.render_report_html_from_json_payload(payload)
+        self.assertIn("Embeddings Distribution Analysis Report", html)
+        self.assertIn("nomic", html)
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_render_report_html_from_json_payload_supports_executive_summary(self):
@@ -926,6 +1095,21 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(progress["tested_vulnerabilities"], ["SQL Injection", "XSS"])
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_audit_json_metrics_reader_extracts_summary_metrics(self):
+        import tempfile
+
+        payload = {"report_type": "audit", "audit_metrics": {"count": 7, "avg_score": 0.551}}
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as tmp:
+            json.dump(payload, tmp)
+            path = Path(tmp.name)
+        try:
+            metrics = WebServer._audit_metrics_from_audit_json_report_file(path)
+            self.assertEqual(metrics["count"], 7)
+            self.assertAlmostEqual(metrics["avg_score"], 0.551)
+        finally:
+            path.unlink(missing_ok=True)
+
     def test_web_audit_markdown_metrics_reader_extracts_summary_metrics(self):
         markdown = """# Embeddings Distribution Analysis Report
 

@@ -19,13 +19,18 @@ from .config import REPORT, LANGUAGES
 from .export import artifact_filename
 from .export.vulnerability import write_vulnerability_artifacts
 from .export.markdown_outputs import write_rendered_markdown_formats
-from .export.writers import write_markdown_lines, write_utf8_text
+from .export.writers import write_json_document, write_markdown_lines, write_utf8_text
 from .schemas.analysis import (
     ChunkDeepAnalysis,
     FileReportEntry,
     VulnerabilityReportDocument,
     build_dashboard_stats,
     chunk_analysis_to_markdown,
+)
+from .schemas.audit_report import (
+    AuditMetrics,
+    AuditReportDocument,
+    AuditVulnerabilitySection,
 )
 from .tools import extract_clean_path, logger, sanitize_name, generate_timestamp
 from .helpers.report_project import (
@@ -44,6 +49,7 @@ from .helpers.dashboard import (
     executive_summary_similarity_tier_id,
     preferred_detail_relative_path_and_format,
 )
+from .helpers.report_jinja_filters import register_report_template_filters
 from .helpers.progress import (
     SCAN_PROGRESS_EXTENDED_KEYS,
     SCAN_PROGRESS_NON_PARTIAL_STATUSES,
@@ -157,6 +163,7 @@ class Report:
         # Configure the Jinja2 environment
         template_dir = Path(__file__).parent / 'templates'
         self.template_env = Environment(loader=FileSystemLoader(searchpath=str(template_dir)))
+        register_report_template_filters(self.template_env)
 
     def set_progress_notifier(self, notifier) -> None:
         """Register an optional callback receiving real-time scan progress payloads."""
@@ -373,6 +380,15 @@ class Report:
         template = self.template_env.get_template("reports/vulnerability_export.md.j2")
         return template.render(document=doc.model_dump(mode="json"))
 
+    def _render_audit_inner_html(self, doc: AuditReportDocument) -> str:
+        template = self.template_env.get_template("reports/audit_from_json.html.j2")
+        payload = doc.model_dump(mode="json")
+        payload["explain_analysis_html"] = markdown.markdown(
+            str(payload.get("explain_analysis") or ""),
+            extensions=["tables", "fenced_code", "codehilite"],
+        )
+        return template.render(document=payload)
+
     def _render_executive_summary_inner_html(self, payload: Dict[str, Any]) -> str:
         vuln_summary = payload.get("vulnerability_summary")
         tier_counts = payload.get("similarity_tier_counts")
@@ -409,6 +425,10 @@ class Report:
             return self.render_template(inner_html)
         if report_type == "executive_summary":
             return self.render_template(self._render_executive_summary_inner_html(payload))
+        if report_type == "audit":
+            doc = AuditReportDocument.model_validate(payload)
+            inner_html = self._render_audit_inner_html(doc)
+            return self.render_template(inner_html)
         raise ValueError(f"Unsupported canonical report type: {report_type}")
 
     def generate_vulnerability_report(
@@ -493,30 +513,62 @@ class Report:
         Returns:
             Dictionary of report file paths
         """
-        # Set output file paths and filter by output format in one step
         output_files = self.filter_output_files("audit_report")
-        summary_metrics = self._audit_metrics_summary(analyzer_results)
-        report = self._build_audit_report_header(embedding_manager)
-        self._extend_audit_metrics_summary(report, summary_metrics)
-        self._extend_audit_vulnerability_statistics(report, analyzer_results)
-        self._extend_audit_analysis_results(report, analyzer_results)
+        doc = self._build_audit_document(analyzer_results, embedding_manager)
+        report = self._audit_report_markdown_lines_from_document(doc)
 
-        # Generate and save report
+        if "json" in output_files:
+            write_json_document(output_files["json"], doc)
+
         self._generate_and_save_report(output_files, report, report_type='Audit')
 
         return output_files
 
-    @staticmethod
-    def _build_audit_report_header(embedding_manager) -> List[str]:
+    def _build_audit_document(
+        self, analyzer_results: Dict[str, Dict], embedding_manager
+    ) -> AuditReportDocument:
+        summary = self._audit_metrics_summary(analyzer_results)
         embeddings_info = embedding_manager.get_embeddings_info()
-        return [
+        vuln_stats = list(analyzer_results.get("vulnerability_statistics") or [])
+        analyses: Dict[str, AuditVulnerabilitySection] = {
+            name: AuditVulnerabilitySection.model_validate(raw)
+            for name, raw in analyzer_results.items()
+            if name != "vulnerability_statistics" and isinstance(raw, dict)
+        }
+        lang_raw = getattr(self, "language_code", None)
+        language = (
+            str(lang_raw).strip().lower().split("-", 1)[0].split("_", 1)[0] or "en"
+            if isinstance(lang_raw, str) and lang_raw.strip()
+            else "en"
+        )
+        return AuditReportDocument(
+            generated_at=generate_timestamp(),
+            language=language,
+            project=getattr(self, "project", None),
+            oasis_version=oasis_version,
+            embedding_model=str(embedding_manager.embedding_model),
+            total_files_analyzed=int(embeddings_info.get("total_files", 0)),
+            explain_analysis=REPORT["EXPLAIN_ANALYSIS"],
+            audit_metrics=AuditMetrics.model_validate(summary) if summary else None,
+            vulnerability_statistics=vuln_stats,
+            analyses=analyses,
+        )
+
+    def _audit_report_markdown_lines_from_document(self, doc: AuditReportDocument) -> List[str]:
+        report: List[str] = [
             "# Embeddings Distribution Analysis Report",
-            f"\nDate: {generate_timestamp()}",
-            f"\nEmbedding Model: {embedding_manager.embedding_model}",
-            f"\nTotal Files Analyzed: {embeddings_info['total_files']}",
-            REPORT["EXPLAIN_ANALYSIS"],
+            f"\nDate: {doc.generated_at}",
+            f"\nEmbedding Model: {doc.embedding_model}",
+            f"\nTotal Files Analyzed: {doc.total_files_analyzed}",
+            doc.explain_analysis,
             '<div class="page-break"></div>',
         ]
+        am = doc.audit_metrics.model_dump(exclude_none=False) if doc.audit_metrics else {}
+        self._extend_audit_metrics_summary(report, am)
+        wrapper: Dict[str, Any] = {"vulnerability_statistics": list(doc.vulnerability_statistics)}
+        self._extend_audit_vulnerability_statistics(report, wrapper)
+        self._extend_audit_analysis_sections(report, doc.analyses)
+        return report
 
     @staticmethod
     def _extend_audit_metrics_summary(report: List[str], summary_metrics: Dict[str, Any]) -> None:
@@ -600,20 +652,18 @@ class Report:
                 f"| {stat['name']} | {stat['total']} | {stat['high']} | {stat['medium']} | {stat['low']} |"
             )
 
-    def _extend_audit_analysis_results(self, report: List[str], analyzer_results: Dict[str, Dict]) -> None:
+    def _extend_audit_analysis_sections(
+        self, report: List[str], analyses: Dict[str, AuditVulnerabilitySection]
+    ) -> None:
         report.append("\n## Analysis Results\n")
-        section_index = 0
-        for vuln_name, data in analyzer_results.items():
-            if vuln_name == "vulnerability_statistics":
-                continue
+        for section_index, (vuln_name, section) in enumerate(analyses.items()):
             if section_index > 0:
                 report.append("\n<div class=\"page-break\"></div>\n")
-            self._extend_audit_vulnerability_result_section(report, vuln_name, data)
-            section_index += 1
+            self._extend_audit_vulnerability_result_section(report, vuln_name, section)
 
     @staticmethod
     def _extend_audit_vulnerability_result_section(
-        report: List[str], vuln_name: str, data: Dict[str, Any]
+        report: List[str], vuln_name: str, section: AuditVulnerabilitySection
     ) -> None:
         report.extend(
             [
@@ -623,12 +673,10 @@ class Report:
                 "|-----------|----------------|------------|",
             ]
         )
-        for analysis in data["threshold_analysis"]:
-            threshold = analysis["threshold"]
-            matching_items = analysis["matching_items"]
-            percentage = analysis["percentage"]
-            report.append(f"| {threshold:.1f} | {matching_items} | {percentage:.1f}% |")
-
+        report.extend(
+            f"| {row.threshold:.1f} | {row.matching_items} | {row.percentage:.1f}% |"
+            for row in section.threshold_analysis
+        )
         report.extend(
             [
                 "\n#### Top Matches",
@@ -636,19 +684,18 @@ class Report:
                 "|-------|------|",
             ]
         )
-        for result in data["results"][:10]:
-            score = result["similarity_score"]
-            item_id = result["item_id"]
-            report.append(f"| {score:.3f} | {item_id} |")
-
-        stats = data["statistics"]
+        report.extend(
+            f"| {result.similarity_score:.3f} | {result.item_id} |"
+            for result in section.results[:10]
+        )
+        stats = section.statistics
         report.extend(
             [
                 "\n#### Statistics",
-                f"- **Average similarity**: {stats['avg_score']:.3f}",
-                f"- **Median similarity**: {stats['median_score']:.3f}",
-                f"- **Maximum similarity**: {stats['max_score']:.3f}",
-                f"- **Minimum similarity**: {stats['min_score']:.3f}",
+                f"- **Average similarity**: {stats.avg_score:.3f}",
+                f"- **Median similarity**: {stats.median_score:.3f}",
+                f"- **Maximum similarity**: {stats.max_score:.3f}",
+                f"- **Minimum similarity**: {stats.min_score:.3f}",
             ]
         )
 
@@ -834,7 +881,7 @@ class Report:
             "oasis_version": oasis_version,
             "vulnerability_summary": vuln_summary,
             "similarity_tier_counts": tier_counts,
-            "project": self.project,
+            "project": getattr(self, "project", None),
         }
 
     def generate_executive_summary(
@@ -919,7 +966,7 @@ class Report:
                     "progress": dict(self._last_progress_payload),
                     "generated_at": progress_timestamp_iso(),
                     "oasis_version": oasis_version,
-                    "project": self.project,
+                    "project": getattr(self, "project", None),
                 }
                 write_utf8_text(
                     progress_path,

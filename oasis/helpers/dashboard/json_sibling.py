@@ -1,4 +1,8 @@
-"""Resolve canonical JSON next to a format artifact (md/html/pdf) under a model directory."""
+"""Resolve canonical JSON next to a format artifact (md/html/pdf) under a model directory.
+
+Audit reports use stem ``audit_report`` (see ``oasis.export.filenames.AUDIT_REPORT_ARTIFACT_STEM``);
+dashboard JS resolves the same sibling via ``audit-report-paths.js``.
+"""
 
 from __future__ import annotations
 

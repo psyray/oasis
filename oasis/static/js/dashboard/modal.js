@@ -335,6 +335,67 @@ DashboardApp.openReport = function(path, format, options) {
 
     DashboardApp._resetReportModalScrollPositionsUnlessRestoring(opts);
 
+    const loadMarkdownReportIntoModal = function() {
+        fetch(`/api/report-content/${encodeURIComponent(path)}`)
+            .then(async (response) => {
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || `HTTP error: ${response.status}`);
+                }
+                return data;
+            })
+            .then((data) => {
+                if (data.content) {
+                    DashboardApp._appendSanitizedHtml(modalContent, data.content, 'html-content-container');
+                } else {
+                    DashboardApp._appendTextMessage(
+                        modalContent,
+                        'error-message',
+                        'Unable to load report content.'
+                    );
+                }
+                DashboardApp._finalizeReportModalView(opts.restoreScrollTop);
+            })
+            .catch((error) => {
+                console.error('Error fetching report content:', error);
+                const errorMessage = DashboardApp._errorMessage(error);
+                DashboardApp._appendTextMessage(
+                    modalContent,
+                    'error-message',
+                    `Error loading report content: ${errorMessage}`
+                );
+                DashboardApp._finalizeReportModalView(opts.restoreScrollTop);
+            });
+    };
+
+    const auditJsonPreviewPath =
+        format === 'md' && typeof DashboardApp.auditReportJsonSiblingPath === 'function'
+            ? DashboardApp.auditReportJsonSiblingPath(path)
+            : null;
+    if (auditJsonPreviewPath) {
+        fetch(`/api/report-html?path=${encodeURIComponent(auditJsonPreviewPath)}`)
+            .then(async (response) => {
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || `HTTP error: ${response.status}`);
+                }
+                return data;
+            })
+            .then((data) => {
+                if (data.content) {
+                    DashboardApp._clearElement(modalContent);
+                    DashboardApp._appendSanitizedHtml(modalContent, data.content, 'html-content-container');
+                    DashboardApp._finalizeReportModalView(opts.restoreScrollTop);
+                } else {
+                    loadMarkdownReportIntoModal();
+                }
+            })
+            .catch(() => {
+                loadMarkdownReportIntoModal();
+            });
+        return;
+    }
+
     if (format === 'json') {
         // Prefer canonical JSON rendered via server-side Jinja HTML.
         const markdownPath = path
@@ -397,36 +458,7 @@ DashboardApp.openReport = function(path, format, options) {
                     });
             });
     } else if (format === 'md') {
-        fetch(`/api/report-content/${encodeURIComponent(path)}`)
-            .then(async (response) => {
-                const data = await response.json();
-                if (!response.ok) {
-                    throw new Error(data.error || `HTTP error: ${response.status}`);
-                }
-                return data;
-            })
-            .then((data) => {
-                if (data.content) {
-                    DashboardApp._appendSanitizedHtml(modalContent, data.content, 'html-content-container');
-                } else {
-                    DashboardApp._appendTextMessage(
-                        modalContent,
-                        'error-message',
-                        'Unable to load report content.'
-                    );
-                }
-                DashboardApp._finalizeReportModalView(opts.restoreScrollTop);
-            })
-            .catch((error) => {
-                console.error('Error fetching report content:', error);
-                const errorMessage = DashboardApp._errorMessage(error);
-                DashboardApp._appendTextMessage(
-                    modalContent,
-                    'error-message',
-                    `Error loading report content: ${errorMessage}`
-                );
-                DashboardApp._finalizeReportModalView(opts.restoreScrollTop);
-            });
+        loadMarkdownReportIntoModal();
     } else if (format === 'html') {
         // Load the HTML content via AJAX
         fetch(`/reports/${encodeURIComponent(path)}`)

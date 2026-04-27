@@ -1,0 +1,118 @@
+{% import "reports/_macros.html.j2" as macros %}
+
+<article class="report-audit-json">
+  <h1 id="audit-title">{{ document.title | default('Embeddings Distribution Analysis Report') }}</h1>
+  <p><strong>Generated at:</strong> {{ document.generated_at | default('') }}</p>
+  {% if document.project is defined and document.project %}
+  <p><strong>Project:</strong> {{ document.project }}</p>
+  {% endif %}
+  <p><strong>OASIS version:</strong> {{ document.oasis_version | default('') }}</p>
+  <p><strong>Embedding model:</strong> {{ document.embedding_model | default('') }}</p>
+  <p><strong>Total files analyzed:</strong> {{ document.total_files_analyzed | default(0, true) }}</p>
+
+  <nav class="report-toc" aria-label="Table of contents">
+    <h2 id="table-of-contents" class="report-toc-title">Table of contents</h2>
+    <ul class="report-toc-list">
+      <li><a class="report-toc-btn" href="#audit-about"><span class="report-toc-icon" aria-hidden="true">📋</span><span class="report-toc-label">About this report</span></a></li>
+      <li><a class="report-toc-btn" href="#audit-metrics-summary"><span class="report-toc-icon" aria-hidden="true">📊</span><span class="report-toc-label">Audit metrics summary</span></a></li>
+      <li><a class="report-toc-btn" href="#audit-vuln-stats"><span class="report-toc-icon" aria-hidden="true">📈</span><span class="report-toc-label">Vulnerability statistics</span></a></li>
+      <li><a class="report-toc-btn" href="#audit-analysis-results"><span class="report-toc-icon" aria-hidden="true">🔍</span><span class="report-toc-label">Analysis results</span></a></li>
+    </ul>
+  </nav>
+
+  <section id="audit-about" class="report-audit-explain">
+    {{ document.explain_analysis_html | default('') | safe }}
+  </section>
+  {{ macros.render_return_to_toc() }}
+
+  <h2 id="audit-metrics-summary">Audit metrics summary</h2>
+  {% if document.audit_metrics is defined and document.audit_metrics %}
+  {% set m = document.audit_metrics %}
+  <table class="summary-table">
+    <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>Count</td><td>{{ m.count | default(0, true) }}</td></tr>
+      <tr><td>Total items</td><td>{{ m.total_items | default(0, true) }}</td></tr>
+      <tr><td>Scored items</td><td>{{ m.scored_items | default(0, true) }}</td></tr>
+      {% if m.avg_score is defined and m.avg_score is not none %}<tr><td>Average similarity</td><td>{{ m.avg_score | audit_decimal(3) }}</td></tr>{% endif %}
+      {% if m.median_score is defined and m.median_score is not none %}<tr><td>Median similarity</td><td>{{ m.median_score | audit_decimal(3) }}</td></tr>{% endif %}
+      {% if m.max_score is defined and m.max_score is not none %}<tr><td>Maximum similarity</td><td>{{ m.max_score | audit_decimal(3) }}</td></tr>{% endif %}
+      {% if m.min_score is defined and m.min_score is not none %}<tr><td>Minimum similarity</td><td>{{ m.min_score | audit_decimal(3) }}</td></tr>{% endif %}
+      <tr><td>High matches (&gt;= 0.8)</td><td>{{ m.high | default(0, true) }}</td></tr>
+      <tr><td>Medium matches (&gt;= 0.6 and &lt; 0.8)</td><td>{{ m.medium | default(0, true) }}</td></tr>
+      <tr><td>Low matches (&gt;= 0.4 and &lt; 0.6)</td><td>{{ m.low | default(0, true) }}</td></tr>
+    </tbody>
+  </table>
+  {% else %}
+  <p>No audit metrics section was generated.</p>
+  {% endif %}
+  {{ macros.render_return_to_toc() }}
+
+  <h2 id="audit-vuln-stats">Vulnerability statistics</h2>
+  {% if document.vulnerability_statistics %}
+  <table class="summary-table">
+    <thead><tr><th>Vulnerability type</th><th>Total</th><th>High</th><th>Medium</th><th>Low</th></tr></thead>
+    <tbody>
+      {% for row in document.vulnerability_statistics %}
+      <tr>
+        <td>{% if row.is_total | default(false) %}<strong>{{ row.name | default('') }}</strong>{% else %}{{ row.name | default('') }}{% endif %}</td>
+        <td>{% if row.is_total | default(false) %}<strong>{{ row.total | default(0, true) }}</strong>{% else %}{{ row.total | default(0, true) }}{% endif %}</td>
+        <td>{% if row.is_total | default(false) %}<strong>{{ row.high | default(0, true) }}</strong>{% else %}{{ row.high | default(0, true) }}{% endif %}</td>
+        <td>{% if row.is_total | default(false) %}<strong>{{ row.medium | default(0, true) }}</strong>{% else %}{{ row.medium | default(0, true) }}{% endif %}</td>
+        <td>{% if row.is_total | default(false) %}<strong>{{ row.low | default(0, true) }}</strong>{% else %}{{ row.low | default(0, true) }}{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No vulnerability statistics available.</p>
+  {% endif %}
+  {{ macros.render_return_to_toc() }}
+
+  <h2 id="audit-analysis-results">Analysis results</h2>
+  {% if not document.analyses %}
+  <p>No vulnerability-specific analysis sections were generated.</p>
+  {{ macros.render_return_to_toc() }}
+  {% endif %}
+  {% for vuln_name, section in document.analyses|dictsort %}
+  {% if not loop.first %}<div class="page-break"></div>{% endif %}
+  <section class="report-audit-vuln-section">
+    <h3>{{ vuln_name }}</h3>
+    <h4>Threshold analysis</h4>
+    <table class="summary-table">
+      <thead><tr><th>Threshold</th><th>Matching items</th><th>Percentage</th></tr></thead>
+      <tbody>
+        {% for row in section.threshold_analysis | default([], true) %}
+        <tr>
+          <td>{{ row.threshold | default(0, true) | audit_decimal(1) }}</td>
+          <td>{{ row.matching_items | default(0, true) }}</td>
+          <td>{{ row.percentage | default(0, true) | audit_decimal(1) }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <h4>Top matches</h4>
+    <table class="summary-table">
+      <thead><tr><th>Score</th><th>Item</th></tr></thead>
+      <tbody>
+        {% for r in (section.results | default([], true))[0:10] %}
+        <tr><td>{{ r.similarity_score | default(0, true) | audit_decimal(3) }}</td><td><code>{{ r.item_id | default('') }}</code></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <h4>Statistics</h4>
+    {% if section.statistics is defined and section.statistics %}
+    {% set st = section.statistics %}
+    <ul>
+      <li><strong>Average similarity:</strong> {{ st.avg_score | default(none) | audit_decimal(3) }}</li>
+      <li><strong>Median similarity:</strong> {{ st.median_score | default(none) | audit_decimal(3) }}</li>
+      <li><strong>Maximum similarity:</strong> {{ st.max_score | default(none) | audit_decimal(3) }}</li>
+      <li><strong>Minimum similarity:</strong> {{ st.min_score | default(none) | audit_decimal(3) }}</li>
+    </ul>
+    {% else %}
+    <p><em>No per-section statistics available.</em></p>
+    {% endif %}
+    {{ macros.render_return_to_toc() }}
+  </section>
+  {% endfor %}
+</article>

@@ -188,6 +188,7 @@ const DashboardApp = {
             const modules = [
                 'bootstrap.js',
                 'utils.js',
+                'audit-report-paths.js',
                 'filters.js',
                 'views.js',
                 'api.js',

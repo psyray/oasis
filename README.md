@@ -49,12 +49,13 @@
 - 🔄 **Parallel Processing**: Optimized performance through parallel vulnerability analysis
 - 📝 **Executive Summaries**: Clear overview of all detected vulnerabilities
 - 🎯 **Customizable Scans**: Support for specific vulnerability types and file extensions
-- 📈 **Distribution Analysis**: Advanced audit mode for embedding distribution analysis
+- 📈 **Distribution / audit mode**: Embedding-based similarity audit before a full scan; with JSON in your output formats you get a structured **audit report file** beside Markdown—the dashboard reads it for **comparison tables** and **HTML preview** in the report modal when available.
 - 🔄 **Content Chunking**: Intelligent content splitting for better analysis of large files
 - 🤖 **Interactive Model Installation**: Guided installation for required Ollama models
 - 🌐 **Web Interface**: Secure, password-protected web dashboard for exploring reports
 - ⚡ **Incremental Reporting**: Vulnerability reports are published as soon as each vulnerability analysis completes
 - 📈 **Live Scan Progress**: Executive summary is created early and updated progressively during long scans
+- 📌 **v0.5.2**: Structured **audit JSON** for dashboard metrics and modal preview; use **`--project-name`** for clearer folders and filters ([Output structure](#-output-structure)).
 
 ## 🚀 Getting started
 
@@ -485,13 +486,13 @@ oasis -i ./critical-service -sm qwen2.5-coder:7b -m bugtraceai-apex-q4 -t 0.6 -s
 - **Assistant** (when viewing a JSON-backed report): open the Assistant panel in the vulnerability modal to chat about the current report; optional **RAG** uses the same project root and `.oasis_cache` embedding pickle as the scan when enabled. You can disable RAG globally at startup (`--no-web-assistant-rag`) or per message from the UI when supported.
 - Statistics and risk summaries are read from **`json/*.json`**.
 - **Reload** refreshes both `/api/stats?force=1` and `/api/reports?force=1` so listings stay in sync with the filesystem.
-- Canonical JSON reports are previewed in the Web UI by rendering HTML from the JSON via the Jinja template, so the modal matches the HTML/PDF structure as closely as possible.
-- Markdown preview (`/api/report-content/...`) remains the fallback for legacy reports that do not have a sibling `json/<same-stem>.json`, or when canonical JSON HTML preview cannot be generated.
+- Canonical JSON reports open in the modal as **HTML rendered from that JSON**, so what you see matches downloadable HTML/PDF.
+- **Markdown preview** stays the fallback when no sibling JSON exists for that report or HTML generation is unavailable.
 - Executive summary stays visible even when vulnerability filters are active, so scan-wide context is always available.
 - Language filtering is available in the dashboard (`🌐 Filter by language`) and uses the same emoji-flag format as report language badges.
 - Scan progress can be queried via `/api/progress` to retrieve the latest executive summary progress metadata (`completed_vulnerabilities`, `total_vulnerabilities`, `is_partial`).
 - Executive summary now records all model roles used for the run: **Deep model**, **Small model** (Scan model), and **Embedding model**. These fields are rendered in markdown and therefore propagated to HTML/PDF outputs, and also included in the executive-summary progress sidecar JSON. For backward compatibility, sidecar `model` remains the legacy primary deep-model field.
-- Audit cards include an embedding-model comparison table based on parsed audit markdown metrics; selecting model tags can filter both date chips and comparison rows (multi-select supported).
+- **Audit** runs: comparison cards use metrics from the structured audit JSON when present, otherwise from Markdown; model-tag filters apply to dates and comparison rows (multi-select).
 - Date-based filtering supports multiple `model` query params (`/api/dates?model=...&model=...&vulnerability=...`) and falls back to API fetch if local in-memory report data is stale.
 
 ## 💾 Cache Management
@@ -546,7 +547,8 @@ oasis --input [path_to_analyze] --audit -em qwen3-embedding:4b,bge-m3
 - **Threshold Analysis**: Shows the distribution of similarity scores across different thresholds
 - **Statistical Overview**: Provides mean, median, and max similarity scores for each vulnerability type
 - **Top Matches**: Identifies the files or functions with the highest similarity to each vulnerability type
-- **Audit Metrics Summary**: Exports a stable `Metric | Value` markdown table (`Count`, `Average`, `Median`, `Max`, `Min`, high/medium/low tiers) that the dashboard parses for model-to-model comparisons
+- **Audit Metrics Summary**: Exports a stable `Metric | Value` Markdown table (counts, similarity tiers, etc.) that the dashboard uses for **cross-run comparisons**.
+- **Structured audit export**: If **`json`** is in `--output-format` (or `all`), OASIS writes **`audit_report.json`** next to `audit_report.md`—same facts as Markdown, in a single machine-readable document. The **dashboard** prefers this file for listing metrics when it exists; **opening the audit report** in the web UI shows **HTML generated from that JSON** when the JSON is on disk, otherwise **Markdown** as before.
 
 ### Benefits of Audit Mode
 

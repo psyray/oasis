@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
+import math
 import re
-from typing import Iterator
+from typing import Any, Iterator
+
+_AUDIT_PAYLOAD_INT_KEYS = frozenset(
+    {"count", "high", "medium", "low", "total_items", "scored_items"}
+)
+_AUDIT_PAYLOAD_FLOAT_KEYS = frozenset(
+    {"avg_score", "median_score", "max_score", "min_score"}
+)
 
 
 AUDIT_METRICS_SECTION_HEADING_PATTERN = re.compile(
@@ -115,6 +123,36 @@ def iter_audit_metrics_table_rows(metrics_section: str) -> Iterator[tuple[str, s
         if set(normalized_label) == {"-"}:
             continue
         yield normalized_label, value
+
+
+def audit_metrics_from_audit_payload(payload: dict[str, Any]) -> dict[str, int | float]:
+    """
+    Map canonical audit JSON ``audit_metrics`` object to dashboard comparison keys.
+
+    Aligns numeric keys with :func:`audit_metrics_from_markdown_content` output
+    (count, avg_score, tier counts, etc.). Omits boolean fields such as ``has_scores``.
+    """
+    raw = payload.get("audit_metrics")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, int | float] = {}
+    for key in _AUDIT_PAYLOAD_INT_KEYS:
+        if key not in raw or raw[key] is None:
+            continue
+        try:
+            out[key] = int(raw[key])
+        except (TypeError, ValueError):
+            continue
+    for key in _AUDIT_PAYLOAD_FLOAT_KEYS:
+        if key not in raw or raw[key] is None:
+            continue
+        try:
+            val = float(raw[key])
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(val):
+            out[key] = val
+    return out
 
 
 def audit_metrics_from_markdown_content(content: str) -> dict[str, int | float]:

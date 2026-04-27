@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
 import json
@@ -8,7 +9,7 @@ import secrets
 import socket
 import string
 from threading import Thread
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect, url_for
 from functools import wraps
@@ -47,13 +48,18 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for minimal test envs
 
 from .config import DEFAULT_ARGS, REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS, LANGUAGES
 from .config import OLLAMA_URL
-from .export.filenames import artifact_filename, report_dir_glob_for_format
+from .export.filenames import (
+    AUDIT_REPORT_ARTIFACT_STEM,
+    artifact_filename,
+    report_dir_glob_for_format,
+)
 from .helpers.dashboard import (
     AUDIT_METRIC_LABELS,
     AUDIT_METRIC_TABLE_ROW_PATTERN,
     AUDIT_METRICS_SECTION_HEADING_PATTERN,
     AUDIT_METRICS_TABLE_HEADER_LABELS,
     audit_metric_key_from_label,
+    audit_metrics_from_audit_payload,
     audit_metrics_from_markdown_content,
     dashboard_format_display_order,
     expand_socketio_cors_config_entries,
@@ -149,6 +155,44 @@ from .helpers.executive.assistant_scope import (
 from .tools import parse_iso_date, parse_report_date
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AssistantChatPrepError:
+    """HTTP error produced while building assistant chat context (Flask ``jsonify`` body + status)."""
+
+    body: Dict[str, Any]
+    status: int
+
+    @staticmethod
+    def from_http_tuple(pair: Tuple[Dict[str, Any], int]) -> "AssistantChatPrepError":
+        body, status = pair
+        return AssistantChatPrepError(body=body, status=status)
+
+
+@dataclass(frozen=True)
+class _AssistantChatReportLoad:
+    messages: List[Dict[str, Any]]
+    approx_msg_chars: int
+    resolved_report: Path
+    primary_payload: Dict[str, Any]
+    report_rel: str
+    aggregate_mode: bool
+    json_paths_for_union: List[Path]
+    extra_rag_paths: Optional[List[str]]
+    rag_source_payload: Dict[str, Any]
+    md_obj: Optional[Path]
+
+
+@dataclass(frozen=True)
+class _AssistantChatBudgetSummary:
+    chat_model: str
+    total_budget: int
+    budget_meta: Any
+    subbudgets: Dict[str, int]
+    report_summary_text: str
+    excerpt_truncated: bool
+    report_sum_budget: int
 
 
 class WebServer:
@@ -861,27 +905,17 @@ class WebServer:
             )
         return runtime_num_ctx
 
-    def _prepare_assistant_chat_context(self, data: Any):
-        """Build the assistant chat context shared by JSON and streaming endpoints.
-
-        Returns either a context dict ready for an LLM call or a ``(err_body, status)``
-        tuple the route can surface to the client via ``jsonify``.
-
-        The dict contains: ``full_messages`` (list for ollama), ``chat_model``,
-        ``messages`` (validated user-visible), ``primary_payload``, ``report_rel``,
-        ``aggregate_mode``, ``rag_unavailable``, ``total_budget``, ``excerpt_truncated``
-        and ``session_id_hint`` (raw session_id from request, may be ``None``).
-        """
-        if not isinstance(data, dict):
-            return assistant_http_error(ERR_INVALID_JSON, HTTP_BAD_REQUEST)
-
+    def _assistant_chat_validate_and_load_report(
+        self,
+        data: Dict[str, Any],
+    ) -> Union[_AssistantChatReportLoad, AssistantChatPrepError]:
         messages, msg_err = validate_assistant_messages(
             data.get('messages'),
             max_messages=self._ASSISTANT_MAX_MESSAGES,
             max_message_chars=self._ASSISTANT_MAX_MESSAGE_CHARS,
         )
         if msg_err is not None:
-            return msg_err
+            return AssistantChatPrepError.from_http_tuple(msg_err)
         assert messages is not None
 
         approx_msg_chars = sum(
@@ -890,7 +924,9 @@ class WebServer:
 
         report_rel_raw = str(data.get('report_path') or '').strip()
         if not report_rel_raw:
-            return assistant_http_error(ERR_REPORT_PATH_REQUIRED, HTTP_BAD_REQUEST)
+            return AssistantChatPrepError.from_http_tuple(
+                assistant_http_error(ERR_REPORT_PATH_REQUIRED, HTTP_BAD_REQUEST)
+            )
 
         security_root = self.security_dir.resolve()
         resolved_report, primary_synthetic, path_err = resolve_assistant_primary_payload(
@@ -898,19 +934,21 @@ class WebServer:
             report_rel_raw,
         )
         if path_err is not None:
-            return path_err
+            return AssistantChatPrepError.from_http_tuple(path_err)
         assert resolved_report is not None
 
         aggregate_mode = bool(data.get('aggregate_model_json'))
         if aggregate_mode and resolved_report.stem.lower() != '_executive_summary':
-            return assistant_http_error(ERR_AGGREGATE_REQUIRES_EXECUTIVE, HTTP_BAD_REQUEST)
+            return AssistantChatPrepError.from_http_tuple(
+                assistant_http_error(ERR_AGGREGATE_REQUIRES_EXECUTIVE, HTTP_BAD_REQUEST)
+            )
 
         primary_payload, load_err = self._assistant_load_primary_payload_from_disk_or_synthetic(
             resolved_report,
             primary_synthetic,
         )
         if load_err is not None:
-            return load_err
+            return AssistantChatPrepError.from_http_tuple(load_err)
         assert primary_payload is not None
 
         report_rel = str(resolved_report.relative_to(security_root)).replace('\\', '/')
@@ -929,44 +967,81 @@ class WebServer:
                 )
             )
             if agg_err is not None:
-                return agg_err
+                return AssistantChatPrepError.from_http_tuple(agg_err)
 
+        return _AssistantChatReportLoad(
+            messages=messages,
+            approx_msg_chars=approx_msg_chars,
+            resolved_report=resolved_report,
+            primary_payload=primary_payload,
+            report_rel=report_rel,
+            aggregate_mode=aggregate_mode,
+            json_paths_for_union=json_paths_for_union,
+            extra_rag_paths=extra_rag_paths,
+            rag_source_payload=rag_source_payload,
+            md_obj=md_obj,
+        )
+
+    def _assistant_chat_budget_and_report_summary(
+        self,
+        data: Dict[str, Any],
+        loaded: _AssistantChatReportLoad,
+    ) -> Union[_AssistantChatBudgetSummary, AssistantChatPrepError]:
+        security_root = self.security_dir.resolve()
         chat_model = resolve_assistant_chat_model(
             data,
-            primary_payload,
-            aggregate_mode,
-            json_paths_for_union,
-            rag_source_payload,
+            loaded.primary_payload,
+            loaded.aggregate_mode,
+            loaded.json_paths_for_union,
+            loaded.rag_source_payload,
         )
         if not chat_model:
-            return assistant_http_error(ERR_CHAT_MODEL_REQUIRED, HTTP_BAD_REQUEST)
+            return AssistantChatPrepError.from_http_tuple(
+                assistant_http_error(ERR_CHAT_MODEL_REQUIRED, HTTP_BAD_REQUEST)
+            )
 
         total_budget, budget_meta = assistant_total_system_budget_chars(
             fallback_total=self._ASSISTANT_MAX_TOTAL_REPORT_CHARS,
             ollama_manager=self._get_assistant_ollama_manager(),
             chat_model=chat_model,
-            approx_message_chars_in_request=approx_msg_chars,
+            approx_message_chars_in_request=loaded.approx_msg_chars,
         )
         subbudgets = compute_verdict_first_subbudgets(total_budget)
         report_sum_budget = subbudgets["report_summary"]
-        # Merge aggregate JSON with extra headroom; final system prompt size is
-        # capped by ``compact_report_excerpt`` to ``report_sum_budget`` (see tuning doc).
         merge_budget = report_sum_budget * REPORT_SUMMARY_AGGREGATE_MERGE_BUDGET_FACTOR
         report_summary_payload, excerpt_truncated = build_report_summary_payload(
-            aggregate_mode=aggregate_mode,
-            json_paths_for_union=json_paths_for_union,
+            aggregate_mode=loaded.aggregate_mode,
+            json_paths_for_union=loaded.json_paths_for_union,
             security_root=security_root,
-            primary_payload=primary_payload,
+            primary_payload=loaded.primary_payload,
             aggregate_char_budget=merge_budget,
         )
         report_summary_text = compact_report_excerpt(
             report_summary_payload,
             max_chars=report_sum_budget,
         )
+        return _AssistantChatBudgetSummary(
+            chat_model=chat_model,
+            total_budget=total_budget,
+            budget_meta=budget_meta,
+            subbudgets=subbudgets,
+            report_summary_text=report_summary_text,
+            excerpt_truncated=excerpt_truncated,
+            report_sum_budget=report_sum_budget,
+        )
+
+    def _assistant_chat_finalize_context_dict(
+        self,
+        data: Dict[str, Any],
+        loaded: _AssistantChatReportLoad,
+        summary: _AssistantChatBudgetSummary,
+    ) -> Union[Dict[str, Any], AssistantChatPrepError]:
+        security_root = self.security_dir.resolve()
+        subbudgets = summary.subbudgets
 
         fi, ci, gi = coerce_finding_indices(data)
         finding_scope_for_key = ''
-        if aggregate_mode:
+        if loaded.aggregate_mode:
             scope_raw = data.get('finding_scope_report_path')
             if isinstance(scope_raw, str) and scope_raw.strip():
                 finding_scope_for_key = scope_raw.strip()
@@ -977,36 +1052,38 @@ class WebServer:
             gi,
         )
         finding_json, finding_scope_err = build_assistant_finding_json_prompt_block(
-            aggregate_mode=aggregate_mode,
-            primary_payload=primary_payload,
+            aggregate_mode=loaded.aggregate_mode,
+            primary_payload=loaded.primary_payload,
             data=data,
             security_root=security_root,
-            resolved_report=resolved_report,
-            md_obj=md_obj,
+            resolved_report=loaded.resolved_report,
+            md_obj=loaded.md_obj,
             fi=fi,
             ci=ci,
             gi=gi,
             finding_max=subbudgets['selected_finding'],
         )
         if finding_scope_err is not None:
-            return assistant_http_error(finding_scope_err, HTTP_BAD_REQUEST)
+            return AssistantChatPrepError.from_http_tuple(
+                assistant_http_error(finding_scope_err, HTTP_BAD_REQUEST)
+            )
         assert finding_json is not None
 
         rag_block, rag_unavailable = self._assistant_fetch_rag_block_if_enabled(
             data,
-            messages,
-            rag_source_payload,
-            report_rel,
+            loaded.messages,
+            loaded.rag_source_payload,
+            loaded.report_rel,
             subbudgets['rag'],
-            extra_rag_paths,
+            loaded.extra_rag_paths,
         )
 
         user_labels = self._assistant_shrink_user_labels_if_any(data, subbudgets['user_labels'])
 
         finding_validation_for_prompt = self._assistant_load_persisted_finding_validation(
             data,
-            report_rel,
-            chat_model,
+            loaded.report_rel,
+            summary.chat_model,
             finding_key_for_prompt,
         )
 
@@ -1015,40 +1092,66 @@ class WebServer:
             finding_validation=finding_validation_for_prompt,
             selected_finding_json=finding_json,
             rag_block=rag_block,
-            report_summary=report_summary_text,
+            report_summary=summary.report_summary_text,
             user_labels=user_labels,
-            total_budget=total_budget,
+            total_budget=summary.total_budget,
         )
 
-        context_source = budget_meta.context_source or ""
+        context_source = summary.budget_meta.context_source or ""
         runtime_num_ctx = self._assistant_diagnose_runtime_ctx_budget(
-            budget_meta,
+            summary.budget_meta,
             section_lengths,
-            total_budget,
+            summary.total_budget,
         )
-        if excerpt_truncated:
+        if summary.excerpt_truncated:
             logger.info(
                 "Assistant aggregate report summary inputs truncated (budget=%s)",
-                report_sum_budget,
+                summary.report_sum_budget,
             )
 
-        full_messages = full_messages_from_system_and_dialogue(system_content, messages)
+        full_messages = full_messages_from_system_and_dialogue(system_content, loaded.messages)
 
         return {
             'full_messages': full_messages,
-            'chat_model': chat_model,
-            'messages': messages,
-            'primary_payload': primary_payload,
-            'report_rel': report_rel,
-            'aggregate_mode': aggregate_mode,
+            'chat_model': summary.chat_model,
+            'messages': loaded.messages,
+            'primary_payload': loaded.primary_payload,
+            'report_rel': loaded.report_rel,
+            'aggregate_mode': loaded.aggregate_mode,
             'rag_unavailable': bool(rag_unavailable),
-            'total_budget': total_budget,
+            'total_budget': summary.total_budget,
             'runtime_num_ctx': runtime_num_ctx,
             'context_source': context_source,
-            'excerpt_truncated': excerpt_truncated,
+            'excerpt_truncated': summary.excerpt_truncated,
             'section_lengths': section_lengths,
             'session_id_hint': data.get('session_id'),
         }
+
+    def _prepare_assistant_chat_context(self, data: Any):
+        """Build the assistant chat context shared by JSON and streaming endpoints.
+
+        Returns either a context dict ready for an LLM call or :class:`AssistantChatPrepError`
+        (surface with ``jsonify(err.body), err.status``).
+
+        The dict contains: ``full_messages`` (list for ollama), ``chat_model``,
+        ``messages`` (validated user-visible), ``primary_payload``, ``report_rel``,
+        ``aggregate_mode``, ``rag_unavailable``, ``total_budget``, ``excerpt_truncated``
+        and ``session_id_hint`` (raw session_id from request, may be ``None``).
+        """
+        if not isinstance(data, dict):
+            return AssistantChatPrepError.from_http_tuple(
+                assistant_http_error(ERR_INVALID_JSON, HTTP_BAD_REQUEST)
+            )
+
+        loaded = self._assistant_chat_validate_and_load_report(data)
+        if isinstance(loaded, AssistantChatPrepError):
+            return loaded
+
+        summary = self._assistant_chat_budget_and_report_summary(data, loaded)
+        if isinstance(summary, AssistantChatPrepError):
+            return summary
+
+        return self._assistant_chat_finalize_context_dict(data, loaded, summary)
 
     def _resolve_assistant_session_id(self, session_id_hint: Any) -> str:
         if isinstance(session_id_hint, str) and validate_session_id(session_id_hint.strip()):
@@ -1463,9 +1566,8 @@ class WebServer:
         @login_required
         def assistant_chat():
             prep = self._prepare_assistant_chat_context(request.get_json(silent=True))
-            if isinstance(prep, tuple):
-                err_body, status = prep
-                return jsonify(err_body), status
+            if isinstance(prep, AssistantChatPrepError):
+                return jsonify(prep.body), prep.status
 
             chat_opts = self._assistant_chat_options(prep, temperature=0.2)
             self._log_assistant_llm_debug(
@@ -1503,9 +1605,8 @@ class WebServer:
         @login_required
         def assistant_chat_stream():
             prep = self._prepare_assistant_chat_context(request.get_json(silent=True))
-            if isinstance(prep, tuple):
-                err_body, status = prep
-                return jsonify(err_body), status
+            if isinstance(prep, AssistantChatPrepError):
+                return jsonify(prep.body), prep.status
             return self._stream_assistant_chat_response(prep)
 
         @app.route('/api/assistant/investigate', methods=['POST'])
@@ -2241,6 +2342,17 @@ class WebServer:
         return audit_metrics_from_markdown_content(content)
 
     @staticmethod
+    def _audit_metrics_from_audit_json_report_file(report_file: Path) -> dict:
+        try:
+            with open(report_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError, TypeError):
+            return {}
+        if not isinstance(data, dict) or data.get("report_type") != "audit":
+            return {}
+        return audit_metrics_from_audit_payload(data)
+
+    @staticmethod
     def _pipeline_phases_from_executive_summary_markdown(content: str) -> list[dict]:
         """Parse optional ``### Pipeline phases`` markdown table into phase dict rows.
 
@@ -2415,8 +2527,15 @@ class WebServer:
             elif fmt == "md":
                 progress = self._summary_progress_from_markdown_report_file(report_file)
         audit_metrics = {}
-        if vulnerability_type == "Audit Report" and fmt == "md":
-            audit_metrics = self._audit_metrics_from_markdown_report_file(report_file)
+        if vulnerability_type == "Audit Report":
+            if fmt == "json":
+                audit_metrics = self._audit_metrics_from_audit_json_report_file(report_file)
+            elif fmt == "md":
+                json_side = json_sibling_for_format_artifact(report_file)
+                if json_side.is_file():
+                    audit_metrics = self._audit_metrics_from_audit_json_report_file(json_side)
+                else:
+                    audit_metrics = self._audit_metrics_from_markdown_report_file(report_file)
 
         # Build relative path for web access
         relative_path = report_file.relative_to(self.security_dir)
@@ -2427,7 +2546,7 @@ class WebServer:
         if fmt == "json":
             language = self._language_from_json_report_file(report_file)
         else:
-            sibling_json = model_dir / "json" / f"{report_file.stem}.json"
+            sibling_json = json_sibling_for_format_artifact(report_file)
             if sibling_json.exists():
                 language = self._language_from_json_report_file(sibling_json)
         if language is None:
@@ -2439,7 +2558,7 @@ class WebServer:
         if fmt == "json":
             project = self._project_field_from_json_path(report_file)
         else:
-            json_side = model_dir / "json" / f"{report_file.stem}.json"
+            json_side = json_sibling_for_format_artifact(report_file)
             if json_side.is_file():
                 project = self._project_field_from_json_path(json_side)
         if project is None:
@@ -2577,8 +2696,8 @@ class WebServer:
         if 'executive_summary' in filename:
             return 'Executive Summary'
 
-        # Handle audit report
-        if 'audit_report' in filename:
+        # Handle audit report (stem ``AUDIT_REPORT_ARTIFACT_STEM``; see export.filenames).
+        if AUDIT_REPORT_ARTIFACT_STEM in filename:
             return 'Audit Report'
 
         vulnerability_patterns = {

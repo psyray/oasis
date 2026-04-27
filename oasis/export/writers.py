@@ -10,9 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from pydantic import BaseModel
 from weasyprint import HTML
-
-from ..schemas.analysis import VulnerabilityReportDocument
 from .result_types import ArtifactWriteStatusMap
 
 
@@ -52,7 +51,7 @@ def write_markdown_lines(path: Path, lines: List[str], logger: logging.Logger) -
             logger.debug("Full error:", exc_info=True)
 
 
-def write_json_document(path: Path, doc: VulnerabilityReportDocument) -> None:
+def write_json_document(path: Path, doc: BaseModel) -> None:
     ensure_parent_dir(path)
     write_utf8_text(path, doc.model_dump_json(indent=2))
 

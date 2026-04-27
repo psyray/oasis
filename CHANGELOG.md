@@ -1,3 +1,15 @@
+## Unreleased
+
+## 🚀 [0.5.2] - 2026-04-28
+
+### ✨ Added
+- 📊 **Audit canonical JSON**: `audit_report.json` (`report_type: "audit"`) when `json` is in output formats; Pydantic `AuditReportDocument`; Markdown/HTML generated from the same document so the **Audit Metrics Summary** stays compatible with `audit_metrics_from_markdown_content` / dashboard parsing.
+- 🖥️ **Dashboard**: `/api/reports` reads audit metrics from sibling JSON when available (fallback Markdown); report modal uses `/api/report-html` for `json/audit_report.json` when opening `md/audit_report.md` (canonical JSON preview UX).
+- 📁 **Project-aware reports**: optional **project alias** for organization and improved **project-based** report storage and metadata alongside existing project workflow.
+
+### ⚡ Changed
+- 🧭 **Audit wiring**: single **artifact stem** (`audit_report`) and **`md` → `json` sibling** rules shared by indexing (`json_sibling_for_format_artifact`) and the dashboard (`audit-report-paths.js`); audit HTML preview uses **Jinja `audit_decimal`** for scores/thresholds instead of inline format strings.
+
 ## 🚀 [0.5.1] - 2026-04-22
 
 ### ✨ Added
