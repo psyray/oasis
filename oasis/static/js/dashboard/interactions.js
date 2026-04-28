@@ -294,7 +294,9 @@ DashboardApp.updateDatesForModels = function(card, modelNames, vulnType) {
     }
 
     // Fallback API path kept for robustness when local reportData is stale.
-    const params = new URLSearchParams();
+    const params = DashboardApp.buildFilterParams({ includeVulnerability: false });
+    params.delete('model');
+    params.delete('vulnerability');
     if (hasModelFilter) {
         normalizedModels.forEach((modelName) => {
             params.append('model', modelName);
@@ -366,9 +368,9 @@ DashboardApp.updateDatesForVulnerability = function(vulnElement, vulnType) {
         DashboardApp._appendLoadingSpinner(datesContainer);
     }
     
-    const params = new URLSearchParams();
+    const params = DashboardApp.buildFilterParams({ includeVulnerability: false });
+    params.delete('vulnerability');
     params.append('vulnerability', vulnType);
-    DashboardApp.appendActiveSeverityToSearchParams(params);
     fetch(`/api/dates?${params.toString()}`)
         .then(response => {
             if (!response.ok) {

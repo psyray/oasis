@@ -1032,6 +1032,263 @@ class TestExecutiveAndAssistantMetaRoutes(unittest.TestCase):
             self.assertEqual(data.get("report_type"), "executive_summary")
             self.assertEqual(data.get("model_name"), "from-vuln")
 
+    def test_report_json_respects_active_severity_filter_scope(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            run_json = sec / "20260101_120000" / "m1" / "json"
+            run_json.mkdir(parents=True)
+            low_medium = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "medium",
+                "generated_at": "2026-01-01",
+                "model_name": "m1",
+                "vulnerability_name": "MediumOnly",
+                "files": [
+                    {
+                        "file_path": "sample_medium.py",
+                        "similarity_score": 0.7,
+                        "chunk_analyses": [
+                            {
+                                "start_line": 1,
+                                "end_line": 3,
+                                "findings": [
+                                    {"title": "Only Medium", "severity": "Medium", "vulnerable_code": "x"}
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                "stats": {
+                    "critical_risk": 0,
+                    "high_risk": 0,
+                    "medium_risk": 1,
+                    "low_risk": 0,
+                    "total_findings": 1,
+                },
+            }
+            high_only = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "high",
+                "generated_at": "2026-01-01",
+                "model_name": "m1",
+                "vulnerability_name": "HighOnly",
+                "files": [
+                    {
+                        "file_path": "sample_high.py",
+                        "similarity_score": 0.8,
+                        "chunk_analyses": [
+                            {
+                                "start_line": 1,
+                                "end_line": 3,
+                                "findings": [
+                                    {"title": "Only High", "severity": "High", "vulnerable_code": "x"}
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                "stats": {
+                    "critical_risk": 0,
+                    "high_risk": 1,
+                    "medium_risk": 0,
+                    "low_risk": 0,
+                    "total_findings": 1,
+                },
+            }
+            (run_json / "medium.json").write_text(json.dumps(low_medium), encoding="utf-8")
+            (run_json / "high.json").write_text(json.dumps(high_only), encoding="utf-8")
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+
+            blocked = client.get("/api/report-json/20260101_120000/m1/json/medium.json?severity=high")
+            self.assertEqual(blocked.status_code, 409)
+            blocked_payload = json.loads(blocked.get_data(as_text=True))
+            self.assertIn("active filter scope", blocked_payload.get("error", ""))
+
+            blocked_none = client.get("/api/report-json/20260101_120000/m1/json/high.json?severity=critical")
+            self.assertEqual(blocked_none.status_code, 409)
+            blocked_none_payload = json.loads(blocked_none.get_data(as_text=True))
+            self.assertIn("active filter scope", blocked_none_payload.get("error", ""))
+
+            allowed = client.get("/api/report-json/20260101_120000/m1/json/high.json?severity=high")
+            self.assertEqual(allowed.status_code, 200)
+            allowed_payload = json.loads(allowed.get_data(as_text=True))
+            self.assertEqual(allowed_payload.get("vulnerability_name"), "HighOnly")
+            high_chunks = allowed_payload.get("files", [{}])[0].get("chunk_analyses", [])
+            self.assertTrue(high_chunks)
+            severities = [
+                finding.get("severity")
+                for chunk in high_chunks
+                for finding in (chunk.get("findings") or [])
+            ]
+            self.assertEqual(severities, ["High"])
+
+    def test_report_html_filters_non_matching_findings_by_severity(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            run_json = sec / "20260101_140000" / "m1" / "json"
+            run_json.mkdir(parents=True)
+            payload = {
+                "report_type": "vulnerability",
+                "schema_version": 5,
+                "title": "Authentication Issues Security Analysis",
+                "generated_at": "2026-01-01",
+                "model_name": "m1",
+                "vulnerability_name": "Authentication Issues",
+                "vulnerability": {"name": "Authentication Issues"},
+                "files": [
+                    {
+                        "file_path": "test_files/sample.py",
+                        "similarity_score": 0.9,
+                        "chunk_analyses": [
+                            {
+                                "start_line": 1,
+                                "end_line": 5,
+                                "findings": [
+                                    {"title": "Critical Finding", "severity": "Critical", "vulnerable_code": "x"},
+                                    {"title": "Medium Finding", "severity": "Medium", "vulnerable_code": "y"},
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                "stats": {
+                    "critical_risk": 1,
+                    "high_risk": 0,
+                    "medium_risk": 1,
+                    "low_risk": 0,
+                    "total_findings": 2,
+                    "files_analyzed": 1,
+                },
+            }
+            (run_json / "authentication_issues.json").write_text(json.dumps(payload), encoding="utf-8")
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+
+            response = client.get(
+                "/api/report-html?path=20260101_140000/m1/json/authentication_issues.json&severity=critical"
+            )
+            self.assertEqual(response.status_code, 200)
+            html_payload = json.loads(response.get_data(as_text=True))
+            html = html_payload.get("content", "")
+            self.assertIn("Active severity filter:", html)
+            self.assertIn("Critical", html)
+            self.assertIn("Critical Finding", html)
+            self.assertNotIn("Medium Finding", html)
+            self.assertIn("report-severity-pill--critical", html)
+            self.assertNotIn('class="report-header"', html)
+
+    def test_executive_preview_meta_respects_active_severity_filter_scope(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            run_json = sec / "20260101_130000" / "m_exec" / "json"
+            run_md = sec / "20260101_130000" / "m_exec" / "md"
+            run_json.mkdir(parents=True)
+            run_md.mkdir(parents=True)
+            exec_js = {
+                "report_type": "executive_summary",
+                "schema_version": 1,
+                "model_name": "m-exec",
+                "title": "exec",
+            }
+            medium_only = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "medium",
+                "generated_at": "2026-01-01",
+                "model_name": "m-exec",
+                "vulnerability_name": "OnlyMedium",
+                "files": [{"file_path": "app.py"}],
+                "stats": {
+                    "critical_risk": 0,
+                    "high_risk": 0,
+                    "medium_risk": 2,
+                    "low_risk": 0,
+                    "total_findings": 2,
+                },
+            }
+            (run_json / "_executive_summary.json").write_text(json.dumps(exec_js), encoding="utf-8")
+            (run_json / "vuln_medium.json").write_text(json.dumps(medium_only), encoding="utf-8")
+            (run_md / "_executive_summary.md").write_text("# Executive\n", encoding="utf-8")
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+
+            blocked = client.get(
+                "/api/executive-preview-meta?path=20260101_130000/m_exec/md/_executive_summary.md&severity=high"
+            )
+            self.assertEqual(blocked.status_code, 200)
+            blocked_payload = json.loads(blocked.get_data(as_text=True))
+            self.assertEqual(blocked_payload.get("vulnerability_report_files"), 0)
+            self.assertEqual(blocked_payload.get("severity_counts", {}).get("high"), 0)
+
+    def test_executive_preview_meta_tolerates_malformed_filtered_report_entries(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            run_json = sec / "20260101_150000" / "m_exec" / "json"
+            run_md = sec / "20260101_150000" / "m_exec" / "md"
+            run_json.mkdir(parents=True)
+            run_md.mkdir(parents=True)
+            exec_js = {
+                "report_type": "executive_summary",
+                "schema_version": 1,
+                "model_name": "m-exec",
+                "title": "exec",
+            }
+            vuln_js = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "high",
+                "generated_at": "2026-01-01",
+                "model_name": "m-exec",
+                "vulnerability_name": "HighOnly",
+                "files": [{"file_path": "app.py"}],
+                "stats": {"critical_risk": 0, "high_risk": 1, "medium_risk": 0, "low_risk": 0, "total_findings": 1},
+            }
+            (run_json / "_executive_summary.json").write_text(json.dumps(exec_js), encoding="utf-8")
+            (run_json / "vuln_high.json").write_text(json.dumps(vuln_js), encoding="utf-8")
+            (run_md / "_executive_summary.md").write_text("# Executive\n", encoding="utf-8")
+
+            original_filter_reports = server.filter_reports
+
+            def _patched_filter_reports(**kwargs):
+                rows = list(original_filter_reports(**kwargs))
+                rows.append({"path": None, "format": "json", "vulnerability_type": None})
+                rows.append({"path": 123, "format": "json", "vulnerability_type": 7})
+                return rows
+
+            server.filter_reports = _patched_filter_reports
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+
+            resp = client.get(
+                "/api/executive-preview-meta?path=20260101_150000/m_exec/md/_executive_summary.md&severity=high"
+            )
+            self.assertEqual(resp.status_code, 200)
+            payload = json.loads(resp.get_data(as_text=True))
+            self.assertEqual(payload.get("severity_counts", {}).get("high"), 1)
+
     def test_assistant_chat_aggregate_without_executive_json_on_disk(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)

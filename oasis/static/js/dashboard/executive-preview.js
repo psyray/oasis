@@ -45,8 +45,8 @@ DashboardApp.setupExecutivePreviewCharts = function (reportPath) {
     canvas.setAttribute('aria-label', 'Severity distribution');
     wrap.appendChild(canvas);
     const nav = root.querySelector('.executive-preview-toc, nav.report-toc');
-    if (nav && nav.parentNode === root) {
-        root.insertBefore(wrap, nav.nextSibling);
+    if (nav && nav.parentNode) {
+        nav.parentNode.insertBefore(wrap, nav.nextSibling);
     } else {
         root.insertBefore(wrap, root.firstChild);
     }

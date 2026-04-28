@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from oasis.export.filenames import artifact_filename
 
@@ -23,13 +23,38 @@ def _model_dir_key(name: str | None) -> str:
 _DETAIL_FORMAT_PRIORITY: tuple[str, ...] = ("json", "html", "md", "pdf", "sarif")
 
 
-def preferred_detail_relative_path_and_format(report: "Report", vuln_stem: str) -> Tuple[str, str]:
-    """
-    Return ``(path_under_security_reports, format_key)`` for a vulnerability stem.
+def _fallback_detail_relative_path_from_current_report(
+    vuln_stem: str,
+    *,
+    security_root: Optional[Path],
+    current_report_path: Optional[Path],
+) -> Optional[Tuple[str, str]]:
+    """Resolve detail artifact path from the current report run under ``security_reports``."""
+    if not isinstance(security_root, Path) or not isinstance(current_report_path, Path):
+        return None
+    try:
+        resolved_root = security_root.resolve()
+        resolved_current = current_report_path.resolve()
+        rel_current = resolved_current.relative_to(resolved_root)
+    except (OSError, ValueError):
+        return None
+    # Expected layout: .../<model>/<format>/<report_file>
+    if len(rel_current.parts) < 3:
+        return None
+    model_dir = resolved_current.parent.parent
+    for fmt in _DETAIL_FORMAT_PRIORITY:
+        candidate = model_dir / fmt / artifact_filename(vuln_stem, fmt)
+        if candidate.is_file():
+            return candidate.relative_to(resolved_root).as_posix(), fmt
+    fallback = model_dir / "json" / artifact_filename(vuln_stem.strip() or "unknown", "json")
+    try:
+        return fallback.relative_to(resolved_root).as_posix(), "json"
+    except ValueError:
+        return None
 
-    Chooses the first existing artifact directory entry in priority order; if none exist,
-    returns the preferred json path so new scans stay consistent once artifacts land.
-    """
+
+def _preferred_detail_from_report_dirs(report: "Report", vuln_stem: str) -> Tuple[str, str]:
+    """Resolve preferred detail artifact from ``report.report_dirs``."""
     model_key = _model_dir_key(report.current_model or "")
     dirs = report.report_dirs.get(model_key)
     base: Path = report.output_base_dir
@@ -45,7 +70,6 @@ def preferred_detail_relative_path_and_format(report: "Report", vuln_stem: str) 
             candidate = fmt_dir / artifact_filename(vuln_stem, fmt)
             if candidate.is_file():
                 return rel_str(candidate), fmt
-
         if "json" in dirs:
             candidate = dirs["json"] / artifact_filename(vuln_stem, "json")
             return rel_str(candidate), "json"
@@ -53,6 +77,32 @@ def preferred_detail_relative_path_and_format(report: "Report", vuln_stem: str) 
     stem_clean = vuln_stem.strip() or "unknown"
     fallback = base / model_key / "pdf" / artifact_filename(stem_clean, "pdf")
     return rel_str(fallback), "pdf"
+
+
+def preferred_detail_relative_path_and_format(
+    report: "Report",
+    vuln_stem: str,
+    *,
+    security_root: Optional[Path] = None,
+    current_report_path: Optional[Path] = None,
+) -> Tuple[str, str]:
+    """
+    Return ``(path_under_security_reports, format_key)`` for a vulnerability stem.
+
+    Chooses the first existing artifact directory entry in priority order; if none exist,
+    returns the preferred json path so new scans stay consistent once artifacts land.
+    """
+    base_raw = getattr(report, "output_base_dir", None)
+    if isinstance(base_raw, Path):
+        return _preferred_detail_from_report_dirs(report, vuln_stem)
+    fallback = _fallback_detail_relative_path_from_current_report(
+        vuln_stem,
+        security_root=security_root,
+        current_report_path=current_report_path,
+    )
+    if fallback:
+        return fallback
+    raise ValueError("report.output_base_dir is unavailable and fallback could not be derived")
 
 
 def dashboard_reports_href(relative_under_security: str) -> str:

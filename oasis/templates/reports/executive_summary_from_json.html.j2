@@ -1,39 +1,81 @@
 {% import "reports/_macros.html.j2" as macros %}
 {% set preview = preview if preview is defined else {} %}
-<article class="report-executive-summary">
-  {{ macros.render_codebase_warning_banner(preview) }}
-  <h1>{{ payload.title }}</h1>
-  <p><strong>Generated at:</strong> {{ payload.generated_at }}</p>
-  {% if payload.project %}
-  <p><strong>Project:</strong> {{ payload.project }}</p>
-  {% endif %}
-  {% if payload.analysis_root %}
-  <p><strong>Analysis root:</strong> <code class="report-meta-code">{{ payload.analysis_root }}</code></p>
-  {% endif %}
-  <h2>Models Used</h2>
-  <ul>
-    <li><strong>Deep model:</strong> {{ payload.deep_model }}</li>
-    <li><strong>Small model:</strong> {{ payload.small_model }}</li>
-    <li><strong>Embedding model:</strong> {{ payload.embedding_model }}</li>
-  </ul>
-  <h2>Vulnerability Summary</h2>
-  <ul>
-    {% if payload.vulnerability_summary %}
-    {% for name, count in payload.vulnerability_summary %}
-    <li><strong>{{ name }}</strong>: {{ count }}</li>
-    {% endfor %}
-    {% else %}
-    <li>No vulnerability summary available.</li>
+<div class="executive-preview">
+  <article class="report-executive-summary">
+    {{ macros.render_codebase_warning_banner(preview) }}
+    <h1 id="executive-summary-title">{{ payload.title }}</h1>
+    {% if payload.executive_lead %}
+    <p class="report-executive-lead">{{ payload.executive_lead | e }}</p>
     {% endif %}
-  </ul>
-  <h2>Similarity Tier Counts</h2>
-  <ul>
-    {% if payload.similarity_tier_counts %}
-    {% for tier, count in payload.similarity_tier_counts %}
-    <li><strong>{{ tier }}</strong>: {{ count }}</li>
-    {% endfor %}
-    {% else %}
-    <li>No similarity tier data available.</li>
+    <p><strong>Generated at:</strong> {{ payload.generated_at }}
+      {% if payload.oasis_version %}<span class="report-executive-meta-inline"> · <strong>OASIS</strong> {{ payload.oasis_version }}</span>{% endif %}
+    </p>
+    {% if payload.project %}
+    <p><strong>Project:</strong> {{ payload.project }}</p>
     {% endif %}
-  </ul>
-</article>
+    {% if payload.analysis_root %}
+    <p><strong>Analysis root:</strong> <code class="report-meta-code">{{ payload.analysis_root }}</code></p>
+    {% endif %}
+
+    <nav class="report-toc executive-preview-toc" aria-label="Table of contents">
+      <h2 id="table-of-contents" class="report-toc-title">Table of contents</h2>
+      <ul class="report-toc-list">
+        <li><a class="report-toc-btn" href="#exec-situation"><span class="report-toc-icon" aria-hidden="true">🎯</span><span class="report-toc-label">At a glance</span></a></li>
+        <li><a class="report-toc-btn" href="#exec-guidance"><span class="report-toc-icon" aria-hidden="true">📖</span><span class="report-toc-label">How to read this summary</span></a></li>
+        <li><a class="report-toc-btn" href="#exec-tier-defs"><span class="report-toc-icon" aria-hidden="true">📐</span><span class="report-toc-label">Similarity tiers</span></a></li>
+        <li><a class="report-toc-btn" href="#exec-highlights"><span class="report-toc-icon" aria-hidden="true">⚡</span><span class="report-toc-label">Priority matches</span></a></li>
+        {% if payload.progress_summary %}
+        <li><a class="report-toc-btn" href="#exec-scan-status"><span class="report-toc-icon" aria-hidden="true">⏱️</span><span class="report-toc-label">Scan status</span></a></li>
+        {% endif %}
+        <li><a class="report-toc-btn" href="#exec-models"><span class="report-toc-icon" aria-hidden="true">🤖</span><span class="report-toc-label">Models used</span></a></li>
+        <li><a class="report-toc-btn" href="#exec-vuln-summary"><span class="report-toc-icon" aria-hidden="true">🛡️</span><span class="report-toc-label">Vulnerability summary</span></a></li>
+        <li><a class="report-toc-btn" href="#exec-similarity-tiers"><span class="report-toc-icon" aria-hidden="true">📊</span><span class="report-toc-label">Tier counts</span></a></li>
+        <li><a class="report-toc-btn" href="#assistant"><span class="report-toc-icon" aria-hidden="true">💬</span><span class="report-toc-label">Assistant</span></a></li>
+      </ul>
+    </nav>
+    <div class="executive-preview-before-overview" data-oasis-exec-before-overview="1"></div>
+
+    {{ macros.render_executive_kpi_grid(payload.overview) }}
+
+    {{ macros.render_executive_guidance_html(payload.guidance_html) }}
+
+    {{ macros.render_executive_tier_definitions_table(payload.tier_definitions) }}
+
+    {{ macros.render_executive_similarity_highlights_table(payload.similarity_rows) }}
+
+    {% if payload.progress_summary %}
+    {{ macros.render_executive_scan_status(payload.progress_summary) }}
+    {% endif %}
+
+    <h2 id="exec-models">Models Used</h2>
+    <ul>
+      <li><strong>Deep model:</strong> {{ payload.deep_model }}</li>
+      <li><strong>Small model:</strong> {{ payload.small_model }}</li>
+      <li><strong>Embedding model:</strong> {{ payload.embedding_model }}</li>
+    </ul>
+    {{ macros.render_return_to_toc() }}
+
+    <h2 id="exec-vuln-summary">Vulnerability Summary</h2>
+    <ul>
+      {% if payload.vulnerability_summary %}
+      {% for name, count in payload.vulnerability_summary %}
+      <li><strong>{{ name }}</strong>: {{ count }} embedding match(es)</li>
+      {% endfor %}
+      {% else %}
+      <li>No vulnerability summary available.</li>
+      {% endif %}
+    </ul>
+    {{ macros.render_return_to_toc() }}
+
+    <h2 id="exec-similarity-tiers">Similarity Tier Counts</h2>
+    <ul>
+      {% if payload.similarity_tier_counts %}
+      {% for tier, count in payload.similarity_tier_counts %}
+      <li><strong>{{ tier }}</strong>: {{ count }}</li>
+      {% endfor %}
+      {% else %}
+      <li>No similarity tier data available.</li>
+      {% endif %}
+    </ul>
+  </article>
+</div>

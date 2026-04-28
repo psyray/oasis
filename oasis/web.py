@@ -1,4 +1,6 @@
 from collections import OrderedDict
+from collections.abc import Iterable
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
@@ -73,6 +75,7 @@ from .helpers.dashboard import (
     rewrite_report_preview_anchor_hrefs,
     slice_markdown_section_after_heading,
     socketio_lan_http_origins,
+    strip_report_header_for_web_preview,
 )
 from .helpers.progress import SCAN_PROGRESS_EXTENDED_KEYS, coerce_scan_progress_event_version
 from .report import Report, executive_summary_progress_sidecar_path, is_executive_summary_progress_sidecar
@@ -155,8 +158,8 @@ from .helpers.assistant.think.think_parse import (
 from .helpers.assistant.prompt.context_budget import assistant_total_system_budget_chars
 from .helpers.assistant.scan.scan_aggregate import model_directory_from_security_report_file
 from .helpers.dashboard.severity_filter import (
-    empty_severity_histogram,
-    merge_severity_histogram_for_report,
+    empty_severity_finding_totals,
+    merge_severity_finding_totals_for_report,
     parse_severity_filter_param,
     report_passes_dashboard_severity_filter,
 )
@@ -1470,6 +1473,24 @@ class WebServer:
             # The complete path now includes the timestamp directory
             return send_from_directory(security_dir, filename)
 
+        def _path_allowed_by_active_filters(resolved_path: Path, security_root: Path) -> bool:
+            """True when ``resolved_path`` belongs to the currently filtered dashboard dataset."""
+            filter_kwargs = self._request_dashboard_filter_kwargs(request.args)
+            if not self._has_any_active_dashboard_filter(filter_kwargs):
+                return True
+            filtered_reports = list(self.filter_reports(**filter_kwargs))
+            allowed_paths = self._allowed_paths_for_filtered_reports(filtered_reports)
+            try:
+                rel_path = WebServer._normalize_dashboard_relative_report_path(
+                    resolved_path.relative_to(security_root).as_posix()
+                )
+            except ValueError:
+                return False
+            return rel_path in allowed_paths
+
+        def _filtered_out_preview_response():
+            return jsonify({'error': 'Report path is outside the active filter scope'}), 409
+
         @app.route('/api/report-content/<path:filename>')
         @login_required
         def get_report_content(filename):
@@ -1485,6 +1506,8 @@ class WebServer:
 
                 if not resolved_path.exists() or resolved_path.suffix != '.md':
                     return jsonify({'error': 'File not found or not a markdown file'}), 404
+                if not _path_allowed_by_active_filters(resolved_path, security_root):
+                    return _filtered_out_preview_response()
 
                 rel_path = resolved_path.relative_to(security_root)
                 rel_parts = rel_path.parts
@@ -1529,6 +1552,8 @@ class WebServer:
                             if md_dir is not None:
                                 return jsonify(synthetic_executive_primary_payload(md_dir))
                     return jsonify({'error': 'File not found or not JSON'}), 404
+                if not _path_allowed_by_active_filters(resolved_path, security_root):
+                    return _filtered_out_preview_response()
                 if is_executive_summary_progress_sidecar(resolved_path):
                     return jsonify(
                         {'error': 'Incremental progress sidecar is not a canonical vulnerability report JSON'}
@@ -1537,6 +1562,12 @@ class WebServer:
                     payload = json.load(f)
                 if not isinstance(payload, dict):
                     return jsonify({'error': 'Invalid JSON report payload'}), 422
+                severity_tiers = parse_severity_filter_param(request.args.get('severity', ''))
+                payload = self._filter_vulnerability_payload_by_severity_tiers(
+                    payload,
+                    severity_tiers,
+                    rewrite_stats_totals=True,
+                )
                 return jsonify(payload)
             except Exception:
                 return self._report_preview_error_response("Error while generating JSON report preview")
@@ -1585,10 +1616,44 @@ class WebServer:
                 model_dir = model_directory_from_security_report_file(security_root, resolved)
                 if model_dir is None:
                     return jsonify({'error': 'Could not resolve model directory'}), 400
-                meta = rollup_severity_counts_from_model_dir(model_dir)
-                meta['vulnerability_reports'] = vulnerability_reports_for_executive_assistant(
-                    model_dir, security_root
-                )
+                filter_kwargs = self._request_dashboard_filter_kwargs(request.args)
+                if not self._has_any_active_dashboard_filter(filter_kwargs):
+                    meta = rollup_severity_counts_from_model_dir(model_dir)
+                    meta['vulnerability_reports'] = vulnerability_reports_for_executive_assistant(
+                        model_dir, security_root
+                    )
+                    return jsonify(meta)
+                filtered_reports = list(self.filter_reports(**filter_kwargs))
+                allowed_paths = self._allowed_paths_for_filtered_reports(filtered_reports)
+                if not allowed_paths:
+                    return jsonify({'severity_counts': {}, 'vulnerability_reports': []})
+
+                model_rel_prefix = WebServer._normalize_dashboard_relative_report_path(
+                    model_dir.relative_to(security_root).as_posix()
+                ).rstrip("/") + "/"
+                scoped_reports = [
+                    report
+                    for report in filtered_reports
+                    if WebServer._normalize_dashboard_relative_report_path(str(report.get("path") or "")).startswith(
+                        model_rel_prefix
+                    )
+                    and str(report.get("format") or "").lower() == "json"
+                    and str(report.get("vulnerability_type") or "") != "Executive Summary"
+                ]
+                severity_counts = empty_severity_finding_totals()
+                for report in scoped_reports:
+                    merge_severity_finding_totals_for_report(severity_counts, report)
+                vuln_reports = [
+                    item
+                    for item in vulnerability_reports_for_executive_assistant(model_dir, security_root)
+                    if WebServer._normalize_dashboard_relative_report_path(item.get("relative_path"))
+                    in allowed_paths
+                ]
+                meta = {
+                    "severity_counts": severity_counts,
+                    "vulnerability_report_files": len(vuln_reports),
+                    "vulnerability_reports": vuln_reports,
+                }
                 return jsonify(meta)
             except Exception:
                 return self._report_preview_error_response("Error while building executive preview meta")
@@ -2032,6 +2097,8 @@ class WebServer:
                     return jsonify({'error': 'Invalid path'}), 403
                 if not resolved_path.exists() or resolved_path.suffix != '.json':
                     return jsonify({'error': 'File not found or not JSON'}), 404
+                if not _path_allowed_by_active_filters(resolved_path, security_root):
+                    return _filtered_out_preview_response()
                 if is_executive_summary_progress_sidecar(resolved_path):
                     return jsonify(
                         {
@@ -2046,6 +2113,12 @@ class WebServer:
                     payload = json.load(f)
                 if not isinstance(payload, dict):
                     return jsonify({'error': 'Invalid JSON report payload'}), 422
+                severity_tiers = parse_severity_filter_param(request.args.get('severity', ''))
+                payload = self._filter_vulnerability_payload_by_severity_tiers(
+                    payload,
+                    severity_tiers,
+                    rewrite_stats_totals=True,
+                )
 
                 ar_raw = payload.get("analysis_root")
                 ar_text = ar_raw.strip() if isinstance(ar_raw, str) else None
@@ -2056,11 +2129,16 @@ class WebServer:
                     "codebase_warning_detail": (
                         "" if codebase_ok else CODEBASE_UNAVAILABLE_DETAIL
                     ),
+                    "active_severity_filter": [tier.capitalize() for tier in severity_tiers],
+                    # Internal-only context for executive-summary detail link fallback.
+                    "_security_root": security_root,
+                    "_current_report_path": resolved_path,
                 }
                 html_content = self.report.render_report_html_from_json_payload(
                     payload,
                     preview_context=preview_ctx,
                 )
+                html_content = strip_report_header_for_web_preview(html_content)
                 return jsonify({'content': html_content}), 200
             except Exception:
                 return self._report_preview_error_response("Error while generating HTML preview from canonical JSON report")
@@ -2972,7 +3050,7 @@ class WebServer:
             "formats": {},
             "dates": {},
             "projects": {},
-            "severities": empty_severity_histogram(),
+            "severity_finding_totals": empty_severity_finding_totals(),
             "risk_summary": {
                 "total_findings": 0,
                 "critical": 0,
@@ -2986,7 +3064,7 @@ class WebServer:
         for report in reports_to_analyze:
             if report["format"] == "json":
                 self._update_stats_for_report(stats, report)
-                merge_severity_histogram_for_report(stats["severities"], report)
+                merge_severity_finding_totals_for_report(stats["severity_finding_totals"], report)
 
             # count all available formats
             fmt = report["format"]
@@ -3028,6 +3106,153 @@ class WebServer:
         risk_summary["high"] += report_stats.get("high_risk", 0)
         risk_summary["medium"] += report_stats.get("medium_risk", 0)
         risk_summary["low"] += report_stats.get("low_risk", 0)
+
+    def _request_dashboard_filter_kwargs(self, req_args: Any) -> Dict[str, Any]:
+        """Extract active dashboard filters from request args for preview-scope checks."""
+        return {
+            "model_filter": req_args.get('model', ''),
+            "format_filter": req_args.get('format', ''),
+            "vuln_filter": req_args.get('vulnerability', ''),
+            "severity_filter": req_args.get('severity', ''),
+            "language_filter": req_args.get('language', ''),
+            "project_filter": req_args.get('project', ''),
+            "start_date": req_args.get('start_date', None),
+            "end_date": req_args.get('end_date', None),
+            # Preview-scope checks must match full dashboard scope, not markdown-only date subset.
+            "md_dates_only": False,
+        }
+
+    @staticmethod
+    def _has_any_active_dashboard_filter(filter_kwargs: Dict[str, Any]) -> bool:
+        for key in (
+            "model_filter",
+            "format_filter",
+            "vuln_filter",
+            "severity_filter",
+            "language_filter",
+            "project_filter",
+            "start_date",
+            "end_date",
+        ):
+            if str(filter_kwargs.get(key) or "").strip():
+                return True
+        return False
+
+    @staticmethod
+    def _allowed_paths_for_filtered_reports(
+        filtered_reports: Iterable[Dict[str, Any]] | None,
+    ) -> set[str]:
+        if not filtered_reports:
+            return set()
+        allowed_paths: set[str] = set()
+        for report in filtered_reports:
+            report_path = WebServer._normalize_dashboard_relative_report_path(report.get("path"))
+            if report_path:
+                allowed_paths.add(report_path)
+            alt = report.get("alternative_formats") or {}
+            if isinstance(alt, dict):
+                for candidate in alt.values():
+                    candidate_path = WebServer._normalize_dashboard_relative_report_path(candidate)
+                    if candidate_path:
+                        allowed_paths.add(candidate_path)
+        return allowed_paths
+
+    @staticmethod
+    def _normalize_dashboard_relative_report_path(path_value: Any) -> str:
+        """Canonicalize report relative paths for filter-scope comparisons."""
+        if not isinstance(path_value, str):
+            return ""
+        raw = path_value.strip()
+        if not raw:
+            return ""
+        if raw.startswith(("/", "\\")):
+            return ""
+        normalized = os.path.normpath(raw.replace("\\", "/")).replace("\\", "/")
+        if normalized in ("", ".", ".."):
+            return ""
+        if normalized.startswith("../"):
+            return ""
+        if normalized.startswith("./"):
+            normalized = normalized[2:]
+        return normalized.lstrip("/")
+
+    @staticmethod
+    def _filter_vulnerability_payload_by_severity_tiers(
+        payload: Dict[str, Any],
+        tiers: Tuple[str, ...],
+        *,
+        rewrite_stats_totals: bool = False,
+    ) -> Dict[str, Any]:
+        """Filter canonical vulnerability payload findings to selected severity tiers."""
+        if not tiers:
+            return payload
+        if str(payload.get("report_type") or "").strip().lower() != "vulnerability":
+            return payload
+        wanted = {str(t or "").strip().lower() for t in tiers if str(t or "").strip()}
+        if not wanted:
+            return payload
+
+        data = deepcopy(payload)
+        files = data.get("files")
+        if not isinstance(files, list):
+            return data
+
+        filtered_files: List[Dict[str, Any]] = []
+        sev_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        total_findings_count = 0
+        potential_chunk_count = 0
+
+        for file_item in files:
+            if not isinstance(file_item, dict):
+                continue
+            chunk_list = file_item.get("chunk_analyses")
+            kept_chunks: List[Dict[str, Any]] = []
+            if isinstance(chunk_list, list):
+                for chunk in chunk_list:
+                    if not isinstance(chunk, dict):
+                        continue
+                    findings = chunk.get("findings")
+                    if not isinstance(findings, list):
+                        continue
+                    kept_findings: List[Dict[str, Any]] = []
+                    for finding in findings:
+                        if not isinstance(finding, dict):
+                            continue
+                        sev = str(finding.get("severity") or "").strip().lower()
+                        if sev in wanted:
+                            kept_findings.append(finding)
+                            total_findings_count += 1
+                            if sev in sev_counts:
+                                sev_counts[sev] += 1
+                    if kept_findings:
+                        chunk_copy = dict(chunk)
+                        chunk_copy["findings"] = kept_findings
+                        kept_chunks.append(chunk_copy)
+                        if bool(chunk_copy.get("potential_vulnerabilities")):
+                            potential_chunk_count += 1
+            if kept_chunks or file_item.get("error"):
+                file_copy = dict(file_item)
+                file_copy["chunk_analyses"] = kept_chunks
+                filtered_files.append(file_copy)
+
+        data["files"] = filtered_files
+        stats = data.get("stats")
+        original_stats = dict(stats) if isinstance(stats, dict) else {}
+        stats_copy = dict(stats) if isinstance(stats, dict) else {}
+        if rewrite_stats_totals:
+            stats_copy["critical_risk"] = sev_counts["critical"]
+            stats_copy["high_risk"] = sev_counts["high"]
+            stats_copy["medium_risk"] = sev_counts["medium"]
+            stats_copy["low_risk"] = sev_counts["low"]
+            # Keep totals aligned with kept findings even when non-canonical severities are present.
+            stats_copy["total_findings"] = total_findings_count
+            stats_copy["files_analyzed"] = len(filtered_files)
+            # Compatibility note: ``potential_findings`` remains chunk-granular (historical behavior).
+            stats_copy["potential_findings"] = potential_chunk_count
+        data["stats"] = stats_copy
+        if rewrite_stats_totals and original_stats:
+            data["stats_unfiltered"] = original_stats
+        return data
 
     def _update_stats_for_report(self, stats: dict, report: dict) -> None:
         stats["total_reports"] += 1

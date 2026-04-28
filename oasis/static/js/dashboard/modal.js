@@ -52,7 +52,7 @@ DashboardApp._relativePathUnderReportsHref = function(href) {
         if (!u.pathname.startsWith(prefix)) {
             return null;
         }
-        return decodeURIComponent(u.pathname.slice(prefix.length));
+        return decodeURIComponent(u.pathname.substring(prefix.length));
     } catch (e) {
         return null;
     }
@@ -327,7 +327,7 @@ DashboardApp.openReport = function(path, format, options) {
         // Determine vulnerability type from filename
         const vulnType = fileNameWithoutExt.replace(/_/g, ' ')
             .split(' ')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .map(word => word.charAt(0).toUpperCase() + word.substring(1))
             .join(' ');
         
         modalTitle.textContent = vulnType;
@@ -335,8 +335,15 @@ DashboardApp.openReport = function(path, format, options) {
 
     DashboardApp._resetReportModalScrollPositionsUnlessRestoring(opts);
 
+    const withActiveFilters = function(baseUrl) {
+        if (typeof DashboardApp.urlWithActiveFilters === 'function') {
+            return DashboardApp.urlWithActiveFilters(baseUrl);
+        }
+        return baseUrl;
+    };
+
     const loadMarkdownReportIntoModal = function() {
-        fetch(`/api/report-content/${encodeURIComponent(path)}`)
+        fetch(withActiveFilters(`/api/report-content/${encodeURIComponent(path)}`))
             .then(async (response) => {
                 const data = await response.json();
                 if (!response.ok) {
@@ -373,7 +380,7 @@ DashboardApp.openReport = function(path, format, options) {
             ? DashboardApp.auditReportJsonSiblingPath(path)
             : null;
     if (auditJsonPreviewPath) {
-        fetch(`/api/report-html?path=${encodeURIComponent(auditJsonPreviewPath)}`)
+        fetch(withActiveFilters(`/api/report-html?path=${encodeURIComponent(auditJsonPreviewPath)}`))
             .then(async (response) => {
                 const data = await response.json();
                 if (!response.ok) {
@@ -402,7 +409,7 @@ DashboardApp.openReport = function(path, format, options) {
             .replace('/json/', '/md/')
             .replace(/\.json$/i, '.md');
 
-        fetch(`/api/report-html?path=${encodeURIComponent(path)}`)
+        fetch(withActiveFilters(`/api/report-html?path=${encodeURIComponent(path)}`))
             .then(async (response) => {
                 const data = await response.json();
                 if (!response.ok) {
@@ -426,7 +433,11 @@ DashboardApp.openReport = function(path, format, options) {
             .catch((error) => {
                 console.error('Error fetching canonical HTML preview for JSON path:', error);
                 // Legacy fallback: render markdown companion when canonical JSON HTML preview fails.
-                fetch(`/api/report-content/${encodeURIComponent(markdownPath)}?allow_canonical_json_preview=1`)
+                fetch(
+                    withActiveFilters(
+                        `/api/report-content/${encodeURIComponent(markdownPath)}?allow_canonical_json_preview=1`
+                    )
+                )
                     .then(async (response) => {
                         const data = await response.json();
                         if (!response.ok) {

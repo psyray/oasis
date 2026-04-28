@@ -50,6 +50,13 @@ from .helpers.dashboard import (
     executive_summary_similarity_tier_id,
     preferred_detail_relative_path_and_format,
 )
+from .helpers.executive_summary import (
+    build_executive_summary_html_view_model,
+    EXECUTIVE_DEFAULT_GUIDANCE_ID,
+    EXECUTIVE_DEFAULT_GUIDANCE_MARKDOWN,
+    executive_similarity_highlights_rows,
+    executive_tier_definitions_payload,
+)
 from .helpers.report_jinja_filters import register_report_template_filters
 from .helpers.progress import (
     SCAN_PROGRESS_EXTENDED_KEYS,
@@ -86,6 +93,15 @@ def progress_timestamp_iso() -> str:
         .isoformat(timespec="milliseconds")
         .replace("+00:00", "Z")
     )
+
+
+def _executive_unique_source_files_count(all_results: Dict[str, List[Dict]]) -> int:
+    paths: set[str] = set()
+    for rs in all_results.values():
+        for r in rs:
+            if fp := r.get("file_path"):
+                paths.add(str(fp))
+    return len(paths)
 
 
 def executive_summary_progress_sidecar_path(json_path: Path) -> Path:
@@ -163,7 +179,20 @@ class Report:
 
         # Configure the Jinja2 environment
         template_dir = Path(__file__).parent / 'templates'
-        self.template_env = Environment(loader=FileSystemLoader(searchpath=str(template_dir)))
+        self.template_env = Environment(
+            loader=FileSystemLoader(searchpath=str(template_dir)),
+            autoescape=lambda template_name: bool(
+                template_name
+                and (
+                    template_name.endswith(".html")
+                    or template_name.endswith(".htm")
+                    or template_name.endswith(".xml")
+                    or template_name.endswith(".html.j2")
+                    or template_name.endswith(".htm.j2")
+                    or template_name.endswith(".xml.j2")
+                )
+            ),
+        )
         register_report_template_filters(self.template_env)
 
     def set_progress_notifier(self, notifier) -> None:
@@ -418,27 +447,11 @@ class Report:
         payload: Dict[str, Any],
         preview_context: Optional[Dict[str, Any]] = None,
     ) -> str:
-        vuln_summary = payload.get("vulnerability_summary")
-        tier_counts = payload.get("similarity_tier_counts")
-        safe_payload = {
-            "title": str(payload.get("title") or "Executive Summary"),
-            "generated_at": str(payload.get("generated_at") or "N/A"),
-            "deep_model": str(payload.get("deep_model") or payload.get("model_name") or "N/A"),
-            "small_model": str(payload.get("small_model") or "N/A"),
-            "embedding_model": str(payload.get("embedding_model") or "N/A"),
-            "vulnerability_summary": (
-                sorted(vuln_summary.items(), key=lambda item: str(item[0]).lower())
-                if isinstance(vuln_summary, dict)
-                else []
-            ),
-            "similarity_tier_counts": (
-                sorted(tier_counts.items(), key=lambda item: str(item[0]).lower())
-                if isinstance(tier_counts, dict)
-                else []
-            ),
-            "project": payload.get("project"),
-            "analysis_root": payload.get("analysis_root"),
-        }
+        safe_payload = build_executive_summary_html_view_model(
+            payload,
+            self,
+            preview_context=preview_context,
+        )
         template = self.template_env.get_template("reports/executive_summary_from_json.html.j2")
         return template.render(payload=safe_payload, preview=preview_context or {})
 
@@ -912,9 +925,10 @@ class Report:
         exec_scan_root = (
             Path(self.input_path).resolve() if getattr(self, "input_path", None) else None
         )
+        comparisons_total = sum(len(rs) for rs in all_results.values())
         return {
             "report_type": "executive_summary",
-            "schema_version": 1,
+            "schema_version": 2,
             "model_name": primary_model,
             "deep_model": deep_model,
             "small_model": scan_model_name,
@@ -926,6 +940,15 @@ class Report:
             "similarity_tier_counts": tier_counts,
             "project": getattr(self, "project", None),
             "analysis_root": self._stored_analysis_root_value(exec_scan_root),
+            "overview": {
+                "vulnerability_types_count": len(all_results),
+                "embedding_comparisons_total": comparisons_total,
+                "unique_source_files": _executive_unique_source_files_count(all_results),
+            },
+            "guidance_id": EXECUTIVE_DEFAULT_GUIDANCE_ID,
+            "guidance_markdown": EXECUTIVE_DEFAULT_GUIDANCE_MARKDOWN,
+            "tier_definitions": executive_tier_definitions_payload(),
+            "similarity_highlights": executive_similarity_highlights_rows(similarity_groups),
         }
 
     def _persist_executive_summary_canonical_json(
@@ -1020,10 +1043,12 @@ class Report:
         self._last_summary_model_name = str(model_name or "")
 
         report = self.create_header("Executive Summary", model_name)
+        explain_body = REPORT["EXPLAIN_EXECUTIVE_SUMMARY"].strip()
         report.extend([
             "\n## Overview",
             f"\nAnalyzed {len(all_results)} vulnerability types across the codebase.",
-            REPORT['EXPLAIN_EXECUTIVE_SUMMARY'],
+            "\n## How to read this executive summary",
+            f"\n{explain_body}",
         ])
         deep_model_name, scan_model_name, embedding_model_name = self._get_executive_summary_model_names(
             model_name

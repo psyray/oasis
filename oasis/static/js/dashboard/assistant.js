@@ -306,10 +306,11 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
         container.appendChild(gauge);
     }
 
-    if (result.summary) {
+    const summaryText = typeof result.summary === 'string' ? result.summary.trim() : '';
+    if (summaryText) {
         const narrative = document.createElement('p');
         narrative.className = 'oasis-assistant-validate-narrative';
-        narrative.textContent = result.summary;
+        narrative.textContent = summaryText;
         container.appendChild(narrative);
     }
 
@@ -317,6 +318,8 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
         result.narrative_markdown && String(result.narrative_markdown).trim()
             ? String(result.narrative_markdown).trim()
             : '';
+    const synthesisModelText =
+        typeof result.synthesis_model === 'string' ? String(result.synthesis_model).trim() : '';
     if (llmMd) {
         const llmHead = document.createElement('div');
         llmHead.className = 'oasis-assistant-validate-llm-head';
@@ -324,10 +327,10 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
         llmTitle.className = 'oasis-assistant-validate-llm-title';
         llmTitle.textContent = label('validateLlmNarrativeTitle', 'LLM narrative');
         llmHead.appendChild(llmTitle);
-        if (result.synthesis_model) {
+        if (synthesisModelText) {
             const llmModel = document.createElement('span');
             llmModel.className = 'oasis-assistant-validate-llm-model';
-            llmModel.textContent = String(result.synthesis_model);
+            llmModel.textContent = synthesisModelText;
             llmHead.appendChild(llmModel);
         }
         container.appendChild(llmHead);
@@ -760,14 +763,16 @@ DashboardApp.matchChatModelToOptions = function (reportModel, optionValues) {
     const seed = String(reportModel).trim();
     const opts = Array.isArray(optionValues) ? optionValues.map(String) : [];
     const lower = seed.toLowerCase();
-    const fam = seed.indexOf(':') >= 0 ? seed.slice(0, seed.indexOf(':')).trim() : seed;
+    const seedParts = seed.split(':');
+    const fam = seedParts.length > 1 ? seedParts[0].trim() : seed;
     const famLower = fam.toLowerCase();
 
     const optsLower = opts.map(function (s) {
         return s.toLowerCase();
     });
     const optFamPrefix = opts.map(function (s) {
-        return s.indexOf(':') >= 0 ? s.slice(0, s.indexOf(':')).trim() : s;
+        const parts = s.split(':');
+        return parts.length > 1 ? parts[0].trim() : s;
     });
     const optFamPrefixLower = optFamPrefix.map(function (p) {
         return p.toLowerCase();

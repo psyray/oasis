@@ -1,5 +1,3 @@
-## Unreleased
-
 ## 🚀 [0.6.0] - 2026-04-28
 
 ### Breaking changes
@@ -9,14 +7,20 @@
 
 ### ✨ Added
 
+- 📋 **Executive summary canonical JSON (`schema_version` 2)**: **`overview`** (vulnerability-type count, distinct files touched, total embedding comparisons), embedded **`guidance_markdown`** (how to interpret tiers vs severity), **`tier_definitions`**, and capped **`similarity_highlights`** rows for prioritized review; dashboard/HTML preview surfaces **at-a-glance KPIs**, tier legend, **priority match table** with links to per-type reports, and optional **scan progress** summary so the executive report acts as the central security overview for the run.
 - 📊 **Audit canonical JSON**: `audit_report.json` (`report_type: "audit"`) when `json` is in output formats; Pydantic `AuditReportDocument`; Markdown/HTML generated from the same document so the **Audit Metrics Summary** stays compatible with `audit_metrics_from_markdown_content` / dashboard parsing.
 - 🖥️ **Dashboard**: `/api/reports` reads audit metrics from sibling JSON when available (fallback Markdown); report modal uses `/api/report-html` for `json/audit_report.json` when opening `md/audit_report.md` (canonical JSON preview UX).
 - 📁 **Project-aware reports**: optional **project alias** for organization and improved **project-based** report storage and metadata alongside existing project workflow.
 - 📁 **Dashboard**: filter reports by **project** (`/api/reports?project=…`, stats include `projects` counts).
 - ⚠️ **Dashboard / previews**: reports expose **`codebase_accessible`** and **`assistant_context_warning`** when the scanned tree cannot be resolved or read next to **`security_reports`**; warning banners in list chips, HTML preview (vulnerability / executive / audit), and assistant panel.
 
+### 🐛 Fixed
+
+- 🖼️ **Dashboard HTML preview**: Executive Summary **canonical JSON** (`json/_executive_summary.json`) uses the same compact report-modal spine as other previews: **`executive-preview`** wrapper, **table of contents**, section anchors, and **return-to-TOC** links so **Chart.js** severity rollup and styling match the markdown-augmented path.
+
 ### ⚡ Changed
 
+- 📊 **`/api/stats`**: The per-tier sidebar counts are exposed as **`severity_finding_totals`** (finding counts per tier), replacing the former **`severities`** key — same semantics as before the label fix, clearer name. Executive JSON **`similarity_highlights`** rows include optional **`tier_description`** (embedding tier range text) for UI/tooling without another schema bump.
 - 🧭 **Audit wiring**: single **artifact stem** (`audit_report`) and **`md` → `json` sibling** rules shared by indexing (`json_sibling_for_format_artifact`) and the dashboard (`audit-report-paths.js`); audit HTML preview uses **Jinja `audit_decimal`** for scores/thresholds instead of inline format strings.
 - 📎 **Canonical JSON `analysis_root`**: new reports store the scanned project root **relative to the `security_reports/` directory**; legacy **absolute** paths remain supported via resolution heuristics. Helpers live in **`oasis.helpers.analysis_root_path`** (shared by assistant RAG cache root and **`scan_root`** candidate resolution).
 

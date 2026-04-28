@@ -17,7 +17,7 @@ from oasis.helpers.dashboard import (
 )
 from oasis.helpers.dashboard.json_sibling import json_sibling_for_format_artifact
 from oasis.helpers.dashboard.severity_filter import (
-    merge_severity_histogram_for_report,
+    merge_severity_finding_totals_for_report,
     parse_severity_filter_param,
     report_passes_dashboard_severity_filter,
 )
@@ -75,9 +75,9 @@ class TestHelpersDashboard(unittest.TestCase):
         exec_row = {"format": "json", "vulnerability_type": "Executive Summary", "stats": {}}
         self.assertTrue(report_passes_dashboard_severity_filter(exec_row, ("medium",)))
 
-    def test_merge_severity_histogram_for_report(self):
+    def test_merge_severity_finding_totals_for_report(self):
         hist = {"critical": 0, "high": 0, "medium": 0, "low": 0}
-        merge_severity_histogram_for_report(
+        merge_severity_finding_totals_for_report(
             hist,
             {
                 "format": "json",
@@ -85,7 +85,7 @@ class TestHelpersDashboard(unittest.TestCase):
                 "stats": {"high_risk": 0, "medium_risk": 2, "low_risk": 0, "critical_risk": 0},
             },
         )
-        self.assertEqual(hist["medium"], 1)
+        self.assertEqual(hist["medium"], 2)
         self.assertEqual(hist["high"], 0)
 
     def test_preferred_detail_prefers_existing_json_over_pdf(self):
@@ -127,6 +127,44 @@ class TestHelpersDashboard(unittest.TestCase):
         rel, fmt = preferred_detail_relative_path_and_format(report, stem)
         self.assertEqual(fmt, "json")
         self.assertTrue(rel.endswith("/json/sql_injection.json"))
+
+    def test_preferred_detail_raises_when_output_base_dir_missing(self):
+        from types import SimpleNamespace
+
+        report = SimpleNamespace(
+            current_model="embed_model",
+            report_dirs={},
+        )
+        with self.assertRaises(ValueError):
+            preferred_detail_relative_path_and_format(report, "sql_injection")
+
+    def test_preferred_detail_falls_back_from_current_report_path_when_output_base_missing(self):
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        from oasis.export.filenames import artifact_filename
+
+        with tempfile.TemporaryDirectory() as tmp:
+            sec = Path(tmp) / "security_reports"
+            model_dir = sec / "proj" / "20260101_120000" / "embed_model"
+            json_dir = model_dir / "json"
+            json_dir.mkdir(parents=True)
+            stem = "sql_injection"
+            detail = json_dir / artifact_filename(stem, "json")
+            detail.write_text("{}", encoding="utf-8")
+            current = json_dir / "_executive_summary.json"
+            current.write_text("{}", encoding="utf-8")
+
+            report = SimpleNamespace(current_model="embed_model", report_dirs={})
+            rel, fmt = preferred_detail_relative_path_and_format(
+                report,
+                stem,
+                security_root=sec,
+                current_report_path=current,
+            )
+            self.assertEqual(fmt, "json")
+            self.assertTrue(rel.endswith("/json/sql_injection.json"))
 
     def test_rewrite_preview_links_relative_pdf_to_reports(self):
         import tempfile

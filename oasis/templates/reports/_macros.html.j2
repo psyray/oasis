@@ -11,8 +11,22 @@
 {% endif %}
 {%- endmacro %}
 
+{% macro render_active_filter_guard(preview) -%}
+{% if preview and preview.get('active_severity_filter') %}
+<div class="report-filter-guard" role="status" aria-live="polite">
+  <span class="report-filter-guard__icon" aria-hidden="true">🎯</span>
+  <span class="report-filter-guard__text">
+    Active severity filter:
+    <strong>{{ preview.get('active_severity_filter') | join(', ') }}</strong>
+    — findings shown below are filtered accordingly.
+  </span>
+</div>
+{% endif %}
+{%- endmacro %}
+
 {% macro render_header(document, preview=None) -%}
 {{ render_codebase_warning_banner(preview) }}
+{{ render_active_filter_guard(preview) }}
 <h1>{{ document.title }}</h1>
 <p><strong>Date:</strong> {{ document.generated_at }} &mdash; <strong>Model:</strong> {{ document.model_name }}</p>
 <p><strong>Vulnerability:</strong> {{ document.vulnerability_name }}</p>
@@ -100,47 +114,146 @@
 
 {% macro render_chunk_notes(chunk, file_index, chunk_index) -%}
 <h4>Chunk {{ file_index }}.{{ chunk_index }} notes</h4>
-<pre>{{ chunk.notes }}</pre>
+<pre>{{ chunk.notes | e }}</pre>
 {%- endmacro %}
 
 {% macro render_finding(finding, file_index, finding_index) -%}
 <details class="report-finding-details">
-<summary class="report-finding-summary">Finding {{ file_index }}.{{ finding_index }}: {{ finding.title }} <span class="severity">({{ finding.severity }})</span></summary>
+{% set sev_raw = (finding.severity | default('unknown', true) | string | lower) %}
+{% set sev = sev_raw if sev_raw in ['critical', 'high', 'medium', 'low'] else 'unknown' %}
+<summary class="report-finding-summary">
+  Finding {{ file_index }}.{{ finding_index }}: {{ finding.title | e }}
+  <span class="severity">
+    <span class="report-severity-pill report-severity-pill--{{ sev }}" aria-hidden="true"></span>
+    ({{ finding.severity | e }})
+  </span>
+</summary>
 <div class="report-finding-body">
 {% if finding.vulnerable_code %}
 <h5>Vulnerable code</h5>
-<pre><code>{{ finding.vulnerable_code }}</code></pre>
+<pre><code>{{ finding.vulnerable_code | e }}</code></pre>
 {% endif %}
 <h5>Explanation</h5>
-<p>{{ finding.explanation }}</p>
-{% if finding.impact %}<h5>Impact</h5><p>{{ finding.impact }}</p>{% endif %}
-{% if finding.entry_point %}<h5>Entry point</h5><p>{{ finding.entry_point }}</p>{% endif %}
+<p>{{ finding.explanation | e }}</p>
+{% if finding.impact %}<h5>Impact</h5><p>{{ finding.impact | e }}</p>{% endif %}
+{% if finding.entry_point %}<h5>Entry point</h5><p>{{ finding.entry_point | e }}</p>{% endif %}
 {% if finding.execution_path_diagram %}
 <h5>Execution path</h5>
-<pre><code>{{ finding.execution_path_diagram }}</code></pre>
+<pre><code>{{ finding.execution_path_diagram | e }}</code></pre>
 {% endif %}
-{% if finding.http_methods %}<h5>HTTP methods</h5><p>{{ finding.http_methods | join(', ') }}</p>{% endif %}
-{% if finding.manipulable_parameters %}<h5>Parameters</h5><p>{{ finding.manipulable_parameters | join(', ') }}</p>{% endif %}
+{% if finding.http_methods %}<h5>HTTP methods</h5><p>{{ finding.http_methods | map('e') | join(', ') }}</p>{% endif %}
+{% if finding.manipulable_parameters %}<h5>Parameters</h5><p>{{ finding.manipulable_parameters | map('e') | join(', ') }}</p>{% endif %}
 {% if finding.exploitation_steps %}
 <h5>Exploitation steps</h5>
-<ul>{% for step in finding.exploitation_steps %}<li>{{ step }}</li>{% endfor %}</ul>
+<ul>{% for step in finding.exploitation_steps %}<li>{{ step | e }}</li>{% endfor %}</ul>
 {% endif %}
 {% if finding.example_payloads %}
 <h5>Example payloads</h5>
-<ul>{% for payload in finding.example_payloads %}<li><code>{{ payload }}</code></li>{% endfor %}</ul>
+<ul>{% for payload in finding.example_payloads %}<li><code>{{ payload | e }}</code></li>{% endfor %}</ul>
 {% endif %}
 {% if finding.http_raw_requests %}
 <h5>HTTP raw requests (Burp / ZAP)</h5>
 {% for raw in finding.http_raw_requests %}
-<pre class="http-raw"><code>{{ raw }}</code></pre>
+<pre class="http-raw"><code>{{ raw | e }}</code></pre>
 {% endfor %}
 {% endif %}
-{% if finding.exploitation_conditions %}<h5>Conditions</h5><p>{{ finding.exploitation_conditions }}</p>{% endif %}
-{% if finding.remediation %}<h5>Remediation</h5><p>{{ finding.remediation }}</p>{% endif %}
+{% if finding.exploitation_conditions %}<h5>Conditions</h5><p>{{ finding.exploitation_conditions | e }}</p>{% endif %}
+{% if finding.remediation %}<h5>Remediation</h5><p>{{ finding.remediation | e }}</p>{% endif %}
 {% if finding.secure_code_example %}
 <h5>Secure example</h5>
-<pre><code>{{ finding.secure_code_example }}</code></pre>
+<pre><code>{{ finding.secure_code_example | e }}</code></pre>
 {% endif %}
 </div>
 </details>
+{%- endmacro %}
+
+{# Executive summary (reports/executive_summary_from_json.html.j2) — reusable blocks for parity with other report views #}
+
+{% macro render_executive_guidance_html(guidance_html) -%}
+<section id="exec-guidance" class="report-executive-section report-executive-guidance" aria-labelledby="exec-guidance-heading">
+  <h2 id="exec-guidance-heading">How to read this executive summary</h2>
+  <div class="report-executive-guidance-body">{{ guidance_html | safe }}</div>
+  {{ render_return_to_toc() }}
+</section>
+{%- endmacro %}
+
+{% macro render_executive_kpi_grid(overview) -%}
+<section id="exec-situation" class="report-executive-section" aria-labelledby="exec-situation-heading">
+  <h2 id="exec-situation-heading">Security posture at a glance</h2>
+  <dl class="report-executive-kpi-grid">
+    <div class="report-executive-kpi">
+      <dt>Vulnerability types analyzed</dt>
+      <dd>{{ overview.vulnerability_types_count | default(0, true) }}</dd>
+    </div>
+    <div class="report-executive-kpi">
+      <dt>Distinct source files (embedded scan)</dt>
+      <dd>{% if overview.unique_source_files is defined and overview.unique_source_files is not none %}{{ overview.unique_source_files }}{% else %}—{% endif %}</dd>
+    </div>
+    <div class="report-executive-kpi">
+      <dt>Embedding comparisons (file × type)</dt>
+      <dd>{% if overview.embedding_comparisons_total is defined and overview.embedding_comparisons_total is not none %}{{ overview.embedding_comparisons_total }}{% else %}—{% endif %}</dd>
+    </div>
+  </dl>
+  {{ render_return_to_toc() }}
+</section>
+{%- endmacro %}
+
+{% macro render_executive_tier_definitions_table(tier_definitions) -%}
+<section id="exec-tier-defs" class="report-executive-section" aria-labelledby="exec-tier-defs-heading">
+  <h2 id="exec-tier-defs-heading">Embedding similarity tiers</h2>
+  <p class="report-executive-note">Tiers describe cosine similarity between vulnerability prototypes and source chunks — a <strong>retrieval</strong> signal. They are not CVE severity; always open the vulnerability-type report for structured findings.</p>
+  {% if tier_definitions %}
+  <table class="summary-table">
+    <thead><tr><th>Tier</th><th>Definition</th></tr></thead>
+    <tbody>
+      {% for t in tier_definitions %}
+      <tr><td><strong>{{ t.name | e }}</strong> (<code>{{ t.id | e }}</code>)</td><td>{{ t.description | e }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="report-executive-note">No embedding similarity tiers are defined for this report.</p>
+  {% endif %}
+  {{ render_return_to_toc() }}
+</section>
+{%- endmacro %}
+
+{% macro render_executive_similarity_highlights_table(similarity_rows) -%}
+<section id="exec-highlights" class="report-executive-section" aria-labelledby="exec-highlights-heading">
+  <h2 id="exec-highlights-heading">Priority embedding matches</h2>
+  <p class="report-executive-note">Highest-similarity rows per tier (caps apply). Use <strong>Detail report</strong> for full analysis, severities, and remediation.</p>
+  {% if similarity_rows %}
+  <table class="summary-table">
+    <thead>
+      <tr><th>Tier</th><th>Vulnerability type</th><th>File</th><th>Similarity</th><th>Detail report</th></tr>
+    </thead>
+    <tbody>
+      {% for row in similarity_rows %}
+      <tr>
+        <td><span {% if row.tier_description %}title="{{ row.tier_description | e }}"{% endif %}>{{ row.tier_name | e }}</span></td>
+        <td>{{ row.vuln_type | e }}</td>
+        <td><code>{{ row.file_path | e }}</code></td>
+        <td>{{ "%.4f"|format(row.similarity_score|float) }}</td>
+        <td>{% if row.detail_href %}<a href="{{ row.detail_href | e }}">Open report</a>{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No embedding highlights recorded for this summary.</p>
+  {% endif %}
+  {{ render_return_to_toc() }}
+</section>
+{%- endmacro %}
+
+{% macro render_executive_scan_status(progress_summary) -%}
+<section id="exec-scan-status" class="report-executive-section" aria-labelledby="exec-scan-status-heading">
+  <h2 id="exec-scan-status-heading">Scan status</h2>
+  <p>
+    <strong>{{ progress_summary.status_label | e }}</strong>
+    — vulnerabilities completed: {{ progress_summary.completed }}/{{ progress_summary.total }}
+    {% if progress_summary.is_partial %}<span class="report-executive-partial">(partial run)</span>{% endif %}
+  </p>
+  {{ render_return_to_toc() }}
+</section>
 {%- endmacro %}
