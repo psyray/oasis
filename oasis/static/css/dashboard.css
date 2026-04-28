@@ -102,6 +102,97 @@ body {
     line-height: 1;
 }
 
+.header-link-icon {
+    line-height: 1;
+}
+
+.visually-hidden {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    clip-path: inset(50%) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
+@media (max-width: 575.98px) {
+    .header {
+        padding: 10px 12px;
+        gap: 8px;
+    }
+
+    .logo-container {
+        min-width: 0;
+        gap: 8px;
+    }
+
+    .logo-circle {
+        width: 36px;
+        height: 36px;
+        margin-right: 0;
+    }
+
+    .oasis-logo-img {
+        width: 30px;
+        height: 30px;
+    }
+
+    .title {
+        font-size: 1rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 40vw;
+    }
+
+    .header-actions {
+        gap: 8px;
+        flex-shrink: 0;
+    }
+
+    .header-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 6px 8px;
+        font-size: 1rem;
+    }
+
+    /*
+     * Legacy header markup (<a class="header-link">🔄 Reload</a> without label spans):
+     * hide inline text and show a single emoji via ::before. Structured markup uses
+     * .header-link-icon / .header-link-label instead (:has() excludes those links).
+     */
+    .header-actions > a.header-link:not(:has(.header-link-icon))[href='/api/stats'],
+    .header-actions > a.header-link:not(:has(.header-link-icon))[href='/logout'] {
+        font-size: 0 !important;
+        line-height: 1 !important;
+        letter-spacing: 0 !important;
+        color: transparent;
+    }
+
+    .header-actions > a.header-link:not(:has(.header-link-icon))[href='/api/stats']::before,
+    .header-actions > a.header-link:not(:has(.header-link-icon))[href='/logout']::before {
+        font-size: 1rem;
+        line-height: 1;
+        color: var(--theme-header-link-text);
+        display: inline-block;
+    }
+
+    .header-actions > a.header-link:not(:has(.header-link-icon))[href='/api/stats']::before {
+        content: '🔄';
+    }
+
+    .header-actions > a.header-link:not(:has(.header-link-icon))[href='/logout']::before {
+        content: '🔑';
+    }
+
+}
+
 .logo-container {
     display: flex;
     align-items: center;
@@ -1729,26 +1820,38 @@ body.report-modal-scroll-locked .footer {
     box-shadow: 0 2px 3px rgba(0,0,0,0.1);
 }
 
-/* Style for the toggle filters button */
+/* Style for the toggle filters button (colors aligned with .btn-primary) */
 .toggle-filters-btn {
     display: none;
     position: fixed;
     top: 70px;
     right: 20px;
     z-index: 100;
-    background-color: var(--turquoise);
+    background-color: var(--light-turquoise);
     color: white;
     border: none;
     border-radius: 4px;
     padding: 8px 12px;
     font-size: 14px;
+    font-weight: bold;
     cursor: pointer;
     box-shadow: 0 2px 5px rgba(0,0,0,0.2);
     transition: all 0.3s ease;
 }
 
 .toggle-filters-btn:hover {
-    background-color: var(--dark-blue);
+    background-color: var(--turquoise);
+    color: white;
+}
+
+[data-theme='dark'] .toggle-filters-btn {
+    background-color: #35506a;
+    color: white;
+}
+
+[data-theme='dark'] .toggle-filters-btn:hover {
+    background-color: #4a6b8c;
+    color: white;
 }
 
 .filter-icon {

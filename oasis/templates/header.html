@@ -14,11 +14,17 @@
             title="Toggle dark mode"
         >
             <span class="theme-toggle-icon" aria-hidden="true">🌙</span>
-            <span class="theme-toggle-label">Dark</span>
+            <span class="theme-toggle-label visually-hidden">Dark</span>
         </button>
         {% if session.get('logged_in') %}
-        <a href="{{ url_for('get_stats') }}" class="header-link">🔄 Reload</a>
-        <a href="{{ url_for('logout') }}" class="header-link">🔑 Logout</a>
+        <a href="{{ url_for('get_stats') }}" class="header-link" title="Reload">
+            <span class="header-link-icon" aria-hidden="true">🔄</span>
+            <span class="header-link-label visually-hidden">Reload</span>
+        </a>
+        <a href="{{ url_for('logout') }}" class="header-link" title="Logout">
+            <span class="header-link-icon" aria-hidden="true">🔑</span>
+            <span class="header-link-label visually-hidden">Logout</span>
+        </a>
         {% endif %}
     </div>
 </header> 
