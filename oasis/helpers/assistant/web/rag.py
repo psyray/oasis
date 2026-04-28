@@ -11,6 +11,7 @@ import pickle
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from oasis.helpers.analysis_root_path import resolve_assistant_cache_root
 from oasis.tools import calculate_similarity, create_cache_dir, logger, sanitize_name
 
 RAGStats = Dict[str, int]
@@ -35,39 +36,19 @@ def _finite_embedding_vector(seq: Sequence[Any]) -> Optional[list[float]]:
         sq_sum += v * v
     if not math.isfinite(sq_sum) or sq_sum <= 0.0:
         return None
-    if math.sqrt(sq_sum) > _MAX_L2_NORM:
-        return None
-    return out
+    return None if math.sqrt(sq_sum) > _MAX_L2_NORM else out
 
 
-def embedding_cache_file_path(input_path: Path | str, embed_model: str) -> Path:
+def embedding_cache_file_path(
+    input_path: Path | str,
+    embed_model: str,
+    project_name: str | None = None,
+) -> Path:
     """Same layout as EmbeddingManager._setup_cache."""
     input_path = Path(input_path).resolve()
-    cache_dir = create_cache_dir(input_path)
+    cache_dir = create_cache_dir(input_path, project_name=project_name)
     path_id = hashlib.sha1(str(input_path).encode("utf-8")).hexdigest()[:16]
     return cache_dir / f"{path_id}_{sanitize_name(embed_model)}.cache"
-
-
-def resolve_assistant_cache_root(
-    report_payload: Optional[Dict[str, Any]],
-    fallback_root: Path | str,
-) -> Path:
-    """Return a local project root for assistant embedding cache lookup.
-
-    ``analysis_root`` from report payload can be stale when reports are moved
-    across machines. We only trust it when it resolves to an existing local
-    directory; otherwise we fallback to the current server root.
-    """
-    fallback = Path(fallback_root).resolve()
-    if not isinstance(report_payload, dict):
-        return fallback
-    raw = report_payload.get("analysis_root")
-    if not isinstance(raw, str) or not raw.strip():
-        return fallback
-    candidate = Path(raw.strip()).expanduser().resolve(strict=False)
-    if candidate.exists() and candidate.is_dir():
-        return candidate
-    return fallback
 
 
 def load_embedding_code_base(cache_path: Path) -> Optional[Dict[str, Any]]:
@@ -99,10 +80,14 @@ def _match_cache_key(cache_keys: Sequence[str], report_path: str) -> Optional[st
         ):
             return key
     base = Path(norm).name
-    for key in cache_keys:
-        if Path(_normalize_report_path_key(key)).name == base:
-            return key
-    return None
+    return next(
+        (
+            key
+            for key in cache_keys
+            if Path(_normalize_report_path_key(key)).name == base
+        ),
+        None,
+    )
 
 
 def _merged_unique_paths(
@@ -119,6 +104,113 @@ def _merged_unique_paths(
                     seen.add(key)
                     ordered.append(key)
     return ordered
+
+
+def _publish_rag_stats(stats_out: Optional[RAGStats], stats: RAGStats) -> None:
+    """Copy ``stats`` into optional caller-owned dict for observability."""
+    if stats_out is not None:
+        stats_out.clear()
+        stats_out.update(stats)
+
+
+def _rag_candidate_keys(
+    code_base: Dict[str, Any],
+    *,
+    expand_project_wide: bool,
+    report_file_paths: Sequence[str],
+    extra_report_file_paths: Optional[Sequence[str]],
+) -> List[str]:
+    if expand_project_wide:
+        return list(code_base.keys())
+    cache_keys = list(code_base.keys())
+    matched: List[str] = []
+    for fp in _merged_unique_paths(report_file_paths, extra_report_file_paths):
+        if key := _match_cache_key(cache_keys, fp):
+            matched.append(key)
+    return matched
+
+
+def _score_rag_candidates(
+    code_base: Dict[str, Any],
+    candidates: Sequence[str],
+    q_vec: list[float],
+    stats: RAGStats,
+) -> List[Tuple[float, str]]:
+    scored: List[Tuple[float, str]] = []
+    for key in candidates:
+        entry = code_base.get(key)
+        if not isinstance(entry, dict):
+            continue
+        emb = entry.get("embedding")
+        if not isinstance(emb, list) or not emb:
+            stats["skipped_invalid_embedding"] += 1
+            continue
+        emb_vec = _finite_embedding_vector(emb)
+        if emb_vec is None:
+            stats["skipped_invalid_embedding"] += 1
+            continue
+        if len(emb_vec) != len(q_vec):
+            stats["skipped_dimension_mismatch"] += 1
+            continue
+        try:
+            sim = calculate_similarity(q_vec, emb_vec)
+        except Exception:
+            stats["skipped_similarity_error"] += 1
+            continue
+        if not math.isfinite(sim):
+            stats["skipped_similarity_error"] += 1
+            continue
+        scored.append((sim, key))
+    return scored
+
+
+def _maybe_warn_rag_dimension_mismatch(
+    scored: Sequence[Tuple[float, str]],
+    candidates: Sequence[str],
+    stats: RAGStats,
+    *,
+    cache_path: Optional[Path],
+    embed_model: str,
+) -> None:
+    if (
+        scored
+        or not candidates
+        or stats["skipped_dimension_mismatch"] <= 0
+        or stats["query_dimension"] <= 0
+    ):
+        return
+    logger.warning(
+        "RAG skipped every cached embedding (%s dimension mismatches vs query_dim=%s); "
+        "embedding cache likely built with a different model or schema.",
+        stats["skipped_dimension_mismatch"],
+        stats["query_dimension"],
+        extra={
+            "cache_path": str(cache_path) if cache_path else "",
+            "embed_model": embed_model or "",
+        },
+    )
+
+
+def _format_rag_snippet_blocks(
+    code_base: Dict[str, Any],
+    scored_sorted: Sequence[Tuple[float, str]],
+    *,
+    top_k: int,
+    max_chars_per_file: int,
+) -> List[str]:
+    parts: List[str] = []
+    for sim, key in scored_sorted[: max(1, top_k)]:
+        entry = code_base.get(key)
+        if not isinstance(entry, dict):
+            continue
+        content = entry.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        body = content.strip()
+        if len(body) > max_chars_per_file:
+            body = body[: max_chars_per_file] + "\n…(truncated)…"
+        parts.append(f"### File: {key} (similarity {sim:.3f})\n```\n{body}\n```")
+    return parts
 
 
 def retrieve_relevant_snippets(
@@ -150,97 +242,45 @@ def retrieve_relevant_snippets(
     }
 
     if not code_base:
-        if stats_out is not None:
-            stats_out.clear()
-            stats_out.update(stats)
+        _publish_rag_stats(stats_out, stats)
         return ""
     q_vec = _finite_embedding_vector(query_embedding)
     if q_vec is None:
-        if stats_out is not None:
-            stats_out.clear()
-            stats_out.update(stats)
+        _publish_rag_stats(stats_out, stats)
         return ""
     stats["query_dimension"] = len(q_vec)
 
-    candidates: List[str] = []
-    if expand_project_wide:
-        candidates = list(code_base.keys())
-    else:
-        cache_keys = list(code_base.keys())
-        for fp in _merged_unique_paths(report_file_paths, extra_report_file_paths):
-            mk = _match_cache_key(cache_keys, fp)
-            if mk:
-                candidates.append(mk)
-
-    scored: List[Tuple[float, str]] = []
+    candidates = _rag_candidate_keys(
+        code_base,
+        expand_project_wide=expand_project_wide,
+        report_file_paths=report_file_paths,
+        extra_report_file_paths=extra_report_file_paths,
+    )
     stats["candidates_considered"] = len(candidates)
-    for key in candidates:
-        entry = code_base.get(key)
-        if not isinstance(entry, dict):
-            continue
-        emb = entry.get("embedding")
-        if not isinstance(emb, list) or not emb:
-            stats["skipped_invalid_embedding"] += 1
-            continue
-        emb_vec = _finite_embedding_vector(emb)
-        if emb_vec is None:
-            stats["skipped_invalid_embedding"] += 1
-            continue
-        if len(emb_vec) != len(q_vec):
-            stats["skipped_dimension_mismatch"] += 1
-            continue
-        try:
-            sim = calculate_similarity(q_vec, emb_vec)
-        except Exception:
-            stats["skipped_similarity_error"] += 1
-            continue
-        if not math.isfinite(sim):
-            stats["skipped_similarity_error"] += 1
-            continue
-        scored.append((sim, key))
 
-    if (
-        not scored
-        and candidates
-        and stats["skipped_dimension_mismatch"] > 0
-        and stats["query_dimension"] > 0
-    ):
-        logger.warning(
-            "RAG skipped every cached embedding (%s dimension mismatches vs query_dim=%s); "
-            "embedding cache likely built with a different model or schema.",
-            stats["skipped_dimension_mismatch"],
-            stats["query_dimension"],
-            extra={
-                "cache_path": str(cache_path) if cache_path else "",
-                "embed_model": embed_model or "",
-            },
-        )
+    scored = _score_rag_candidates(code_base, candidates, q_vec, stats)
+    _maybe_warn_rag_dimension_mismatch(
+        scored,
+        candidates,
+        stats,
+        cache_path=cache_path,
+        embed_model=embed_model,
+    )
 
     if not scored:
-        if stats_out is not None:
-            stats_out.clear()
-            stats_out.update(stats)
+        _publish_rag_stats(stats_out, stats)
         return ""
 
     scored.sort(key=lambda t: t[0], reverse=True)
-    parts: List[str] = []
-    for sim, key in scored[: max(1, top_k)]:
-        entry = code_base.get(key)
-        if not isinstance(entry, dict):
-            continue
-        content = entry.get("content")
-        if not isinstance(content, str) or not content.strip():
-            continue
-        body = content.strip()
-        if len(body) > max_chars_per_file:
-            body = body[: max_chars_per_file] + "\n…(truncated)…"
-        parts.append(f"### File: {key} (similarity {sim:.3f})\n```\n{body}\n```")
     stats["scored_count"] = len(scored)
-    out = "\n\n".join(parts)
-    if stats_out is not None:
-        stats_out.clear()
-        stats_out.update(stats)
-    return out
+    parts = _format_rag_snippet_blocks(
+        code_base,
+        scored,
+        top_k=top_k,
+        max_chars_per_file=max_chars_per_file,
+    )
+    _publish_rag_stats(stats_out, stats)
+    return "\n\n".join(parts)
 
 
 def json_finding_slice(
@@ -252,6 +292,8 @@ def json_finding_slice(
     max_chars: int = 12000,
 ) -> str:
     """Extract a compact JSON excerpt for assistant context."""
+    cap: int = max(0, max_chars)
+
     try:
         files = payload.get("files") or []
         if file_index is None or file_index < 0 or file_index >= len(files):
@@ -265,11 +307,8 @@ def json_finding_slice(
         if finding_index is None or finding_index < 0 or finding_index >= len(findings):
             return ""
         raw = json.dumps(findings[finding_index], indent=2)
-        cap = max(0, int(max_chars))
         if cap <= 0:
             return ""
-        if len(raw) > cap:
-            return raw[:cap] + "\n…(truncated)…"
-        return raw
+        return raw[:cap] + "\n…(truncated)…" if len(raw) > cap else raw
     except (TypeError, KeyError, ValueError):
         return ""

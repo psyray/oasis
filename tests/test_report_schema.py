@@ -19,6 +19,7 @@ from oasis.enums import PhaseRowStatus
 from oasis.helpers import adaptive_subphases_payload, standard_scan_phases, standard_scan_phases_vuln_types
 from oasis.helpers.dashboard import (
     EXEC_SUMMARY_EMBEDDING_TIER_ORDER,
+    audit_metrics_from_audit_payload,
     audit_metrics_from_markdown_content,
     executive_summary_similarity_tier_id,
     iter_audit_metrics_table_rows,
@@ -61,6 +62,30 @@ except ModuleNotFoundError:
     VulnerabilityReportDocument = _analysis.VulnerabilityReportDocument
     build_dashboard_stats = _analysis.build_dashboard_stats
     chunk_analysis_to_markdown = _analysis.chunk_analysis_to_markdown
+
+try:
+    from oasis.schemas.audit_report import (
+        AuditMatchResult,
+        AuditMetrics,
+        AuditPerVulnStatistics,
+        AuditReportDocument,
+        AuditThresholdRow,
+        AuditVulnerabilitySection,
+    )
+except ModuleNotFoundError:
+    _spec_ar = importlib.util.spec_from_file_location(
+        "oasis_schemas_audit_report",
+        ROOT / "oasis" / "schemas" / "audit_report.py",
+    )
+    _audit_m = importlib.util.module_from_spec(_spec_ar)
+    assert _spec_ar and _spec_ar.loader is not None
+    _spec_ar.loader.exec_module(_audit_m)
+    AuditMatchResult = _audit_m.AuditMatchResult
+    AuditMetrics = _audit_m.AuditMetrics
+    AuditPerVulnStatistics = _audit_m.AuditPerVulnStatistics
+    AuditReportDocument = _audit_m.AuditReportDocument
+    AuditThresholdRow = _audit_m.AuditThresholdRow
+    AuditVulnerabilitySection = _audit_m.AuditVulnerabilitySection
 
 try:
     from oasis.analyze import SecurityAnalyzer
@@ -295,6 +320,150 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(restored.schema_version, doc.schema_version)
         self.assertEqual(restored.stats.files_analyzed, doc.stats.files_analyzed)
 
+    def test_audit_report_document_roundtrip(self):
+        doc = AuditReportDocument(
+            generated_at="2026-01-01 12:00:00",
+            oasis_version="0.5.0",
+            embedding_model="test-embed",
+            total_files_analyzed=2,
+            explain_analysis="\n## About\nSample explain.\n",
+            audit_metrics=AuditMetrics(
+                count=2,
+                has_scores=True,
+                total_items=2,
+                scored_items=2,
+                avg_score=0.77,
+                median_score=0.76,
+                max_score=0.79,
+                min_score=0.75,
+                high=1,
+                medium=1,
+                low=0,
+            ),
+            vulnerability_statistics=[
+                {
+                    "name": "Total",
+                    "total": 2,
+                    "high": 1,
+                    "medium": 1,
+                    "low": 0,
+                    "is_total": True,
+                }
+            ],
+            analyses={
+                "SQL Injection": AuditVulnerabilitySection(
+                    threshold_analysis=[
+                        AuditThresholdRow(threshold=0.5, matching_items=2, percentage=100.0)
+                    ],
+                    results=[
+                        AuditMatchResult(similarity_score=0.79, item_id="a.py"),
+                        AuditMatchResult(similarity_score=0.75, item_id="b.py"),
+                    ],
+                    statistics=AuditPerVulnStatistics(
+                        avg_score=0.77,
+                        median_score=0.77,
+                        max_score=0.79,
+                        min_score=0.75,
+                    ),
+                )
+            },
+        )
+        raw = doc.model_dump_json()
+        restored = AuditReportDocument.model_validate_json(raw)
+        self.assertEqual(restored.report_type, "audit")
+        self.assertEqual(restored.analyses["SQL Injection"].statistics.max_score, 0.79)
+
+    def test_audit_metrics_from_audit_payload_maps_dashboard_keys(self):
+        payload = {
+            "report_type": "audit",
+            "audit_metrics": {
+                "count": 4,
+                "avg_score": 0.8125,
+                "median_score": 0.8,
+                "high": 2,
+                "medium": 1,
+                "low": 1,
+                "total_items": 10,
+                "scored_items": 4,
+                "has_scores": True,
+            },
+        }
+        metrics = audit_metrics_from_audit_payload(payload)
+        self.assertEqual(metrics["count"], 4)
+        self.assertAlmostEqual(metrics["avg_score"], 0.8125)
+        self.assertEqual(metrics["total_items"], 10)
+        self.assertNotIn("has_scores", metrics)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_audit_metrics_markdown_matches_json_metrics_overlapping_keys(self):
+        """Markdown table parsing and canonical JSON expose the same numeric dashboard keys."""
+
+        class _FakeEmbeddingManager:
+            embedding_model = "emb-test"
+
+            def get_embeddings_info(self):
+                return {"total_files": 4}
+
+        analyzer_results = {
+            "vulnerability_statistics": [
+                {
+                    "name": "Total",
+                    "total": 10,
+                    "high": 3,
+                    "medium": 4,
+                    "low": 3,
+                    "is_total": True,
+                },
+            ],
+            "SQL Injection": {
+                "threshold_analysis": [
+                    {"threshold": 0.5, "matching_items": 2, "percentage": 40.0}
+                ],
+                "results": [
+                    {"similarity_score": 0.91, "item_id": "x.py"},
+                    {"similarity_score": 0.72, "item_id": "y.py"},
+                ],
+                "statistics": {
+                    "avg_score": 0.815,
+                    "median_score": 0.815,
+                    "max_score": 0.91,
+                    "min_score": 0.72,
+                },
+            },
+        }
+
+        report = Report(input_path=".", output_format=["md", "json"])
+        doc = report._build_audit_document(analyzer_results, _FakeEmbeddingManager())
+        md_text = "\n".join(report._audit_report_markdown_lines_from_document(doc))
+        from_md = audit_metrics_from_markdown_content(md_text)
+        from_json = audit_metrics_from_audit_payload(doc.model_dump(mode="json"))
+        overlap = sorted(set(from_md.keys()) & set(from_json.keys()))
+        self.assertTrue(overlap)
+        for key in overlap:
+            self.assertAlmostEqual(float(from_md[key]), float(from_json[key]), places=5)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_render_report_html_from_json_payload_supports_audit(self):
+        report = Report(input_path=".", output_format=["md"])
+        payload = {
+            "report_type": "audit",
+            "schema_version": 1,
+            "title": "Embeddings Distribution Analysis Report",
+            "generated_at": "2026-04-28 12:00:00",
+            "language": "en",
+            "project": None,
+            "oasis_version": "0.5.0",
+            "embedding_model": "nomic",
+            "total_files_analyzed": 1,
+            "explain_analysis": "## About\nTest.",
+            "audit_metrics": {"count": 1, "avg_score": 0.5, "high": 0, "medium": 1, "low": 0},
+            "vulnerability_statistics": [],
+            "analyses": {},
+        }
+        html = report.render_report_html_from_json_payload(payload)
+        self.assertIn("Embeddings Distribution Analysis Report", html)
+        self.assertIn("nomic", html)
+
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_render_report_html_from_json_payload_supports_executive_summary(self):
         report = Report(input_path=".", output_format=["md"])
@@ -316,6 +485,159 @@ class TestReportSchema(unittest.TestCase):
         self.assertIn("deep-model", html)
         self.assertIn("SQL Injection", html)
         self.assertIn("strong", html)
+        self.assertIn('class="executive-preview"', html)
+        self.assertIn('class="report-toc executive-preview-toc"', html)
+        self.assertIn('id="table-of-contents"', html)
+        self.assertIn('id="exec-models"', html)
+        self.assertIn('href="#exec-vuln-summary"', html)
+        self.assertIn('href="#assistant"', html)
+        self.assertIn('id="exec-situation"', html)
+        self.assertIn("Security posture at a glance", html)
+        self.assertIn("How to read this executive summary", html)
+        self.assertIn("Priority embedding matches", html)
+        self.assertIn('data-oasis-exec-before-overview="1"', html)
+        self.assertLess(
+            html.find('id="table-of-contents"'),
+            html.find('id="exec-situation"'),
+        )
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_render_executive_summary_html_without_output_base_dir_does_not_crash(self):
+        report = Report(input_path=".", output_format=["md"])
+        payload = {
+            "report_type": "executive_summary",
+            "title": "Executive Summary",
+            "generated_at": "2026-01-01T00:00:00Z",
+            "model_name": "deep-model",
+            "deep_model": "deep-model",
+            "small_model": "scan-model",
+            "embedding_model": "embed-model",
+            "vulnerability_summary": {"SQL Injection": 1},
+            "similarity_tier_counts": {"strong": 1, "moderate": 0, "weak": 0},
+            "similarity_highlights": [
+                {
+                    "tier_id": "strong",
+                    "vuln_type": "SQL Injection",
+                    "file_path": "app.py",
+                    "similarity_score": 0.95,
+                }
+            ],
+        }
+
+        html = report.render_report_html_from_json_payload(payload)
+        self.assertIn("Executive Summary", html)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_render_executive_summary_html_builds_detail_link_from_preview_context(self):
+        report = Report(input_path=".", output_format=["md"])
+        with tempfile.TemporaryDirectory() as td:
+            sec = Path(td) / "security_reports"
+            model_dir = sec / "proj" / "20260101_120000" / "embed_model"
+            json_dir = model_dir / "json"
+            json_dir.mkdir(parents=True)
+            (json_dir / "_executive_summary.json").write_text("{}", encoding="utf-8")
+            (json_dir / "sql_injection.json").write_text("{}", encoding="utf-8")
+            current = json_dir / "_executive_summary.json"
+
+            payload = {
+                "report_type": "executive_summary",
+                "title": "Executive Summary",
+                "generated_at": "2026-01-01T00:00:00Z",
+                "model_name": "embed_model",
+                "deep_model": "embed_model",
+                "small_model": "scan-model",
+                "embedding_model": "embed-model",
+                "vulnerability_summary": {"SQL Injection": 1},
+                "similarity_tier_counts": {"strong": 1, "moderate": 0, "weak": 0},
+                "similarity_highlights": [
+                    {
+                        "tier_id": "strong",
+                        "vuln_type": "SQL Injection",
+                        "file_path": "app.py",
+                        "similarity_score": 0.95,
+                    }
+                ],
+            }
+            html = report._render_executive_summary_inner_html(
+                payload,
+                preview_context={
+                    "_security_root": sec.resolve(),
+                    "_current_report_path": current.resolve(),
+                },
+            )
+            self.assertIn("/reports/proj/20260101_120000/embed_model/json/sql_injection.json", html)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_render_report_html_from_json_payload_autoescapes_all_modal_templates(self):
+        report = Report(input_path=".", output_format=["md"])
+
+        exec_payload = {
+            "report_type": "executive_summary",
+            "title": "Executive Summary",
+            "generated_at": "2026-01-01T00:00:00Z",
+            "model_name": "deep-model",
+            "deep_model": "deep-model",
+            "small_model": "scan-model",
+            "embedding_model": "embed-model",
+            "project": '<img src=x onerror=alert("xss")>',
+            "vulnerability_summary": {},
+            "similarity_tier_counts": {},
+        }
+        exec_html = report.render_report_html_from_json_payload(exec_payload)
+        self.assertIn("&lt;img src=x onerror=alert", exec_html)
+        self.assertNotIn('<img src=x onerror=alert("xss")>', exec_html)
+
+        audit_payload = {
+            "report_type": "audit",
+            "schema_version": 1,
+            "title": '<script>alert("xss")</script>',
+            "generated_at": "2026-04-28 12:00:00",
+            "language": "en",
+            "project": None,
+            "oasis_version": "0.5.0",
+            "embedding_model": "nomic",
+            "total_files_analyzed": 1,
+            "explain_analysis": "## About\nSafe content.",
+            "audit_metrics": {"count": 1, "avg_score": 0.5, "high": 0, "medium": 1, "low": 0},
+            "vulnerability_statistics": [],
+            "analyses": {},
+        }
+        audit_html = report.render_report_html_from_json_payload(audit_payload)
+        self.assertIn("&lt;script&gt;alert", audit_html)
+        self.assertNotIn('<script>alert("xss")</script>', audit_html)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_executive_summary_html_rejects_noncanonical_guidance_markdown(self):
+        """HTML rendering must not convert attacker-controlled Markdown from JSON to HTML."""
+        from oasis.config import REPORT
+
+        report = Report(input_path=".", output_format=["md"])
+        malicious = '<script>alert("x")</script>\n\n## Evil'
+        payload = {
+            "report_type": "executive_summary",
+            "title": "Executive Summary",
+            "generated_at": "2026-01-01T00:00:00Z",
+            "model_name": "m",
+            "guidance_markdown": malicious,
+            "vulnerability_summary": {},
+            "similarity_tier_counts": {},
+        }
+        html = report.render_report_html_from_json_payload(payload)
+        self.assertNotIn("<script>", html)
+        self.assertNotIn("Evil", html)
+        self.assertIn("embedding similarity", html.lower())
+
+        trusted = REPORT["EXPLAIN_EXECUTIVE_SUMMARY"].strip()
+        payload["guidance_markdown"] = trusted
+        html_ok = report.render_report_html_from_json_payload(payload)
+        self.assertIn("embedding similarity", html_ok.lower())
+
+        payload["guidance_id"] = "default.v1"
+        payload["guidance_markdown"] = trusted + "\n\n<script>tampered()</script>"
+        html_tampered = report.render_report_html_from_json_payload(payload)
+        self.assertNotIn("<script>", html_tampered)
+        self.assertNotIn("tampered()", html_tampered)
+        self.assertIn("embedding similarity", html_tampered.lower())
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_build_executive_summary_json_document_handles_none_deep_model_name(self):
@@ -332,12 +654,109 @@ class TestReportSchema(unittest.TestCase):
 
         self.assertEqual(payload["model_name"], "fallback-model")
         self.assertEqual(payload["deep_model"], "")
+        self.assertEqual(payload.get("schema_version"), 2)
+        self.assertEqual(payload["overview"]["vulnerability_types_count"], 0)
+        self.assertEqual(payload["overview"]["embedding_comparisons_total"], 0)
+        self.assertEqual(payload["overview"]["unique_source_files"], 0)
+        self.assertEqual(payload["guidance_id"], "default.v1")
+        self.assertIn("guidance_markdown", payload)
+        self.assertEqual(len(payload["tier_definitions"]), 3)
+        self.assertEqual(payload["similarity_highlights"], [])
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_render_report_html_from_json_payload_rejects_unknown_report_type(self):
         report = Report(input_path=".", output_format=["md"])
         with self.assertRaises(ValueError):
             report.render_report_html_from_json_payload({"report_type": "unknown"})
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_render_report_html_from_json_payload_escapes_finding_fields(self):
+        report = Report(input_path=".", output_format=["md"])
+        payload = {
+            "report_type": "vulnerability",
+            "schema_version": 5,
+            "title": "Escaping Regression",
+            "generated_at": "2026-01-01",
+            "model_name": "m1",
+            "vulnerability_name": "Injection",
+            "vulnerability": {"name": "Injection"},
+            "files": [
+                {
+                    "file_path": "test_files/vulnerable.php",
+                    "similarity_score": 0.9,
+                    "chunk_analyses": [
+                        {
+                            "start_line": 1,
+                            "end_line": 10,
+                            "findings": [
+                                {
+                                    "title": "Broken payload rendering",
+                                    "severity": "High",
+                                    "vulnerable_code": "return eval($code);",
+                                    "explanation": "payload closes code tag",
+                                    "example_payloads": [
+                                        "</code></li></ul><code>",
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
+                {
+                    "file_path": "test_files/safe.java",
+                    "similarity_score": 0.8,
+                    "chunk_analyses": [],
+                },
+            ],
+            "stats": {
+                "critical_risk": 0,
+                "high_risk": 1,
+                "medium_risk": 0,
+                "low_risk": 0,
+                "total_findings": 1,
+                "files_analyzed": 2,
+            },
+        }
+
+        html = report.render_report_html_from_json_payload(payload)
+        self.assertIn("File 2: test_files/safe.java", html)
+        self.assertIn("&lt;/code&gt;&lt;/li&gt;&lt;/ul&gt;&lt;code&gt;", html)
+        self.assertNotIn("</code></li></ul><code>", html)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_render_report_html_from_json_payload_whitelists_severity_css_suffix(self):
+        report = Report(input_path=".", output_format=["md"])
+        template = report.template_env.get_template("reports/vulnerability_from_json.html.j2")
+        html = template.render(
+            document={
+                "title": "Severity Suffix Safety",
+                "generated_at": "2026-01-01",
+                "model_name": "m1",
+                "vulnerability_name": "Injection",
+                "files": [
+                    {
+                        "file_path": "test_files/vulnerable.php",
+                        "similarity_score": 0.9,
+                        "chunk_analyses": [
+                            {
+                                "findings": [
+                                    {
+                                        "title": "Unexpected severity format",
+                                        "severity": 'high" onclick="alert(1)',
+                                        "vulnerable_code": "return eval($code);",
+                                        "explanation": "test",
+                                    }
+                                ]
+                            }
+                        ],
+                    }
+                ],
+                "stats": {"files_analyzed": 1, "total_findings": 1},
+            },
+            preview={},
+        )
+        self.assertIn("report-severity-pill--unknown", html)
+        self.assertNotIn('report-severity-pill--high" onclick=', html)
 
     def test_scan_verdict_accepts_error_value(self):
         verdict = ScanVerdict.model_validate({"verdict": "ERROR"})
@@ -503,8 +922,17 @@ class TestReportSchema(unittest.TestCase):
             self.assertTrue(canon.is_file())
             parsed = json.loads(canon.read_text(encoding="utf-8"))
             self.assertEqual(parsed.get("report_type"), "executive_summary")
+            self.assertEqual(parsed.get("schema_version"), 2)
             self.assertEqual(parsed.get("model_name"), "test-model")
             self.assertEqual(parsed.get("vulnerability_summary"), {"SQL Injection": 1})
+            self.assertEqual(parsed["overview"]["vulnerability_types_count"], 1)
+            self.assertEqual(parsed["overview"]["embedding_comparisons_total"], 1)
+            self.assertEqual(parsed["overview"]["unique_source_files"], 1)
+            self.assertEqual(len(parsed.get("similarity_highlights") or []), 1)
+            hl0 = parsed["similarity_highlights"][0]
+            self.assertEqual(hl0.get("tier_id"), "strong")
+            self.assertIn("tier_description", hl0)
+            self.assertIn("Strong", hl0["tier_description"])
 
             content = "\n".join(captured["report_content"])
             self.assertIn("Scan Progress", content)
@@ -637,6 +1065,7 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(stats.get("formats"), {})
         self.assertEqual(stats["risk_summary"]["total_findings"], 0)
         self.assertEqual(stats["risk_summary"]["critical"], 0)
+        self.assertEqual(stats.get("severity_finding_totals", {}).get("critical"), 0)
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_executive_summary_notifier_receives_progress_payload(self):
@@ -723,6 +1152,106 @@ class TestReportSchema(unittest.TestCase):
             report_file.write_text('{"stats":', encoding="utf-8")
             stats = WebServer._stats_from_json_report_file(report_file)
         self.assertEqual(stats, {})
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_normalize_dashboard_relative_report_path_handles_separators_and_dot_segments(self):
+        normalize = WebServer._normalize_dashboard_relative_report_path
+        self.assertEqual(
+            normalize(r"./20260101_120000\m1\json\.\auth.json"),
+            "20260101_120000/m1/json/auth.json",
+        )
+        self.assertEqual(
+            normalize("20260101_120000/m1/json/../json/auth.json"),
+            "20260101_120000/m1/json/auth.json",
+        )
+        self.assertEqual(normalize(r"\windows\rooted.json"), "")
+        self.assertEqual(normalize("/unix/rooted.json"), "")
+        self.assertEqual(normalize("../outside.json"), "")
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_filter_vulnerability_payload_by_severity_tiers_counts_non_canonical_total_findings(self):
+        payload = {
+            "report_type": "vulnerability",
+            "files": [
+                {
+                    "file_path": "x.py",
+                    "chunk_analyses": [
+                        {
+                            "findings": [
+                                {"severity": "High"},
+                                {"severity": "Info"},
+                            ]
+                        }
+                    ],
+                }
+            ],
+            "stats": {"total_findings": 2},
+        }
+        filtered = WebServer._filter_vulnerability_payload_by_severity_tiers(
+            payload,
+            ("high", "info"),
+            rewrite_stats_totals=True,
+        )
+        self.assertEqual(filtered["stats"]["high_risk"], 1)
+        self.assertEqual(filtered["stats"]["total_findings"], 2)
+        self.assertEqual(filtered["stats_unfiltered"]["total_findings"], 2)
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_filter_vulnerability_payload_by_severity_tiers_preserves_stats_without_rewrite(self):
+        payload = {
+            "report_type": "vulnerability",
+            "files": [
+                {
+                    "file_path": "x.py",
+                    "chunk_analyses": [
+                        {
+                            "findings": [
+                                {"severity": "High"},
+                                {"severity": "Low"},
+                            ]
+                        }
+                    ],
+                }
+            ],
+            "stats": {
+                "high_risk": 10,
+                "low_risk": 8,
+                "total_findings": 18,
+            },
+        }
+        filtered = WebServer._filter_vulnerability_payload_by_severity_tiers(payload, ("high",))
+        self.assertEqual(filtered["stats"]["high_risk"], 10)
+        self.assertEqual(filtered["stats"]["total_findings"], 18)
+        self.assertNotIn("stats_unfiltered", filtered)
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_allowed_paths_for_filtered_reports_collects_primary_and_alternatives(self):
+        reports = [
+            {
+                "path": "run_a/model_a/json/a.json",
+                "alternative_formats": {
+                    "md": r".\run_a\model_a\md\a.md",
+                    "html": "/absolute/should_be_rejected.html",
+                },
+            },
+            {
+                "path": "run_a/model_a/json/b.json",
+                "alternative_formats": {},
+            },
+        ]
+        allowed = WebServer._allowed_paths_for_filtered_reports(reports)
+        self.assertEqual(
+            allowed,
+            {
+                "run_a/model_a/json/a.json",
+                "run_a/model_a/md/a.md",
+                "run_a/model_a/json/b.json",
+            },
+        )
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_allowed_paths_for_filtered_reports_empty_input_returns_empty_set(self):
+        self.assertEqual(WebServer._allowed_paths_for_filtered_reports([]), set())
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_web_update_stats_for_report_aggregates_model_vuln_language_date_and_risk(self):
@@ -926,6 +1455,21 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(progress["tested_vulnerabilities"], ["SQL Injection", "XSS"])
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_audit_json_metrics_reader_extracts_summary_metrics(self):
+        import tempfile
+
+        payload = {"report_type": "audit", "audit_metrics": {"count": 7, "avg_score": 0.551}}
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as tmp:
+            json.dump(payload, tmp)
+            path = Path(tmp.name)
+        try:
+            metrics = WebServer._audit_metrics_from_audit_json_report_file(path)
+            self.assertEqual(metrics["count"], 7)
+            self.assertAlmostEqual(metrics["avg_score"], 0.551)
+        finally:
+            path.unlink(missing_ok=True)
+
     def test_web_audit_markdown_metrics_reader_extracts_summary_metrics(self):
         markdown = """# Embeddings Distribution Analysis Report
 
@@ -1517,6 +2061,71 @@ Not a table line anymore.
         self.assertEqual(models, {"Model A", "Model B"})
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_filter_reports_supports_severity_filter(self):
+        server = WebServer.__new__(WebServer)
+        server.report_data = [
+            {
+                "vulnerability_type": "SQL Injection",
+                "model": "M1",
+                "format": "json",
+                "date": "2026-04-17 10:00:00",
+                "language": "en",
+                "stats": {"high_risk": 1, "critical_risk": 0, "medium_risk": 0, "low_risk": 0},
+            },
+            {
+                "vulnerability_type": "XSS",
+                "model": "M1",
+                "format": "json",
+                "date": "2026-04-17 10:00:00",
+                "language": "en",
+                "stats": {"high_risk": 0, "critical_risk": 0, "medium_risk": 2, "low_risk": 0},
+            },
+            {
+                "vulnerability_type": "Executive Summary",
+                "model": "M1",
+                "format": "json",
+                "date": "2026-04-17 10:00:00",
+                "language": "en",
+                "stats": {},
+            },
+        ]
+        server.collect_report_data = lambda: None
+
+        filtered = server.filter_reports(severity_filter="high")
+        types = {row["vulnerability_type"] for row in filtered}
+        self.assertEqual(types, {"SQL Injection", "Executive Summary"})
+
+        filtered_med = server.filter_reports(severity_filter="medium")
+        self.assertEqual({row["vulnerability_type"] for row in filtered_med}, {"XSS", "Executive Summary"})
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_filter_reports_project_is_exact_match_not_substring(self):
+        server = WebServer.__new__(WebServer)
+        server.report_data = [
+            {
+                "vulnerability_type": "SQL Injection",
+                "model": "M",
+                "format": "json",
+                "date": "2026-04-17 10:00:00",
+                "language": "en",
+                "project": "test",
+            },
+            {
+                "vulnerability_type": "SQL Injection",
+                "model": "M",
+                "format": "json",
+                "date": "2026-04-17 10:00:00",
+                "language": "en",
+                "project": "test_project",
+            },
+        ]
+        server.collect_report_data = lambda: None
+
+        filtered = server.filter_reports(project_filter="test")
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]["project"], "test")
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_web_socketio_cors_origins_match_web_port_and_config(self):
         from oasis import config
 
@@ -1559,6 +2168,33 @@ Not a table line anymore.
             "polling transport should be listed before websocket",
         )
 
+    def test_dashboard_url_with_active_filters_preserves_hash_fragment(self):
+        api_js = (
+            Path(__file__).resolve().parents[1]
+            / "oasis"
+            / "static"
+            / "js"
+            / "dashboard"
+            / "api.js"
+        )
+        content = api_js.read_text(encoding="utf-8")
+        self.assertIn("const hashIndex = rawUrl.indexOf('#')", content)
+        self.assertIn("const hashFragment = hashIndex >= 0 ? rawUrl.slice(hashIndex) : ''", content)
+        self.assertIn("return `${pathPart}${mergedQuery ? `?${mergedQuery}` : ''}${hashFragment}`;", content)
+
+    def test_dashboard_url_with_active_filters_merges_existing_query_with_urlsearchparams(self):
+        api_js = (
+            Path(__file__).resolve().parents[1]
+            / "oasis"
+            / "static"
+            / "js"
+            / "dashboard"
+            / "api.js"
+        )
+        content = api_js.read_text(encoding="utf-8")
+        self.assertIn("const mergedParams = new URLSearchParams(existingQuery)", content)
+        self.assertIn("mergedParams.append(key, value)", content)
+
     def test_dashboard_views_include_audit_comparison_table_markup(self):
         views_js = (
             Path(__file__).resolve().parents[1]
@@ -1569,11 +2205,13 @@ Not a table line anymore.
             / "views.js"
         )
         content = views_js.read_text(encoding="utf-8")
-        self.assertIn("model-emoji", content)
+        self.assertIn("DashboardApp.buildDateTagInnerHtml", content)
         self.assertIn("datesSelectionBadgeHTML", content)
         self.assertIn("buildAuditComparisonTableHtml", content)
         self.assertIn("DashboardApp.auditComparison.buildTableHtml", content)
         self.assertIn("DashboardApp.modelSelectionBadgeHtml(0)", content)
+        self.assertIn("critical_risk", content)
+        self.assertIn(".replace('${criticalRisk}'", content)
         self.assertIn("data-model", content)
 
     def test_dashboard_utils_define_audit_comparison_builder(self):
@@ -1587,6 +2225,8 @@ Not a table line anymore.
         )
         content = utils_js.read_text(encoding="utf-8")
         self.assertIn("DashboardApp.auditComparison", content)
+        self.assertIn("DashboardApp.buildDateTagInnerHtml", content)
+        self.assertIn("model-emoji", content)
         self.assertIn("buildTableHtml", content)
         self.assertIn("Embedding models comparison (latest available audit scores)", content)
         self.assertIn("audit-comparison-table", content)
@@ -1605,6 +2245,18 @@ Not a table line anymore.
         )
         content = template_html.read_text(encoding="utf-8")
         self.assertIn("${cardClass}", content)
+        self.assertIn("${criticalRisk}", content)
+        self.assertIn("Critical", content)
+
+    def test_report_jinja_autoescape_is_scoped_to_html_like_templates(self):
+        report_py = (
+            Path(__file__).resolve().parents[1]
+            / "oasis"
+            / "report.py"
+        )
+        content = report_py.read_text(encoding="utf-8")
+        self.assertIn('template_name.endswith(".html.j2")', content)
+        self.assertNotIn("select_autoescape(", content)
 
     def test_dashboard_report_grouping_keeps_audit_metrics_payload_fields(self):
         utils_js = (
@@ -1636,7 +2288,7 @@ Not a table line anymore.
         self.assertIn("Date.parse", content)
         self.assertIn("DashboardApp._buildDateEntriesFromApiPayload", content)
         self.assertIn("params.append('model', modelName)", content)
-        self.assertIn("model-emoji", content)
+        self.assertIn("DashboardApp.buildDateTagInnerHtml", content)
         self.assertIn("readSelectedModelsFromCard(card)", content)
         self.assertIn("writeSelectedModelsToCard(card, selectedList)", content)
         self.assertIn("isModelSelected(selectedModels, tag.dataset.model)", content)

@@ -1,8 +1,22 @@
 // API functions for fetching data
+
+/** Appends active severity tiers to ``URLSearchParams`` (same encoding as ``buildFilterParams``). */
+DashboardApp.appendActiveSeverityToSearchParams = function(params, options = {}) {
+    const { includeSeverity = true } = options;
+    if (
+        includeSeverity &&
+        DashboardApp.activeFilters.severities &&
+        DashboardApp.activeFilters.severities.length > 0
+    ) {
+        params.append('severity', DashboardApp.activeFilters.severities.join(','));
+    }
+};
+
 DashboardApp.buildFilterParams = function(options = {}) {
     // Create and return URLSearchParams object with active filters
     const {
-        includeVulnerability = true
+        includeVulnerability = true,
+        includeSeverity = true,
     } = options;
     const params = new URLSearchParams();
     
@@ -25,7 +39,13 @@ DashboardApp.buildFilterParams = function(options = {}) {
     ) {
         params.append('vulnerability', DashboardApp.activeFilters.vulnerabilities.join(','));
     }
-    
+
+    if (DashboardApp.activeFilters.projects && DashboardApp.activeFilters.projects.length > 0) {
+        params.append('project', DashboardApp.activeFilters.projects.join(','));
+    }
+
+    DashboardApp.appendActiveSeverityToSearchParams(params, { includeSeverity });
+
     if (DashboardApp.activeFilters.dateRange) {
         if (DashboardApp.activeFilters.dateRange.start) {
             params.append('start_date', DashboardApp.activeFilters.dateRange.start);
@@ -36,6 +56,37 @@ DashboardApp.buildFilterParams = function(options = {}) {
     }
     
     return params;
+};
+
+/**
+ * Return URL with active dashboard filters appended as query parameters.
+ *
+ * ``baseUrl`` can be either a relative URL or absolute path.
+ */
+DashboardApp.urlWithActiveFilters = function(baseUrl, options = {}) {
+    const rawUrl = String(baseUrl || '').trim();
+    if (!rawUrl) {
+        return rawUrl;
+    }
+    const params = DashboardApp.buildFilterParams(options);
+    if (!params.toString()) {
+        return rawUrl;
+    }
+    const hashIndex = rawUrl.indexOf('#');
+    const urlWithoutHash = hashIndex >= 0 ? rawUrl.slice(0, hashIndex) : rawUrl;
+    const hashFragment = hashIndex >= 0 ? rawUrl.slice(hashIndex) : '';
+
+    const queryIndex = urlWithoutHash.indexOf('?');
+    const pathPart = queryIndex >= 0 ? urlWithoutHash.slice(0, queryIndex) : urlWithoutHash;
+    const existingQuery = queryIndex >= 0 ? urlWithoutHash.slice(queryIndex + 1) : '';
+
+    const mergedParams = new URLSearchParams(existingQuery);
+    params.forEach((value, key) => {
+        mergedParams.append(key, value);
+    });
+
+    const mergedQuery = mergedParams.toString();
+    return `${pathPart}${mergedQuery ? `?${mergedQuery}` : ''}${hashFragment}`;
 };
 
 DashboardApp.fetchReports = function() {
@@ -393,7 +444,10 @@ DashboardApp.ensureRealtimeProgress = function() {
 };
 
 DashboardApp.refreshDashboard = function(options = {}) {
-    const { statsIncludeVulnerability = true } = options;
+    const {
+        statsIncludeVulnerability = true,
+        statsIncludeSeverity = true,
+    } = options;
     DashboardApp.debug("Refreshing dashboard...");
     
     // Show loading indicators
@@ -403,7 +457,10 @@ DashboardApp.refreshDashboard = function(options = {}) {
     const fullParams = new URLSearchParams(DashboardApp.buildFilterParams());
     fullParams.append('force', '1');
     const statsParams = new URLSearchParams(
-        DashboardApp.buildFilterParams({ includeVulnerability: statsIncludeVulnerability })
+        DashboardApp.buildFilterParams({
+            includeVulnerability: statsIncludeVulnerability,
+            includeSeverity: statsIncludeSeverity,
+        })
     );
     statsParams.append('force', '1');
     const reportsParams = new URLSearchParams(fullParams);
@@ -524,7 +581,8 @@ DashboardApp.fetchExecutivePreviewMeta = function (reportPath) {
     if (!rel) {
         return Promise.reject(new Error('missing report path'));
     }
-    const url = `/api/executive-preview-meta?path=${encodeURIComponent(rel)}`;
+    const baseUrl = `/api/executive-preview-meta?path=${encodeURIComponent(rel)}`;
+    const url = DashboardApp.urlWithActiveFilters(baseUrl);
     return fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } }).then(
         async function (response) {
             const data = await response.json().catch(function () {
@@ -701,7 +759,8 @@ DashboardApp.fetchReportJsonPayload = function (reportPath) {
     if (!rel) {
         return Promise.reject(new Error('missing report path'));
     }
-    const url = `/api/report-json/${encodeURIComponent(rel)}`;
+    const baseUrl = `/api/report-json/${encodeURIComponent(rel)}`;
+    const url = DashboardApp.urlWithActiveFilters(baseUrl);
     return fetch(url, { credentials: 'same-origin' }).then(async function (response) {
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {

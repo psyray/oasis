@@ -1,5 +1,9 @@
 """Filename helpers for report artifacts (single place for format-specific naming)."""
 
+# Stem for embedding audit reports (``audit_report.md``, ``audit_report.json``, …).
+# Keep aligned with ``Report.filter_output_files(\"audit_report\")`` and dashboard JS.
+AUDIT_REPORT_ARTIFACT_STEM = "audit_report"
+
 
 def artifact_filename(stem: str, fmt: str) -> str:
     """

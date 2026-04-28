@@ -1,5 +1,48 @@
 // Executive summary modal: Chart.js severity rollup from /api/executive-preview-meta.
 DashboardApp._executivePreviewChartInstances = [];
+DashboardApp._executivePreviewThemeSyncBound = false;
+
+DashboardApp._applyExecutivePreviewChartTheme = function (chart) {
+    if (!chart || !chart.options || !chart.options.plugins) {
+        return;
+    }
+    const activeTheme = DashboardApp.getCurrentTheme();
+    if (chart._oasisAppliedTheme === activeTheme) {
+        return;
+    }
+    const palette = DashboardApp.getDashboardChartThemeColors(activeTheme);
+    const { plugins } = chart.options;
+    if (plugins.legend && plugins.legend.labels) {
+        plugins.legend.labels.color = palette.text;
+    }
+    if (plugins.title) {
+        plugins.title.color = palette.text;
+    }
+    chart._oasisAppliedTheme = activeTheme;
+    chart.update('none');
+};
+
+DashboardApp._ensureExecutivePreviewThemeSync = function () {
+    if (DashboardApp._executivePreviewThemeSyncBound) {
+        return;
+    }
+    DashboardApp._executivePreviewThemeSyncHandler = function () {
+        if (DashboardApp._executivePreviewThemeSyncRaf) {
+            return;
+        }
+        DashboardApp._executivePreviewThemeSyncRaf = window.requestAnimationFrame(function () {
+            DashboardApp._executivePreviewThemeSyncRaf = null;
+            const charts = Array.isArray(DashboardApp._executivePreviewChartInstances)
+                ? DashboardApp._executivePreviewChartInstances
+                : [];
+            charts.forEach(function (chart) {
+                DashboardApp._applyExecutivePreviewChartTheme(chart);
+            });
+        });
+    };
+    DashboardApp._executivePreviewThemeSyncBound = true;
+    document.addEventListener(DashboardApp.THEME_CHANGE_EVENT, DashboardApp._executivePreviewThemeSyncHandler);
+};
 
 DashboardApp.teardownExecutivePreviewCharts = function () {
     const list = DashboardApp._executivePreviewChartInstances;
@@ -15,6 +58,15 @@ DashboardApp.teardownExecutivePreviewCharts = function () {
         });
     }
     DashboardApp._executivePreviewChartInstances = [];
+    if (DashboardApp._executivePreviewThemeSyncRaf) {
+        window.cancelAnimationFrame(DashboardApp._executivePreviewThemeSyncRaf);
+        DashboardApp._executivePreviewThemeSyncRaf = null;
+    }
+    if (DashboardApp._executivePreviewThemeSyncHandler) {
+        document.removeEventListener(DashboardApp.THEME_CHANGE_EVENT, DashboardApp._executivePreviewThemeSyncHandler);
+        DashboardApp._executivePreviewThemeSyncHandler = null;
+    }
+    DashboardApp._executivePreviewThemeSyncBound = false;
     document.querySelectorAll('#report-modal-content .executive-preview-charts').forEach(function (el) {
         if (el.parentNode) {
             el.parentNode.removeChild(el);
@@ -45,8 +97,8 @@ DashboardApp.setupExecutivePreviewCharts = function (reportPath) {
     canvas.setAttribute('aria-label', 'Severity distribution');
     wrap.appendChild(canvas);
     const nav = root.querySelector('.executive-preview-toc, nav.report-toc');
-    if (nav && nav.parentNode === root) {
-        root.insertBefore(wrap, nav.nextSibling);
+    if (nav && nav.parentNode) {
+        nav.parentNode.insertBefore(wrap, nav.nextSibling);
     } else {
         root.insertBefore(wrap, root.firstChild);
     }
@@ -62,6 +114,7 @@ DashboardApp.setupExecutivePreviewCharts = function (reportPath) {
                 return Number.isFinite(n) ? n : 0;
             });
             const colors = ['#dc3545', '#fd7e14', '#ffc107', '#6c757d'];
+            const palette = DashboardApp.getDashboardChartThemeColors();
             const ctx = canvas.getContext('2d');
             const chart = new Chart(ctx, {
                 type: 'doughnut',
@@ -79,14 +132,21 @@ DashboardApp.setupExecutivePreviewCharts = function (reportPath) {
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: { position: 'bottom' },
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                color: palette.text,
+                            },
+                        },
                         title: {
                             display: true,
                             text: 'Findings by severity (rollup)',
+                            color: palette.text,
                         },
                     },
                 },
             });
+            DashboardApp._ensureExecutivePreviewThemeSync();
             DashboardApp._executivePreviewChartInstances.push(chart);
         })
         .catch(function () {

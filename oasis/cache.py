@@ -56,7 +56,14 @@ class CacheManager:
             pickle.dump(payload, tmp_file)
         tmp_path.replace(target_path)
 
-    def __init__(self, input_path: Union[str, Path], llm_model: str, scan_model: str, cache_days: int):
+    def __init__(
+        self,
+        input_path: Union[str, Path],
+        llm_model: str,
+        scan_model: str,
+        cache_days: int,
+        project_name: str | None = None,
+    ):
         """
         Initialize the cache manager.
 
@@ -65,10 +72,11 @@ class CacheManager:
             llm_model: Main model name
             scan_model: Scanning model name
             cache_days: Number of days to keep cache files
+            project_name: Optional explicit project alias (same source as report naming)
         """
         self.cache_days = cache_days
 
-        self.cache_dir = create_cache_dir(input_path)
+        self.cache_dir = create_cache_dir(input_path, project_name=project_name)
 
         self.model_cache_dir = self.cache_dir / sanitize_name(llm_model)
         self.model_cache_dir.mkdir(exist_ok=True)

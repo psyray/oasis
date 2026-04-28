@@ -10,6 +10,11 @@ from weasyprint.logger import LOGGER as weasyprint_logger
 
 # Import configuration
 from .config import KEYWORD_LISTS, MODEL_EMOJIS, VULNERABILITY_MAPPING
+from .helpers.naming import sanitize_name as shared_sanitize_name
+from .helpers.report_project import (
+    project_label_for_report_storage,
+    project_slug_for_report_storage,
+)
 
 # Initialize logger with module name
 logger = logging.getLogger('oasis')
@@ -348,9 +353,7 @@ def sanitize_name(string: str) -> str:
     Args:
         string: Original string to be sanitized for file naming
     """
-    # Get the last part after the last slash (if any)
-    base_name = string.split('/')[-1]
-    return re.sub(r'[^a-zA-Z0-9]', '_', base_name)
+    return shared_sanitize_name(string)
 
 def display_logo():
     """
@@ -486,7 +489,12 @@ def parse_report_date(date_string):
         print(f"Error parsing report date '{date_string}': {e}")
         return None
 
-def create_cache_dir(input_path: str | Path) -> Path:
+def _derive_cache_project_name(input_path: Path) -> str:
+    """Derive project key aligned with report project naming (no CLI alias)."""
+    return project_slug_for_report_storage(project_label_for_report_storage(input_path))
+
+
+def create_cache_dir(input_path: str | Path, project_name: str | None = None) -> Path:
     """
     Create a cache directory for the input path
     """
@@ -495,8 +503,13 @@ def create_cache_dir(input_path: str | Path) -> Path:
     base_cache_dir = input_path.parent / '.oasis_cache'
     base_cache_dir.mkdir(parents=True, exist_ok=True)
     
-    # Create project-specific cache directory using the final folder name
-    project_name = sanitize_name(input_path.name)
-    cache_dir = base_cache_dir / project_name
+    # Align cache directory key with report project naming (and optional CLI alias).
+    normalized_alias = str(project_name).strip() if project_name is not None else ""
+    project_key = (
+        project_slug_for_report_storage(normalized_alias)
+        if normalized_alias
+        else _derive_cache_project_name(input_path)
+    )
+    cache_dir = base_cache_dir / project_key
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir

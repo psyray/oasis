@@ -52,7 +52,7 @@ DashboardApp._relativePathUnderReportsHref = function(href) {
         if (!u.pathname.startsWith(prefix)) {
             return null;
         }
-        return decodeURIComponent(u.pathname.slice(prefix.length));
+        return decodeURIComponent(u.pathname.substring(prefix.length));
     } catch (e) {
         return null;
     }
@@ -230,8 +230,10 @@ DashboardApp.handleReportModalContentClick = function(event) {
     if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
         return;
     }
-    const href = String(hrefRaw).trim();
-    if (/^https?:\/\//i.test(href) || href.startsWith('mailto:') || href.startsWith('#')) {
+    const href = typeof hrefRaw === 'string' ? hrefRaw.trim() : '';
+    const isExternalHref =
+        /^https?:\/\//i.test(href) || href.indexOf('mailto:') === 0 || href.indexOf('#') === 0;
+    if (isExternalHref) {
         return;
     }
     let rel = null;
@@ -327,7 +329,7 @@ DashboardApp.openReport = function(path, format, options) {
         // Determine vulnerability type from filename
         const vulnType = fileNameWithoutExt.replace(/_/g, ' ')
             .split(' ')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .map(word => word.charAt(0).toUpperCase() + word.substring(1))
             .join(' ');
         
         modalTitle.textContent = vulnType;
@@ -335,69 +337,15 @@ DashboardApp.openReport = function(path, format, options) {
 
     DashboardApp._resetReportModalScrollPositionsUnlessRestoring(opts);
 
-    if (format === 'json') {
-        // Prefer canonical JSON rendered via server-side Jinja HTML.
-        const markdownPath = path
-            .replace('/json/', '/md/')
-            .replace(/\.json$/i, '.md');
+    const withActiveFilters = function(baseUrl) {
+        if (typeof DashboardApp.urlWithActiveFilters === 'function') {
+            return DashboardApp.urlWithActiveFilters(baseUrl);
+        }
+        return baseUrl;
+    };
 
-        fetch(`/api/report-html?path=${encodeURIComponent(path)}`)
-            .then(async (response) => {
-                const data = await response.json();
-                if (!response.ok) {
-                    throw new Error(data.error || `HTTP error: ${response.status}`);
-                }
-                return data;
-            })
-            .then((data) => {
-                if (data.content) {
-                    DashboardApp._clearElement(modalContent);
-                    DashboardApp._appendSanitizedHtml(modalContent, data.content, 'html-content-container');
-                } else {
-                    DashboardApp._appendTextMessage(
-                        modalContent,
-                        'error-message',
-                        'Unable to load report content.'
-                    );
-                }
-                DashboardApp._finalizeReportModalView(opts.restoreScrollTop);
-            })
-            .catch((error) => {
-                console.error('Error fetching canonical HTML preview for JSON path:', error);
-                // Legacy fallback: render markdown companion when canonical JSON HTML preview fails.
-                fetch(`/api/report-content/${encodeURIComponent(markdownPath)}?allow_canonical_json_preview=1`)
-                    .then(async (response) => {
-                        const data = await response.json();
-                        if (!response.ok) {
-                            throw new Error(data.error || `HTTP error: ${response.status}`);
-                        }
-                        return data;
-                    })
-                    .then((data) => {
-                        if (data.content) {
-                            DashboardApp._appendSanitizedHtml(modalContent, data.content);
-                        } else {
-                            DashboardApp._appendTextMessage(
-                                modalContent,
-                                'error-message',
-                                'Unable to load report content.'
-                            );
-                        }
-                        DashboardApp._finalizeReportModalView(opts.restoreScrollTop);
-                    })
-                    .catch((markdownError) => {
-                        console.error('Error fetching markdown fallback for JSON path:', markdownError);
-                        const errorMessage = DashboardApp._errorMessage(markdownError);
-                        DashboardApp._appendTextMessage(
-                            modalContent,
-                            'error-message',
-                            `Error loading report content: ${errorMessage}`
-                        );
-                        DashboardApp._finalizeReportModalView(opts.restoreScrollTop);
-                    });
-            });
-    } else if (format === 'md') {
-        fetch(`/api/report-content/${encodeURIComponent(path)}`)
+    const loadMarkdownReportIntoModal = function() {
+        fetch(withActiveFilters(`/api/report-content/${encodeURIComponent(path)}`))
             .then(async (response) => {
                 const data = await response.json();
                 if (!response.ok) {
@@ -427,6 +375,107 @@ DashboardApp.openReport = function(path, format, options) {
                 );
                 DashboardApp._finalizeReportModalView(opts.restoreScrollTop);
             });
+    };
+
+    const auditJsonPreviewPath =
+        format === 'md' && typeof DashboardApp.auditReportJsonSiblingPath === 'function'
+            ? DashboardApp.auditReportJsonSiblingPath(path)
+            : null;
+    if (auditJsonPreviewPath) {
+        fetch(withActiveFilters(`/api/report-html?path=${encodeURIComponent(auditJsonPreviewPath)}`))
+            .then(async (response) => {
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || `HTTP error: ${response.status}`);
+                }
+                return data;
+            })
+            .then((data) => {
+                if (data.content) {
+                    DashboardApp._clearElement(modalContent);
+                    DashboardApp._appendSanitizedHtml(modalContent, data.content, 'html-content-container');
+                    DashboardApp._finalizeReportModalView(opts.restoreScrollTop);
+                } else {
+                    loadMarkdownReportIntoModal();
+                }
+            })
+            .catch(() => {
+                loadMarkdownReportIntoModal();
+            });
+        return;
+    }
+
+    const finalizeWithModalError = function (error) {
+        const errorMessage = DashboardApp._errorMessage(error);
+        DashboardApp._appendTextMessage(
+            modalContent,
+            'error-message',
+            `Error loading report content: ${errorMessage}`
+        );
+        DashboardApp._finalizeReportModalView(opts.restoreScrollTop);
+    };
+
+    if (format === 'json') {
+        // Prefer canonical JSON rendered via server-side Jinja HTML.
+        const markdownPath = path
+            .replace('/json/', '/md/')
+            .replace(/\.json$/i, '.md');
+
+        fetch(withActiveFilters(`/api/report-html?path=${encodeURIComponent(path)}`))
+            .then(async (response) => {
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || `HTTP error: ${response.status}`);
+                }
+                return data;
+            })
+            .then((data) => {
+                if (data.content) {
+                    DashboardApp._clearElement(modalContent);
+                    DashboardApp._appendSanitizedHtml(modalContent, data.content, 'html-content-container');
+                } else {
+                    DashboardApp._appendTextMessage(
+                        modalContent,
+                        'error-message',
+                        'Unable to load report content.'
+                    );
+                }
+                DashboardApp._finalizeReportModalView(opts.restoreScrollTop);
+            })
+            .catch((error) => {
+                console.error('Error fetching canonical HTML preview for JSON path:', error);
+                // Legacy fallback: render markdown companion when canonical JSON HTML preview fails.
+                fetch(
+                    withActiveFilters(
+                        `/api/report-content/${encodeURIComponent(markdownPath)}?allow_canonical_json_preview=1`
+                    )
+                )
+                    .then(async (response) => {
+                        const data = await response.json();
+                        if (!response.ok) {
+                            throw new Error(data.error || `HTTP error: ${response.status}`);
+                        }
+                        return data;
+                    })
+                    .then((data) => {
+                        if (data.content) {
+                            DashboardApp._appendSanitizedHtml(modalContent, data.content);
+                        } else {
+                            DashboardApp._appendTextMessage(
+                                modalContent,
+                                'error-message',
+                                'Unable to load report content.'
+                            );
+                        }
+                        DashboardApp._finalizeReportModalView(opts.restoreScrollTop);
+                    })
+                    .catch((markdownError) => {
+                        console.error('Error fetching markdown fallback for JSON path:', markdownError);
+                        finalizeWithModalError(markdownError);
+                    });
+            });
+    } else if (format === 'md') {
+        loadMarkdownReportIntoModal();
     } else if (format === 'html') {
         // Load the HTML content via AJAX
         fetch(`/reports/${encodeURIComponent(path)}`)
@@ -513,15 +562,11 @@ DashboardApp.openReport = function(path, format, options) {
         if (folderIdx >= 0 && segs[folderIdx]) {
             currentFormat = String(segs[folderIdx]).toLowerCase();
         } else if (fh && fh.formatPatternRegexForReportPaths) {
-            const m = path.match(fh.formatPatternRegexForReportPaths());
-            if (m) {
-                currentFormat = m[1].toLowerCase();
-            }
+            const patternMatch = path.match(fh.formatPatternRegexForReportPaths());
+            currentFormat = patternMatch ? patternMatch[1].toLowerCase() : currentFormat;
         } else {
-            const legacy = path.match(/\/(md|html|pdf|json|sarif)\//);
-            if (legacy) {
-                currentFormat = legacy[1].toLowerCase();
-            }
+            const legacyMatch = path.match(/\/(md|html|pdf|json|sarif)\//);
+            currentFormat = legacyMatch ? legacyMatch[1].toLowerCase() : currentFormat;
         }
 
         const availableFormats = DashboardApp.getAvailableFormatsForPath(path, currentFormat);
@@ -616,8 +661,7 @@ DashboardApp.convertMarkdownToHtml = function (markdown) {
         if (typeof marked !== 'undefined' && marked !== null) {
             if (typeof marked.parse === 'function') {
                 return marked.parse(markdown);
-            }
-            if (typeof marked === 'function') {
+            } else if (typeof marked === 'function') {
                 return marked(markdown);
             }
         }

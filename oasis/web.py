@@ -1,3 +1,7 @@
+from collections import OrderedDict
+from collections.abc import Iterable
+from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
 import json
@@ -8,7 +12,7 @@ import secrets
 import socket
 import string
 from threading import Thread
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect, url_for
 from functools import wraps
@@ -47,13 +51,18 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for minimal test envs
 
 from .config import DEFAULT_ARGS, REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, VULN_EMOJIS, LANGUAGES
 from .config import OLLAMA_URL
-from .export.filenames import artifact_filename, report_dir_glob_for_format
+from .export.filenames import (
+    AUDIT_REPORT_ARTIFACT_STEM,
+    artifact_filename,
+    report_dir_glob_for_format,
+)
 from .helpers.dashboard import (
     AUDIT_METRIC_LABELS,
     AUDIT_METRIC_TABLE_ROW_PATTERN,
     AUDIT_METRICS_SECTION_HEADING_PATTERN,
     AUDIT_METRICS_TABLE_HEADER_LABELS,
     audit_metric_key_from_label,
+    audit_metrics_from_audit_payload,
     audit_metrics_from_markdown_content,
     dashboard_format_display_order,
     expand_socketio_cors_config_entries,
@@ -66,17 +75,31 @@ from .helpers.dashboard import (
     rewrite_report_preview_anchor_hrefs,
     slice_markdown_section_after_heading,
     socketio_lan_http_origins,
+    strip_report_header_for_web_preview,
 )
 from .helpers.progress import SCAN_PROGRESS_EXTENDED_KEYS, coerce_scan_progress_event_version
 from .report import Report, executive_summary_progress_sidecar_path, is_executive_summary_progress_sidecar
 from .ollama_manager import OllamaManager
+from .helpers.analysis_root_path import (
+    CODEBASE_UNAVAILABLE_DETAIL,
+    CODEBASE_UNAVAILABLE_SHORT,
+    assistant_context_warning,
+    codebase_access_state,
+    resolve_assistant_cache_root,
+    resolve_first_existing_scan_root,
+)
 from .helpers.assistant.web.rag import (
     embedding_cache_file_path,
     load_embedding_code_base,
-    resolve_assistant_cache_root,
     retrieve_relevant_snippets,
 )
 from .helpers.context.path_containment import is_path_within_root
+from .helpers.report_project import (
+    is_legacy_run_dirname,
+    is_run_timestamp_dirname,
+    report_date_display_from_run_key,
+)
+from .helpers.dashboard.json_sibling import json_sibling_for_format_artifact
 from .helpers.assistant.web.api_validate import (
     coerce_finding_indices,
     normalize_report_rel_query_arg,
@@ -134,6 +157,12 @@ from .helpers.assistant.think.think_parse import (
 )
 from .helpers.assistant.prompt.context_budget import assistant_total_system_budget_chars
 from .helpers.assistant.scan.scan_aggregate import model_directory_from_security_report_file
+from .helpers.dashboard.severity_filter import (
+    empty_severity_finding_totals,
+    merge_severity_finding_totals_for_report,
+    parse_severity_filter_param,
+    report_passes_dashboard_severity_filter,
+)
 from .helpers.executive.dashboard_preview import augment_executive_markdown_preview_html
 from .helpers.executive.modal_chart_meta import rollup_severity_counts_from_model_dir
 from .helpers.executive.assistant_scope import (
@@ -143,6 +172,51 @@ from .helpers.executive.assistant_scope import (
 from .tools import parse_iso_date, parse_report_date
 
 logger = logging.getLogger(__name__)
+
+_CODEBASE_ACCESS_STATE_CACHE_MAX = 512
+
+
+def normalize_dashboard_project_key(value: Any) -> str:
+    """Normalize project label for dashboard filters and aggregated statistics keys."""
+    return str(value or "").strip().lower()
+
+
+@dataclass(frozen=True)
+class AssistantChatPrepError:
+    """HTTP error produced while building assistant chat context (Flask ``jsonify`` body + status)."""
+
+    body: Dict[str, Any]
+    status: int
+
+    @staticmethod
+    def from_http_tuple(pair: Tuple[Dict[str, Any], int]) -> "AssistantChatPrepError":
+        body, status = pair
+        return AssistantChatPrepError(body=body, status=status)
+
+
+@dataclass(frozen=True)
+class _AssistantChatReportLoad:
+    messages: List[Dict[str, Any]]
+    approx_msg_chars: int
+    resolved_report: Path
+    primary_payload: Dict[str, Any]
+    report_rel: str
+    aggregate_mode: bool
+    json_paths_for_union: List[Path]
+    extra_rag_paths: Optional[List[str]]
+    rag_source_payload: Dict[str, Any]
+    md_obj: Optional[Path]
+
+
+@dataclass(frozen=True)
+class _AssistantChatBudgetSummary:
+    chat_model: str
+    total_budget: int
+    budget_meta: Any
+    subbudgets: Dict[str, int]
+    report_summary_text: str
+    excerpt_truncated: bool
+    report_sum_budget: int
 
 
 class WebServer:
@@ -231,11 +305,18 @@ class WebServer:
         self._default_ollama_url = default_ollama_url or OLLAMA_URL
         self._assistant_ollama_manager: Optional[OllamaManager] = None
         self.report_data = None
+        self.global_stats: Optional[Dict[str, Any]] = None
         self.socketio = None
         self.app = None
         self._progress_monitor_started = False
         self._stop_progress_monitor = False
         self._last_emitted_progress_key = None
+        self._canonical_json_fields_cache: Dict[
+            Path, Tuple[Optional[str], Optional[str]]
+        ] = {}
+        self._codebase_access_state_cache: OrderedDict[
+            Tuple[Optional[str], Path], Tuple[Optional[Path], bool]
+        ] = OrderedDict()
         if not isinstance(report, Report):
             raise ValueError("Report must be an instance of Report")
         
@@ -293,6 +374,8 @@ class WebServer:
         self._stop_progress_monitor = False
         self._last_emitted_progress_key = None
         self._assistant_ollama_manager = None
+        self._canonical_json_fields_cache.clear()
+        self._codebase_access_state_cache.clear()
 
         app = Flask(
             __name__, template_folder=str(Path(__file__).parent / "templates"),
@@ -662,8 +745,13 @@ class WebServer:
     ) -> Tuple[str, bool]:
         """Return ``(rag_block, rag_unavailable)`` for assistant context."""
         em_model = self._embed_model_for_assistant(report_payload)
-        root_path = resolve_assistant_cache_root(report_payload, self.input_path_absolute)
-        cache_path = embedding_cache_file_path(root_path, em_model)
+        root_path = resolve_assistant_cache_root(
+            report_payload,
+            self.security_dir.resolve(),
+            self.input_path_absolute,
+        )
+        project_name = report_payload.get("project") if isinstance(report_payload, dict) else None
+        cache_path = embedding_cache_file_path(root_path, em_model, project_name=project_name)
 
         try:
             cb = load_embedding_code_base(cache_path)
@@ -735,171 +823,75 @@ class WebServer:
 
         return rag_block, False
 
-    def _prepare_assistant_chat_context(self, data: Any):
-        """Build the assistant chat context shared by JSON and streaming endpoints.
-
-        Returns either a context dict ready for an LLM call or a ``(err_body, status)``
-        tuple the route can surface to the client via ``jsonify``.
-
-        The dict contains: ``full_messages`` (list for ollama), ``chat_model``,
-        ``messages`` (validated user-visible), ``primary_payload``, ``report_rel``,
-        ``aggregate_mode``, ``rag_unavailable``, ``total_budget``, ``excerpt_truncated``
-        and ``session_id_hint`` (raw session_id from request, may be ``None``).
-        """
-        if not isinstance(data, dict):
-            return assistant_http_error(ERR_INVALID_JSON, HTTP_BAD_REQUEST)
-
-        messages, msg_err = validate_assistant_messages(
-            data.get('messages'),
-            max_messages=self._ASSISTANT_MAX_MESSAGES,
-            max_message_chars=self._ASSISTANT_MAX_MESSAGE_CHARS,
-        )
-        if msg_err is not None:
-            return msg_err
-        assert messages is not None
-
-        approx_msg_chars = sum(
-            len(str(m.get('content') or '')) for m in messages if isinstance(m, dict)
-        )
-
-        report_rel_raw = str(data.get('report_path') or '').strip()
-        if not report_rel_raw:
-            return assistant_http_error(ERR_REPORT_PATH_REQUIRED, HTTP_BAD_REQUEST)
-
-        security_root = self.security_dir.resolve()
-        resolved_report, primary_synthetic, path_err = resolve_assistant_primary_payload(
-            self.security_dir,
-            report_rel_raw,
-        )
-        if path_err is not None:
-            return path_err
-        assert resolved_report is not None
-
-        aggregate_mode = bool(data.get('aggregate_model_json'))
-        if aggregate_mode and resolved_report.stem.lower() != '_executive_summary':
-            return assistant_http_error(ERR_AGGREGATE_REQUIRES_EXECUTIVE, HTTP_BAD_REQUEST)
-
+    def _assistant_load_primary_payload_from_disk_or_synthetic(
+        self,
+        resolved_report: Path,
+        primary_synthetic: Optional[Any],
+    ):
+        """Return ``(payload_dict, None)`` or ``(None, http_error_tuple)``."""
         if primary_synthetic is not None:
-            primary_payload = primary_synthetic
+            payload = primary_synthetic
         else:
             try:
                 with open(resolved_report, 'r', encoding='utf-8') as rf:
-                    primary_payload = json.load(rf)
+                    payload = json.load(rf)
             except Exception:
-                return assistant_http_error(ERR_COULD_NOT_READ_REPORT, HTTP_INTERNAL)
-        if not isinstance(primary_payload, dict):
-            return assistant_http_error(ERR_INVALID_REPORT, HTTP_UNPROCESSABLE)
+                return None, assistant_http_error(ERR_COULD_NOT_READ_REPORT, HTTP_INTERNAL)
+        if not isinstance(payload, dict):
+            return None, assistant_http_error(ERR_INVALID_REPORT, HTTP_UNPROCESSABLE)
+        return payload, None
 
-        report_rel = str(resolved_report.relative_to(security_root)).replace('\\', '/')
-
-        json_paths_for_union: List[Path] = []
-        extra_rag_paths: Optional[List[str]] = None
-        rag_source_payload: Dict[str, Any] = primary_payload
-        md_obj: Optional[Path] = None
-
-        if aggregate_mode:
-            md_obj, json_paths_for_union, rag_source_payload, extra_rag_paths, agg_err = (
-                prepare_aggregate_branch_paths(
-                    security_root,
-                    resolved_report,
-                    primary_payload,
-                )
-            )
-            if agg_err is not None:
-                return agg_err
-
-        chat_model = resolve_assistant_chat_model(
-            data,
-            primary_payload,
-            aggregate_mode,
-            json_paths_for_union,
-            rag_source_payload,
-        )
-        if not chat_model:
-            return assistant_http_error(ERR_CHAT_MODEL_REQUIRED, HTTP_BAD_REQUEST)
-
-        total_budget, budget_meta = assistant_total_system_budget_chars(
-            fallback_total=self._ASSISTANT_MAX_TOTAL_REPORT_CHARS,
-            ollama_manager=self._get_assistant_ollama_manager(),
-            chat_model=chat_model,
-            approx_message_chars_in_request=approx_msg_chars,
-        )
-        subbudgets = compute_verdict_first_subbudgets(total_budget)
-        report_sum_budget = subbudgets["report_summary"]
-        # Merge aggregate JSON with extra headroom; final system prompt size is
-        # capped by ``compact_report_excerpt`` to ``report_sum_budget`` (see tuning doc).
-        merge_budget = report_sum_budget * REPORT_SUMMARY_AGGREGATE_MERGE_BUDGET_FACTOR
-        report_summary_payload, excerpt_truncated = build_report_summary_payload(
-            aggregate_mode=aggregate_mode,
-            json_paths_for_union=json_paths_for_union,
-            security_root=security_root,
-            primary_payload=primary_payload,
-            aggregate_char_budget=merge_budget,
-        )
-        report_summary_text = compact_report_excerpt(
-            report_summary_payload,
-            max_chars=report_sum_budget,
-        )
-
-        fi, ci, gi = coerce_finding_indices(data)
-        finding_scope_for_key = ''
-        if aggregate_mode:
-            scope_raw = data.get('finding_scope_report_path')
-            if isinstance(scope_raw, str) and scope_raw.strip():
-                finding_scope_for_key = scope_raw.strip()
-        finding_key_for_prompt = finding_validation_storage_key(
-            finding_scope_for_key,
-            fi,
-            ci,
-            gi,
-        )
-        finding_json, finding_scope_err = build_assistant_finding_json_prompt_block(
-            aggregate_mode=aggregate_mode,
-            primary_payload=primary_payload,
-            data=data,
-            security_root=security_root,
-            resolved_report=resolved_report,
-            md_obj=md_obj,
-            fi=fi,
-            ci=ci,
-            gi=gi,
-            finding_max=subbudgets['selected_finding'],
-        )
-        if finding_scope_err is not None:
-            return assistant_http_error(finding_scope_err, HTTP_BAD_REQUEST)
-        assert finding_json is not None
-
-        use_rag = self.web_assistant_rag and not bool(data.get('rag_disabled'))
+    def _assistant_fetch_rag_block_if_enabled(
+        self,
+        data: Dict[str, Any],
+        messages: List[Dict[str, Any]],
+        rag_source_payload: Dict[str, Any],
+        report_rel: str,
+        rag_budget: int,
+        extra_rag_paths: Optional[List[str]],
+    ) -> Tuple[str, bool]:
         rag_block = ''
         rag_unavailable = False
-        if use_rag:
-            last_user = extract_last_user_message_text(messages)
-            if last_user.strip():
-                rag_block, rag_unavailable = self._assistant_run_rag_retrieval(
-                    last_user=last_user,
-                    report_payload=rag_source_payload,
-                    report_rel=report_rel,
-                    rag_expand_project=bool(data.get('rag_expand_project')),
-                    extra_report_file_paths=extra_rag_paths,
-                )
-        if rag_block and len(rag_block) > subbudgets['rag']:
-            rag_block = shrink_rag_block(rag_block, subbudgets['rag'])
+        if not self.web_assistant_rag or bool(data.get('rag_disabled')):
+            return rag_block, rag_unavailable
+        last_user = extract_last_user_message_text(messages)
+        if not last_user.strip():
+            return rag_block, rag_unavailable
+        rag_block, rag_unavailable = self._assistant_run_rag_retrieval(
+            last_user=last_user,
+            report_payload=rag_source_payload,
+            report_rel=report_rel,
+            rag_expand_project=bool(data.get('rag_expand_project')),
+            extra_report_file_paths=extra_rag_paths,
+        )
+        if rag_block and len(rag_block) > rag_budget:
+            rag_block = shrink_rag_block(rag_block, rag_budget)
+        return rag_block, rag_unavailable
 
+    def _assistant_shrink_user_labels_if_any(
+        self,
+        data: Dict[str, Any],
+        labels_budget: int,
+    ) -> str:
         labels_note = data.get('user_finding_labels')
-        user_labels = ''
         if isinstance(labels_note, str) and labels_note.strip():
-            user_labels = shrink_user_labels_block(
-                labels_note.strip(), subbudgets['user_labels']
-            )
+            return shrink_user_labels_block(labels_note.strip(), labels_budget)
+        return ''
 
-        finding_validation_for_prompt: Optional[Dict[str, Any]] = None
+    def _assistant_load_persisted_finding_validation(
+        self,
+        data: Dict[str, Any],
+        report_rel: str,
+        chat_model: str,
+        finding_key_for_prompt: str,
+    ) -> Optional[Dict[str, Any]]:
         sid_ctx = data.get('session_id')
         try:
             if isinstance(sid_ctx, str) and validate_session_id(sid_ctx.strip()):
                 loaded_sess = load_chat_session(
                     self.security_dir, report_rel, sid_ctx.strip()
                 )
-                finding_validation_for_prompt = get_finding_validation_for_branch(
+                return get_finding_validation_for_branch(
                     loaded_sess,
                     chat_model,
                     finding_key_for_prompt,
@@ -909,18 +901,15 @@ class WebServer:
                 'Assistant chat context build failed; continuing without persisted finding validation',
                 exc_info=True,
             )
-            finding_validation_for_prompt = None
+        return None
 
-        system_content, section_lengths = assemble_verdict_first_prompt(
-            system_intro=self._ASSISTANT_SYSTEM_INTRO_PREFIX,
-            finding_validation=finding_validation_for_prompt,
-            selected_finding_json=finding_json,
-            rag_block=rag_block,
-            report_summary=report_summary_text,
-            user_labels=user_labels,
-            total_budget=total_budget,
-        )
-
+    def _assistant_diagnose_runtime_ctx_budget(
+        self,
+        budget_meta: Any,
+        section_lengths: Dict[str, Any],
+        total_budget: int,
+    ) -> Optional[int]:
+        """Best-effort compare assembled prompt size to Ollama runtime ``num_ctx``."""
         runtime_num_ctx: Optional[int] = None
         context_source = budget_meta.context_source or ""
         try:
@@ -949,29 +938,255 @@ class WebServer:
                 "Assistant budget/section length diagnostic failed; skipping ctx-size warning",
                 exc_info=True,
             )
-        if excerpt_truncated:
-            logger.info(
-                "Assistant aggregate report summary inputs truncated (budget=%s)",
-                report_sum_budget,
+        return runtime_num_ctx
+
+    def _assistant_chat_validate_and_load_report(
+        self,
+        data: Dict[str, Any],
+    ) -> Union[_AssistantChatReportLoad, AssistantChatPrepError]:
+        messages, msg_err = validate_assistant_messages(
+            data.get('messages'),
+            max_messages=self._ASSISTANT_MAX_MESSAGES,
+            max_message_chars=self._ASSISTANT_MAX_MESSAGE_CHARS,
+        )
+        if msg_err is not None:
+            return AssistantChatPrepError.from_http_tuple(msg_err)
+        assert messages is not None
+
+        approx_msg_chars = sum(
+            len(str(m.get('content') or '')) for m in messages if isinstance(m, dict)
+        )
+
+        report_rel_raw = str(data.get('report_path') or '').strip()
+        if not report_rel_raw:
+            return AssistantChatPrepError.from_http_tuple(
+                assistant_http_error(ERR_REPORT_PATH_REQUIRED, HTTP_BAD_REQUEST)
             )
 
-        full_messages = full_messages_from_system_and_dialogue(system_content, messages)
+        security_root = self.security_dir.resolve()
+        resolved_report, primary_synthetic, path_err = resolve_assistant_primary_payload(
+            self.security_dir,
+            report_rel_raw,
+        )
+        if path_err is not None:
+            return AssistantChatPrepError.from_http_tuple(path_err)
+        assert resolved_report is not None
+
+        aggregate_mode = bool(data.get('aggregate_model_json'))
+        if aggregate_mode and resolved_report.stem.lower() != '_executive_summary':
+            return AssistantChatPrepError.from_http_tuple(
+                assistant_http_error(ERR_AGGREGATE_REQUIRES_EXECUTIVE, HTTP_BAD_REQUEST)
+            )
+
+        primary_payload, load_err = self._assistant_load_primary_payload_from_disk_or_synthetic(
+            resolved_report,
+            primary_synthetic,
+        )
+        if load_err is not None:
+            return AssistantChatPrepError.from_http_tuple(load_err)
+        assert primary_payload is not None
+
+        report_rel = str(resolved_report.relative_to(security_root)).replace('\\', '/')
+
+        json_paths_for_union: List[Path] = []
+        extra_rag_paths: Optional[List[str]] = None
+        rag_source_payload: Dict[str, Any] = primary_payload
+        md_obj: Optional[Path] = None
+
+        if aggregate_mode:
+            md_obj, json_paths_for_union, rag_source_payload, extra_rag_paths, agg_err = (
+                prepare_aggregate_branch_paths(
+                    security_root,
+                    resolved_report,
+                    primary_payload,
+                )
+            )
+            if agg_err is not None:
+                return AssistantChatPrepError.from_http_tuple(agg_err)
+
+        return _AssistantChatReportLoad(
+            messages=messages,
+            approx_msg_chars=approx_msg_chars,
+            resolved_report=resolved_report,
+            primary_payload=primary_payload,
+            report_rel=report_rel,
+            aggregate_mode=aggregate_mode,
+            json_paths_for_union=json_paths_for_union,
+            extra_rag_paths=extra_rag_paths,
+            rag_source_payload=rag_source_payload,
+            md_obj=md_obj,
+        )
+
+    def _assistant_chat_budget_and_report_summary(
+        self,
+        data: Dict[str, Any],
+        loaded: _AssistantChatReportLoad,
+    ) -> Union[_AssistantChatBudgetSummary, AssistantChatPrepError]:
+        security_root = self.security_dir.resolve()
+        chat_model = resolve_assistant_chat_model(
+            data,
+            loaded.primary_payload,
+            loaded.aggregate_mode,
+            loaded.json_paths_for_union,
+            loaded.rag_source_payload,
+        )
+        if not chat_model:
+            return AssistantChatPrepError.from_http_tuple(
+                assistant_http_error(ERR_CHAT_MODEL_REQUIRED, HTTP_BAD_REQUEST)
+            )
+
+        total_budget, budget_meta = assistant_total_system_budget_chars(
+            fallback_total=self._ASSISTANT_MAX_TOTAL_REPORT_CHARS,
+            ollama_manager=self._get_assistant_ollama_manager(),
+            chat_model=chat_model,
+            approx_message_chars_in_request=loaded.approx_msg_chars,
+        )
+        subbudgets = compute_verdict_first_subbudgets(total_budget)
+        report_sum_budget = subbudgets["report_summary"]
+        merge_budget = report_sum_budget * REPORT_SUMMARY_AGGREGATE_MERGE_BUDGET_FACTOR
+        report_summary_payload, excerpt_truncated = build_report_summary_payload(
+            aggregate_mode=loaded.aggregate_mode,
+            json_paths_for_union=loaded.json_paths_for_union,
+            security_root=security_root,
+            primary_payload=loaded.primary_payload,
+            aggregate_char_budget=merge_budget,
+        )
+        report_summary_text = compact_report_excerpt(
+            report_summary_payload,
+            max_chars=report_sum_budget,
+        )
+        return _AssistantChatBudgetSummary(
+            chat_model=chat_model,
+            total_budget=total_budget,
+            budget_meta=budget_meta,
+            subbudgets=subbudgets,
+            report_summary_text=report_summary_text,
+            excerpt_truncated=excerpt_truncated,
+            report_sum_budget=report_sum_budget,
+        )
+
+    def _assistant_chat_finalize_context_dict(
+        self,
+        data: Dict[str, Any],
+        loaded: _AssistantChatReportLoad,
+        summary: _AssistantChatBudgetSummary,
+    ) -> Union[Dict[str, Any], AssistantChatPrepError]:
+        security_root = self.security_dir.resolve()
+        subbudgets = summary.subbudgets
+
+        fi, ci, gi = coerce_finding_indices(data)
+        finding_scope_for_key = ''
+        if loaded.aggregate_mode:
+            scope_raw = data.get('finding_scope_report_path')
+            if isinstance(scope_raw, str) and scope_raw.strip():
+                finding_scope_for_key = scope_raw.strip()
+        finding_key_for_prompt = finding_validation_storage_key(
+            finding_scope_for_key,
+            fi,
+            ci,
+            gi,
+        )
+        finding_json, finding_scope_err = build_assistant_finding_json_prompt_block(
+            aggregate_mode=loaded.aggregate_mode,
+            primary_payload=loaded.primary_payload,
+            data=data,
+            security_root=security_root,
+            resolved_report=loaded.resolved_report,
+            md_obj=loaded.md_obj,
+            fi=fi,
+            ci=ci,
+            gi=gi,
+            finding_max=subbudgets['selected_finding'],
+        )
+        if finding_scope_err is not None:
+            return AssistantChatPrepError.from_http_tuple(
+                assistant_http_error(finding_scope_err, HTTP_BAD_REQUEST)
+            )
+        assert finding_json is not None
+
+        rag_block, rag_unavailable = self._assistant_fetch_rag_block_if_enabled(
+            data,
+            loaded.messages,
+            loaded.rag_source_payload,
+            loaded.report_rel,
+            subbudgets['rag'],
+            loaded.extra_rag_paths,
+        )
+
+        user_labels = self._assistant_shrink_user_labels_if_any(data, subbudgets['user_labels'])
+
+        finding_validation_for_prompt = self._assistant_load_persisted_finding_validation(
+            data,
+            loaded.report_rel,
+            summary.chat_model,
+            finding_key_for_prompt,
+        )
+
+        system_content, section_lengths = assemble_verdict_first_prompt(
+            system_intro=self._ASSISTANT_SYSTEM_INTRO_PREFIX,
+            finding_validation=finding_validation_for_prompt,
+            selected_finding_json=finding_json,
+            rag_block=rag_block,
+            report_summary=summary.report_summary_text,
+            user_labels=user_labels,
+            total_budget=summary.total_budget,
+        )
+
+        context_source = summary.budget_meta.context_source or ""
+        runtime_num_ctx = self._assistant_diagnose_runtime_ctx_budget(
+            summary.budget_meta,
+            section_lengths,
+            summary.total_budget,
+        )
+        if summary.excerpt_truncated:
+            logger.info(
+                "Assistant aggregate report summary inputs truncated (budget=%s)",
+                summary.report_sum_budget,
+            )
+
+        full_messages = full_messages_from_system_and_dialogue(system_content, loaded.messages)
 
         return {
             'full_messages': full_messages,
-            'chat_model': chat_model,
-            'messages': messages,
-            'primary_payload': primary_payload,
-            'report_rel': report_rel,
-            'aggregate_mode': aggregate_mode,
+            'chat_model': summary.chat_model,
+            'messages': loaded.messages,
+            'primary_payload': loaded.primary_payload,
+            'report_rel': loaded.report_rel,
+            'aggregate_mode': loaded.aggregate_mode,
             'rag_unavailable': bool(rag_unavailable),
-            'total_budget': total_budget,
+            'total_budget': summary.total_budget,
             'runtime_num_ctx': runtime_num_ctx,
             'context_source': context_source,
-            'excerpt_truncated': excerpt_truncated,
+            'excerpt_truncated': summary.excerpt_truncated,
             'section_lengths': section_lengths,
             'session_id_hint': data.get('session_id'),
         }
+
+    def _prepare_assistant_chat_context(self, data: Any):
+        """Build the assistant chat context shared by JSON and streaming endpoints.
+
+        Returns either a context dict ready for an LLM call or :class:`AssistantChatPrepError`
+        (surface with ``jsonify(err.body), err.status``).
+
+        The dict contains: ``full_messages`` (list for ollama), ``chat_model``,
+        ``messages`` (validated user-visible), ``primary_payload``, ``report_rel``,
+        ``aggregate_mode``, ``rag_unavailable``, ``total_budget``, ``excerpt_truncated``
+        and ``session_id_hint`` (raw session_id from request, may be ``None``).
+        """
+        if not isinstance(data, dict):
+            return AssistantChatPrepError.from_http_tuple(
+                assistant_http_error(ERR_INVALID_JSON, HTTP_BAD_REQUEST)
+            )
+
+        loaded = self._assistant_chat_validate_and_load_report(data)
+        if isinstance(loaded, AssistantChatPrepError):
+            return loaded
+
+        summary = self._assistant_chat_budget_and_report_summary(data, loaded)
+        if isinstance(summary, AssistantChatPrepError):
+            return summary
+
+        return self._assistant_chat_finalize_context_dict(data, loaded, summary)
 
     def _resolve_assistant_session_id(self, session_id_hint: Any) -> str:
         if isinstance(session_id_hint, str) and validate_session_id(session_id_hint.strip()):
@@ -1172,7 +1387,7 @@ class WebServer:
         @login_required
         def dashboard():
             """Main dashboard page"""
-            
+
             return render_template(
                 'dashboard.html',
                 model_emojis=MODEL_EMOJIS,
@@ -1187,7 +1402,7 @@ class WebServer:
                 dashboard_assistant_enabled=True,
                 dashboard_assistant_rag_default=bool(getattr(self, "web_assistant_rag", True)),
             )
-            
+
         @app.route('/api/reports')
         @login_required
         def get_reports():
@@ -1195,7 +1410,9 @@ class WebServer:
             model_filter = request.args.get('model', '')
             format_filter = request.args.get('format', '')
             vuln_filter = request.args.get('vulnerability', '')
+            severity_filter = request.args.get('severity', '')
             language_filter = request.args.get('language', '')
+            project_filter = request.args.get('project', '')
             start_date = request.args.get('start_date', None)
             end_date = request.args.get('end_date', None)
             md_dates_only = request.args.get('md_dates_only', '1') == '1'
@@ -1207,13 +1424,15 @@ class WebServer:
                 model_filter=model_filter,
                 format_filter=format_filter,
                 vuln_filter=vuln_filter,
+                severity_filter=severity_filter,
                 language_filter=language_filter,
+                project_filter=project_filter,
                 start_date=start_date,
                 end_date=end_date,
                 md_dates_only=md_dates_only,
             )
             return jsonify(filtered_data)
-            
+
         @app.route('/api/stats')
         @login_required
         def get_stats():
@@ -1222,7 +1441,9 @@ class WebServer:
                 model_filter=request.args.get('model', ''),
                 format_filter=request.args.get('format', ''),
                 vuln_filter=request.args.get('vulnerability', ''),
+                severity_filter=request.args.get('severity', ''),
                 language_filter=request.args.get('language', ''),
+                project_filter=request.args.get('project', ''),
                 start_date=request.args.get('start_date', None),
                 end_date=request.args.get('end_date', None),
                 md_dates_only=request.args.get('md_dates_only', '1') == '1',
@@ -1236,20 +1457,40 @@ class WebServer:
                 model_filter=request.args.get('model', ''),
                 format_filter='',
                 vuln_filter='Executive Summary',
+                severity_filter=request.args.get('severity', ''),
                 language_filter=request.args.get('language', ''),
+                project_filter=request.args.get('project', ''),
                 start_date=request.args.get('start_date', None),
                 end_date=request.args.get('end_date', None),
                 md_dates_only=request.args.get('md_dates_only', '1') == '1',
             )
             return jsonify(self.get_scan_progress(filtered_reports=filtered_data))
-        
+
         @app.route('/reports/<path:filename>')
         @login_required
         def serve_report(filename):
             security_dir = self.security_dir
             # The complete path now includes the timestamp directory
             return send_from_directory(security_dir, filename)
-            
+
+        def _path_allowed_by_active_filters(resolved_path: Path, security_root: Path) -> bool:
+            """True when ``resolved_path`` belongs to the currently filtered dashboard dataset."""
+            filter_kwargs = self._request_dashboard_filter_kwargs(request.args)
+            if not self._has_any_active_dashboard_filter(filter_kwargs):
+                return True
+            filtered_reports = list(self.filter_reports(**filter_kwargs))
+            allowed_paths = self._allowed_paths_for_filtered_reports(filtered_reports)
+            try:
+                rel_path = WebServer._normalize_dashboard_relative_report_path(
+                    resolved_path.relative_to(security_root).as_posix()
+                )
+            except ValueError:
+                return False
+            return rel_path in allowed_paths
+
+        def _filtered_out_preview_response():
+            return jsonify({'error': 'Report path is outside the active filter scope'}), 409
+
         @app.route('/api/report-content/<path:filename>')
         @login_required
         def get_report_content(filename):
@@ -1265,14 +1506,15 @@ class WebServer:
 
                 if not resolved_path.exists() or resolved_path.suffix != '.md':
                     return jsonify({'error': 'File not found or not a markdown file'}), 404
+                if not _path_allowed_by_active_filters(resolved_path, security_root):
+                    return _filtered_out_preview_response()
 
                 rel_path = resolved_path.relative_to(security_root)
                 rel_parts = rel_path.parts
                 if len(rel_parts) < 2:
                     return jsonify({'error': 'Invalid report path'}), 400
 
-                json_rel_path = Path("json", *rel_parts[1:]).with_suffix(".json")
-                json_path = security_root / json_rel_path
+                json_path = json_sibling_for_format_artifact(resolved_path)
                 if json_path.exists() and not allow_canonical_json_preview:
                     return (
                         jsonify(
@@ -1310,6 +1552,8 @@ class WebServer:
                             if md_dir is not None:
                                 return jsonify(synthetic_executive_primary_payload(md_dir))
                     return jsonify({'error': 'File not found or not JSON'}), 404
+                if not _path_allowed_by_active_filters(resolved_path, security_root):
+                    return _filtered_out_preview_response()
                 if is_executive_summary_progress_sidecar(resolved_path):
                     return jsonify(
                         {'error': 'Incremental progress sidecar is not a canonical vulnerability report JSON'}
@@ -1318,6 +1562,12 @@ class WebServer:
                     payload = json.load(f)
                 if not isinstance(payload, dict):
                     return jsonify({'error': 'Invalid JSON report payload'}), 422
+                severity_tiers = parse_severity_filter_param(request.args.get('severity', ''))
+                payload = self._filter_vulnerability_payload_by_severity_tiers(
+                    payload,
+                    severity_tiers,
+                    rewrite_stats_totals=True,
+                )
                 return jsonify(payload)
             except Exception:
                 return self._report_preview_error_response("Error while generating JSON report preview")
@@ -1366,10 +1616,44 @@ class WebServer:
                 model_dir = model_directory_from_security_report_file(security_root, resolved)
                 if model_dir is None:
                     return jsonify({'error': 'Could not resolve model directory'}), 400
-                meta = rollup_severity_counts_from_model_dir(model_dir)
-                meta['vulnerability_reports'] = vulnerability_reports_for_executive_assistant(
-                    model_dir, security_root
-                )
+                filter_kwargs = self._request_dashboard_filter_kwargs(request.args)
+                if not self._has_any_active_dashboard_filter(filter_kwargs):
+                    meta = rollup_severity_counts_from_model_dir(model_dir)
+                    meta['vulnerability_reports'] = vulnerability_reports_for_executive_assistant(
+                        model_dir, security_root
+                    )
+                    return jsonify(meta)
+                filtered_reports = list(self.filter_reports(**filter_kwargs))
+                allowed_paths = self._allowed_paths_for_filtered_reports(filtered_reports)
+                if not allowed_paths:
+                    return jsonify({'severity_counts': {}, 'vulnerability_reports': []})
+
+                model_rel_prefix = WebServer._normalize_dashboard_relative_report_path(
+                    model_dir.relative_to(security_root).as_posix()
+                ).rstrip("/") + "/"
+                scoped_reports = [
+                    report
+                    for report in filtered_reports
+                    if WebServer._normalize_dashboard_relative_report_path(str(report.get("path") or "")).startswith(
+                        model_rel_prefix
+                    )
+                    and str(report.get("format") or "").lower() == "json"
+                    and str(report.get("vulnerability_type") or "") != "Executive Summary"
+                ]
+                severity_counts = empty_severity_finding_totals()
+                for report in scoped_reports:
+                    merge_severity_finding_totals_for_report(severity_counts, report)
+                vuln_reports = [
+                    item
+                    for item in vulnerability_reports_for_executive_assistant(model_dir, security_root)
+                    if WebServer._normalize_dashboard_relative_report_path(item.get("relative_path"))
+                    in allowed_paths
+                ]
+                meta = {
+                    "severity_counts": severity_counts,
+                    "vulnerability_report_files": len(vuln_reports),
+                    "vulnerability_reports": vuln_reports,
+                }
                 return jsonify(meta)
             except Exception:
                 return self._report_preview_error_response("Error while building executive preview meta")
@@ -1387,9 +1671,8 @@ class WebServer:
         @login_required
         def assistant_chat():
             prep = self._prepare_assistant_chat_context(request.get_json(silent=True))
-            if isinstance(prep, tuple):
-                err_body, status = prep
-                return jsonify(err_body), status
+            if isinstance(prep, AssistantChatPrepError):
+                return jsonify(prep.body), prep.status
 
             chat_opts = self._assistant_chat_options(prep, temperature=0.2)
             self._log_assistant_llm_debug(
@@ -1427,9 +1710,8 @@ class WebServer:
         @login_required
         def assistant_chat_stream():
             prep = self._prepare_assistant_chat_context(request.get_json(silent=True))
-            if isinstance(prep, tuple):
-                err_body, status = prep
-                return jsonify(err_body), status
+            if isinstance(prep, AssistantChatPrepError):
+                return jsonify(prep.body), prep.status
             return self._stream_assistant_chat_response(prep)
 
         @app.route('/api/assistant/investigate', methods=['POST'])
@@ -1490,12 +1772,10 @@ class WebServer:
                 if isinstance(raw, str) and raw.strip():
                     scan_root_candidates.append(raw.strip())
 
-            scan_root: Optional[Path] = None
-            for candidate_raw in scan_root_candidates:
-                candidate = Path(candidate_raw).expanduser().resolve(strict=False)
-                if candidate.exists() and candidate.is_dir():
-                    scan_root = candidate
-                    break
+            scan_root = resolve_first_existing_scan_root(
+                scan_root_candidates,
+                security_root,
+            )
 
             if scan_root is None:
                 if not scan_root_candidates:
@@ -1581,11 +1861,7 @@ class WebServer:
                 pass
 
             synthesize_raw = data.get('synthesize_narrative')
-            if synthesize_raw is None:
-                synthesize_narrative = True
-            else:
-                synthesize_narrative = bool(synthesize_raw)
-
+            synthesize_narrative = True if synthesize_raw is None else bool(synthesize_raw)
             if synthesize_narrative:
                 chat_model_inv = data.get('model')
                 if isinstance(chat_model_inv, str) and chat_model_inv.strip():
@@ -1821,6 +2097,8 @@ class WebServer:
                     return jsonify({'error': 'Invalid path'}), 403
                 if not resolved_path.exists() or resolved_path.suffix != '.json':
                     return jsonify({'error': 'File not found or not JSON'}), 404
+                if not _path_allowed_by_active_filters(resolved_path, security_root):
+                    return _filtered_out_preview_response()
                 if is_executive_summary_progress_sidecar(resolved_path):
                     return jsonify(
                         {
@@ -1835,8 +2113,32 @@ class WebServer:
                     payload = json.load(f)
                 if not isinstance(payload, dict):
                     return jsonify({'error': 'Invalid JSON report payload'}), 422
+                severity_tiers = parse_severity_filter_param(request.args.get('severity', ''))
+                payload = self._filter_vulnerability_payload_by_severity_tiers(
+                    payload,
+                    severity_tiers,
+                    rewrite_stats_totals=True,
+                )
 
-                html_content = self.report.render_report_html_from_json_payload(payload)
+                ar_raw = payload.get("analysis_root")
+                ar_text = ar_raw.strip() if isinstance(ar_raw, str) else None
+                _, codebase_ok = self._cached_codebase_access_state(ar_text)
+                preview_ctx = {
+                    "show_codebase_warning": not codebase_ok,
+                    "codebase_warning_short": CODEBASE_UNAVAILABLE_SHORT,
+                    "codebase_warning_detail": (
+                        "" if codebase_ok else CODEBASE_UNAVAILABLE_DETAIL
+                    ),
+                    "active_severity_filter": [tier.capitalize() for tier in severity_tiers],
+                    # Internal-only context for executive-summary detail link fallback.
+                    "_security_root": security_root,
+                    "_current_report_path": resolved_path,
+                }
+                html_content = self.report.render_report_html_from_json_payload(
+                    payload,
+                    preview_context=preview_ctx,
+                )
+                html_content = strip_report_header_for_web_preview(html_content)
                 return jsonify({'content': html_content}), 200
             except Exception:
                 return self._report_preview_error_response("Error while generating HTML preview from canonical JSON report")
@@ -1862,22 +2164,22 @@ class WebServer:
             report_path = request.args.get('path', '')
             if not report_path:
                 return jsonify({'error': 'No path provided'}), 400
-            
+
             try:
                 # Convert the relative path to absolute
                 abs_path = self.security_dir / report_path
-                
+
                 # Security check - make sure path is within the security reports directory
                 if not str(abs_path.resolve()).startswith(str(self.security_dir.resolve())):
                     return jsonify({'error': 'Invalid path'}), 403
-                
+
                 if not abs_path.exists():
                     return jsonify({'error': 'File not found'}), 404
-                
+
                 # Get the directory and filename
                 directory = abs_path.parent
                 filename = abs_path.name
-                
+
                 # Set the appropriate content type based on file extension
                 content_types = {
                     '.md': 'text/markdown',
@@ -1887,7 +2189,7 @@ class WebServer:
                     '.sarif': 'application/sarif+json',
                 }
                 content_type = content_types.get(abs_path.suffix, 'application/octet-stream')
-                
+
                 return send_from_directory(
                     directory=str(directory),
                     path=filename,
@@ -1907,10 +2209,12 @@ class WebServer:
                 if single_model:
                     model_filter = [single_model]
             vulnerability_filter = (request.args.get('vulnerability') or '').strip()
+            severity_filter = request.args.get('severity', '')
             # Filter reports based on parameters
             filtered_data = self.filter_reports(
                 model_filter=model_filter,
                 vuln_filter=vulnerability_filter,
+                severity_filter=severity_filter,
                 mandatory_filters=['model', 'vulnerability'],
             )
 
@@ -1920,7 +2224,7 @@ class WebServer:
                 if 'date' in report:
                     # Create a dictionary date_info from the date string
                     date_info = {'date': report['date']}
-                    
+
                     af = report.get('alternative_formats', {})
                     open_path = None
                     open_fmt = None
@@ -1937,20 +2241,19 @@ class WebServer:
                         date_info['path'] = report['path']
                         date_info['format'] = report.get('format', 'md')
                     date_info['language'] = report.get('language', 'en')
+                    date_info['model'] = report.get('model')
+                    date_info['project'] = report.get('project')
+                    date_info['analysis_root'] = report.get('analysis_root')
+                    date_info['codebase_accessible'] = report.get('codebase_accessible')
+                    date_info['assistant_context_warning'] = report.get('assistant_context_warning')
                     dates.append(date_info)
-            
+
             # Sort dates from newest to oldest
             dates.sort(key=lambda x: x.get('date', ''), reverse=True)
-            
+
             return jsonify({'dates': dates})
 
         return app
-
-    def collect_report_data(self):
-        """Collect and process all report data for efficient filtering and display"""
-        reports = self._collect_reports_from_directories()
-        self.report_data = reports
-        self.global_stats = self._calculate_global_statistics(reports)
 
     @staticmethod
     def _stats_from_json_report_file(report_file: Path) -> dict:
@@ -2165,6 +2468,17 @@ class WebServer:
         return audit_metrics_from_markdown_content(content)
 
     @staticmethod
+    def _audit_metrics_from_audit_json_report_file(report_file: Path) -> dict:
+        try:
+            with open(report_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError, TypeError):
+            return {}
+        if not isinstance(data, dict) or data.get("report_type") != "audit":
+            return {}
+        return audit_metrics_from_audit_payload(data)
+
+    @staticmethod
     def _pipeline_phases_from_executive_summary_markdown(content: str) -> list[dict]:
         """Parse optional ``### Pipeline phases`` markdown table into phase dict rows.
 
@@ -2248,33 +2562,69 @@ class WebServer:
         
     def _collect_reports_from_directories(self):
         """Extract reports data from directory structure"""
-        reports = []
+        reports: List[Dict[str, Any]] = []
         security_reports_dir = self.security_dir
-            
-        # Explore reports in each subdirectory (based on date/timestamp directories)
-        for report_dir in [d for d in security_reports_dir.iterdir() if d.is_dir()]:
-            # Extract date from directory name
-            report_date = self._extract_date_from_dirname(report_dir.name)
-            
-            # Explore model directories
-            for model_dir in [d for d in report_dir.iterdir() if d.is_dir()]:
-                # Desanitize model name
+        if not security_reports_dir.is_dir():
+            return reports
+
+        for run_dir, run_key, report_date in self._iter_run_directories(security_reports_dir):
+            for model_dir in (d for d in run_dir.iterdir() if d.is_dir()):
                 model_name = self._desanitize_name(model_dir.name)
-                reports.extend(self._process_model_directory(model_dir, model_name, report_date, report_dir.name))
-                
-        # Sort reports by date (from newest to oldest)
-        reports.sort(key=lambda x: x['date'] or "", reverse=True)
+                reports.extend(
+                    self._process_model_directory(
+                        model_dir, model_name, report_date, run_key
+                    )
+                )
+
+        reports.sort(key=lambda x: x["date"] or "", reverse=True)
         return reports
-        
-    def _process_model_directory(self, model_dir, model_name, report_date, timestamp_dir):
+
+    def collect_report_data(self) -> None:
+        """Refresh ``report_data`` and ``global_stats`` from ``security_reports`` layout."""
+        reports = self._collect_reports_from_directories()
+        self.report_data = reports
+        self.global_stats = self._calculate_global_statistics(reports)
+
+    def _iter_run_directories(self, security_reports_dir: Path):
+        """
+        Legacy top-level run dirs, top-level ``YYYYMMDD_HHMMSS`` runs, and
+        ``<project_slug>/<YYYYMMDD_HHMMSS>/`` nested runs.
+        """
+        for report_dir in sorted(
+            (d for d in security_reports_dir.iterdir() if d.is_dir()),
+            key=lambda p: p.name,
+        ):
+            name = report_dir.name
+            if is_legacy_run_dirname(name) or is_run_timestamp_dirname(name):
+                run_key = name
+                report_date = report_date_display_from_run_key(run_key)
+                yield report_dir, run_key, report_date
+                continue
+            try:
+                nested_dirs = sorted(
+                    (d for d in report_dir.iterdir() if d.is_dir()),
+                    key=lambda p: p.name,
+                )
+            except OSError:
+                logger.debug(
+                    "Skipping unreadable project reports directory: %s",
+                    report_dir,
+                    exc_info=True,
+                )
+                continue
+            for sub in nested_dirs:
+                if is_run_timestamp_dirname(sub.name):
+                    run_key = f"{name}/{sub.name}"
+                    report_date = report_date_display_from_run_key(run_key)
+                    yield sub, run_key, report_date
+
+    def _process_model_directory(self, model_dir, model_name, report_date, run_key: str):
         """Process all formats in a model directory"""
         model_reports = []
 
-        # Explore format directories
-        for fmt_dir in [d for d in model_dir.iterdir() if d.is_dir()]:
+        for fmt_dir in (d for d in model_dir.iterdir() if d.is_dir()):
             fmt = fmt_dir.name
 
-            # Check if it's a valid format
             if fmt not in REPORT["OUTPUT_FORMATS"]:
                 continue
 
@@ -2285,7 +2635,7 @@ class WebServer:
                     model_name,
                     fmt,
                     report_date,
-                    timestamp_dir,
+                    run_key,
                     model_dir,
                 )
                 for report_file in globber
@@ -2293,40 +2643,88 @@ class WebServer:
                 or not is_executive_summary_progress_sidecar(report_file)
             )
         return model_reports
-        
-    def _process_report_file(self, report_file, model_name, fmt, report_date, timestamp_dir, model_dir):
-        """Process a single report file and extract metadata"""
-        # Extract vulnerability type from filename
-        vulnerability_type = self._extract_vulnerability_type(report_file.stem)
 
-        stats = self._stats_from_json_report_file(report_file) if fmt == 'json' else {}
-        progress = {}
-        if vulnerability_type == "Executive Summary":
-            if fmt == "json":
-                progress = self._summary_progress_from_json_report_file(report_file)
-            elif fmt == "md":
-                progress = self._summary_progress_from_markdown_report_file(report_file)
-        audit_metrics = {}
-        if vulnerability_type == "Audit Report" and fmt == "md":
-            audit_metrics = self._audit_metrics_from_markdown_report_file(report_file)
+    def _progress_payload_for_dashboard_entry(
+        self, vulnerability_type: str, fmt: str, report_file: Path
+    ) -> Dict[str, Any]:
+        if vulnerability_type != "Executive Summary":
+            return {}
+        if fmt == "json":
+            return self._summary_progress_from_json_report_file(report_file)
+        if fmt == "md":
+            return self._summary_progress_from_markdown_report_file(report_file)
+        return {}
 
-        # Build relative path for web access
-        relative_path = report_file.relative_to(self.security_dir)
+    def _audit_metrics_for_dashboard_entry(
+        self, vulnerability_type: str, fmt: str, report_file: Path
+    ) -> Dict[str, Any]:
+        if vulnerability_type != "Audit Report":
+            return {}
+        if fmt == "json":
+            return self._audit_metrics_from_audit_json_report_file(report_file)
+        if fmt == "md":
+            json_side = json_sibling_for_format_artifact(report_file)
+            if json_side.is_file():
+                return self._audit_metrics_from_audit_json_report_file(json_side)
+            return self._audit_metrics_from_markdown_report_file(report_file)
+        return {}
 
-        # Find alternative formats available (including timestamp)
-        alternative_formats = self._find_alternative_formats(model_dir, report_file.stem, timestamp_dir)
-
-        language = None
-        if fmt == 'json':
+    def _language_for_dashboard_entry(self, report_file: Path, fmt: str) -> str:
+        if fmt == "json":
             language = self._language_from_json_report_file(report_file)
         else:
-            sibling_json = model_dir / 'json' / f"{report_file.stem}.json"
-            if sibling_json.exists():
-                language = self._language_from_json_report_file(sibling_json)
+            sibling_json = json_sibling_for_format_artifact(report_file)
+            language = (
+                self._language_from_json_report_file(sibling_json)
+                if sibling_json.exists()
+                else None
+            )
         if language is None:
             language = self._language_from_legacy_file(report_file)
-        if language is None:
-            language = 'en'
+        return language if language is not None else "en"
+
+    def _project_and_analysis_root_for_dashboard_entry(
+        self, fmt: str, report_file: Path, run_key: str
+    ) -> Tuple[Optional[str], Optional[str]]:
+        project: Optional[str] = None
+        analysis_root_raw: Optional[str] = None
+        if fmt == "json":
+            project, analysis_root_raw = self._canonical_json_fields_from_path(report_file)
+        else:
+            json_side = json_sibling_for_format_artifact(report_file)
+            if json_side.is_file():
+                project, analysis_root_raw = self._canonical_json_fields_from_path(json_side)
+        if project is None:
+            project = self._project_inferred_from_run_key(run_key)
+        return project, analysis_root_raw
+
+    def _process_report_file(
+        self,
+        report_file: Path,
+        model_name,
+        fmt,
+        report_date,
+        run_key: str,
+        model_dir,
+    ) -> Dict[str, Any]:
+        """Build one dashboard index entry for a report artifact."""
+        vulnerability_type = self._extract_vulnerability_type(report_file.stem)
+        stats = self._stats_from_json_report_file(report_file) if fmt == "json" else {}
+        progress = self._progress_payload_for_dashboard_entry(
+            vulnerability_type, fmt, report_file
+        )
+        audit_metrics = self._audit_metrics_for_dashboard_entry(
+            vulnerability_type, fmt, report_file
+        )
+        relative_path = report_file.relative_to(self.security_dir)
+        alternative_formats = self._find_alternative_formats(model_dir, report_file.stem)
+        language = self._language_for_dashboard_entry(report_file, fmt)
+        project, analysis_root_raw = self._project_and_analysis_root_for_dashboard_entry(
+            fmt, report_file, run_key
+        )
+        resolved_root, codebase_ok = self._cached_codebase_access_state(
+            analysis_root_raw
+        )
 
         return {
             "model": model_name,
@@ -2337,10 +2735,15 @@ class WebServer:
             "stats": stats,
             "alternative_formats": alternative_formats,
             "date": report_date,
-            "timestamp_dir": timestamp_dir,
+            "timestamp_dir": run_key,
             "language": language,
             "progress": progress,
             "audit_metrics": audit_metrics,
+            "project": project,
+            "analysis_root": analysis_root_raw,
+            "analysis_root_resolved": str(resolved_root) if resolved_root else None,
+            "codebase_accessible": codebase_ok,
+            "assistant_context_warning": assistant_context_warning(not codebase_ok),
         }
         
     def _calculate_global_statistics(self, reports):
@@ -2396,37 +2799,94 @@ class WebServer:
         name = sanitized_name.replace('_', ' ')
         return name.title()
 
-    def _extract_date_from_dirname(self, dirname):
-        """Extract date from directory name format [input_path]_[%Y%m%d_%H%M%S]"""
+    @staticmethod
+    def _extract_date_from_dirname(run_key: str) -> str:
+        """Back-compat: extract date from a run folder name or ``project/run_ts`` key."""
+        return report_date_display_from_run_key(run_key)
+
+    @staticmethod
+    def _project_field_cache_key(json_path: Path) -> Path:
+        """
+        Return a stable absolute cache key without symlink resolution.
+
+        Using ``absolute()`` keeps a consistent key shape for relative and absolute
+        inputs even when ``resolve()`` is unavailable or raises.
+        """
+        return json_path.expanduser().absolute()
+
+    def _cached_codebase_access_state(
+        self, stored_raw: Optional[str]
+    ) -> Tuple[Optional[Path], bool]:
+        """Memoize :func:`codebase_access_state` per normalized ``analysis_root`` key."""
+        sec_resolved = self.security_dir.resolve()
+        if isinstance(stored_raw, str):
+            key_raw = stored_raw.strip() or None
+        else:
+            key_raw = None
+        key = (key_raw, sec_resolved)
+        cache = self._codebase_access_state_cache
+        if key in cache:
+            cache.move_to_end(key)
+            return cache[key]
+        out = codebase_access_state(
+            stored_raw=key_raw,
+            security_reports_root=sec_resolved,
+        )
+        cache[key] = out
+        cache.move_to_end(key)
+        while len(cache) > _CODEBASE_ACCESS_STATE_CACHE_MAX:
+            cache.popitem(last=False)
+        return out
+
+    def _canonical_json_fields_from_path(
+        self, json_path: Path
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Return ``(project, analysis_root)`` from a canonical report JSON file."""
+        key = self._project_field_cache_key(json_path)
+        if key in self._canonical_json_fields_cache:
+            return self._canonical_json_fields_cache[key]
         try:
-            # Search for a pattern that resembles YYYYmmdd_HHMMSS at the end of the name
-            if match := re.search(r'_(\d{8}_\d{6})$', dirname):
-                date_str = match[1]
-                # Convert to datetime object
-                date_obj = datetime.strptime(date_str, '%Y%m%d_%H%M%S')
-                return date_obj.strftime('%Y-%m-%d %H:%M:%S')  # Readable format
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError, TypeError):
+            self._canonical_json_fields_cache[key] = (None, None)
+            return None, None
+        if not isinstance(data, dict):
+            self._canonical_json_fields_cache[key] = (None, None)
+            return None, None
+        proj_val: Optional[str] = None
+        p = data.get("project")
+        if isinstance(p, str) and p.strip():
+            proj_val = p.strip()
+        ar_raw = data.get("analysis_root")
+        ar_val: Optional[str] = None
+        if isinstance(ar_raw, str) and ar_raw.strip():
+            ar_val = ar_raw.strip()
+        self._canonical_json_fields_cache[key] = (proj_val, ar_val)
+        return proj_val, ar_val
 
-            return ""  # If no match, return empty string
-        except Exception as e:
-            print(f"Error extracting date from {dirname}: {e}")
-            return ""
+    def _project_field_from_json_path(self, json_path: Path) -> Optional[str]:
+        return self._canonical_json_fields_from_path(json_path)[0]
 
-    def _find_alternative_formats(self, model_dir, report_stem, timestamp_dir=None):
-        """Find all available formats for a specific report"""
-        formats = {}
-        
-        for fmt in REPORT['OUTPUT_FORMATS']:
+    @staticmethod
+    def _project_inferred_from_run_key(run_key: str) -> Optional[str]:
+        s = (run_key or "").replace("\\", "/").strip("/")
+        return s.split("/")[0] or None if "/" in s else None
+
+    def _find_alternative_formats(self, model_dir, report_stem):
+        """Find all available formats for a specific report (paths relative to ``security_dir``)."""
+        formats: Dict[str, str] = {}
+        security_root = self.security_dir.resolve()
+        for fmt in REPORT["OUTPUT_FORMATS"]:
             fmt_dir = model_dir / fmt
             if fmt_dir.exists() and fmt_dir.is_dir():
                 file_path = fmt_dir / artifact_filename(report_stem, fmt)
                 if file_path.exists():
-                    # Include timestamp directory in the path
-                    if timestamp_dir:
-                        relative_path = file_path.relative_to(model_dir.parent.parent)
-                        formats[fmt] = str(relative_path)
-                    else:
-                        formats[fmt] = str(file_path.relative_to(model_dir.parent))
-        
+                    try:
+                        relative_path = file_path.relative_to(security_root)
+                    except ValueError:
+                        continue
+                    formats[fmt] = str(relative_path)
         return formats
     
     def _extract_vulnerability_type(self, filename):
@@ -2435,8 +2895,8 @@ class WebServer:
         if 'executive_summary' in filename:
             return 'Executive Summary'
 
-        # Handle audit report
-        if 'audit_report' in filename:
+        # Handle audit report (stem ``AUDIT_REPORT_ARTIFACT_STEM``; see export.filenames).
+        if AUDIT_REPORT_ARTIFACT_STEM in filename:
             return 'Audit Report'
 
         vulnerability_patterns = {
@@ -2488,7 +2948,7 @@ class WebServer:
         report_format = report.get("format")
         return report_format == "json" or (report_format == "md" and not has_json)
 
-    def filter_reports(self, model_filter='', format_filter='', vuln_filter='', language_filter='', start_date=None, end_date=None, md_dates_only=True, mandatory_filters=None):
+    def filter_reports(self, model_filter='', format_filter='', vuln_filter='', severity_filter='', language_filter='', project_filter='', start_date=None, end_date=None, md_dates_only=True, mandatory_filters=None):
         """Filter reports based on criteria"""
         if not self.report_data:
             self.collect_report_data()
@@ -2501,6 +2961,7 @@ class WebServer:
                 "format": format_filter,
                 "vulnerability": vuln_filter,
                 "language": language_filter,
+                "project": project_filter,
                 "start_date": start_date,
                 "end_date": end_date,
             }
@@ -2540,6 +3001,25 @@ class WebServer:
                 if ((r.get("language") or "en").strip().lower() in language_filters)
             ]
 
+        if project_filter:
+            if isinstance(project_filter, (list, tuple, set)):
+                project_filters = [str(p).strip().lower() for p in project_filter if str(p).strip()]
+            else:
+                project_filters = [
+                    p.strip().lower() for p in str(project_filter).split(',') if p.strip()
+                ]
+            filtered = [
+                r
+                for r in filtered
+                if normalize_dashboard_project_key(r.get("project")) in project_filters
+            ]
+
+        severity_tiers = parse_severity_filter_param(severity_filter)
+        if severity_tiers:
+            filtered = [
+                r for r in filtered if report_passes_dashboard_severity_filter(r, severity_tiers)
+            ]
+
         for report in filtered:
             report["date_visible"] = self._is_date_visible_for_report(report) if md_dates_only else True
 
@@ -2569,6 +3049,8 @@ class WebServer:
             "languages": {},
             "formats": {},
             "dates": {},
+            "projects": {},
+            "severity_finding_totals": empty_severity_finding_totals(),
             "risk_summary": {
                 "total_findings": 0,
                 "critical": 0,
@@ -2582,6 +3064,7 @@ class WebServer:
         for report in reports_to_analyze:
             if report["format"] == "json":
                 self._update_stats_for_report(stats, report)
+                merge_severity_finding_totals_for_report(stats["severity_finding_totals"], report)
 
             # count all available formats
             fmt = report["format"]
@@ -2624,6 +3107,153 @@ class WebServer:
         risk_summary["medium"] += report_stats.get("medium_risk", 0)
         risk_summary["low"] += report_stats.get("low_risk", 0)
 
+    def _request_dashboard_filter_kwargs(self, req_args: Any) -> Dict[str, Any]:
+        """Extract active dashboard filters from request args for preview-scope checks."""
+        return {
+            "model_filter": req_args.get('model', ''),
+            "format_filter": req_args.get('format', ''),
+            "vuln_filter": req_args.get('vulnerability', ''),
+            "severity_filter": req_args.get('severity', ''),
+            "language_filter": req_args.get('language', ''),
+            "project_filter": req_args.get('project', ''),
+            "start_date": req_args.get('start_date', None),
+            "end_date": req_args.get('end_date', None),
+            # Preview-scope checks must match full dashboard scope, not markdown-only date subset.
+            "md_dates_only": False,
+        }
+
+    @staticmethod
+    def _has_any_active_dashboard_filter(filter_kwargs: Dict[str, Any]) -> bool:
+        for key in (
+            "model_filter",
+            "format_filter",
+            "vuln_filter",
+            "severity_filter",
+            "language_filter",
+            "project_filter",
+            "start_date",
+            "end_date",
+        ):
+            if str(filter_kwargs.get(key) or "").strip():
+                return True
+        return False
+
+    @staticmethod
+    def _allowed_paths_for_filtered_reports(
+        filtered_reports: Iterable[Dict[str, Any]] | None,
+    ) -> set[str]:
+        if not filtered_reports:
+            return set()
+        allowed_paths: set[str] = set()
+        for report in filtered_reports:
+            report_path = WebServer._normalize_dashboard_relative_report_path(report.get("path"))
+            if report_path:
+                allowed_paths.add(report_path)
+            alt = report.get("alternative_formats") or {}
+            if isinstance(alt, dict):
+                for candidate in alt.values():
+                    candidate_path = WebServer._normalize_dashboard_relative_report_path(candidate)
+                    if candidate_path:
+                        allowed_paths.add(candidate_path)
+        return allowed_paths
+
+    @staticmethod
+    def _normalize_dashboard_relative_report_path(path_value: Any) -> str:
+        """Canonicalize report relative paths for filter-scope comparisons."""
+        if not isinstance(path_value, str):
+            return ""
+        raw = path_value.strip()
+        if not raw:
+            return ""
+        if raw.startswith(("/", "\\")):
+            return ""
+        normalized = os.path.normpath(raw.replace("\\", "/")).replace("\\", "/")
+        if normalized in ("", ".", ".."):
+            return ""
+        if normalized.startswith("../"):
+            return ""
+        if normalized.startswith("./"):
+            normalized = normalized[2:]
+        return normalized.lstrip("/")
+
+    @staticmethod
+    def _filter_vulnerability_payload_by_severity_tiers(
+        payload: Dict[str, Any],
+        tiers: Tuple[str, ...],
+        *,
+        rewrite_stats_totals: bool = False,
+    ) -> Dict[str, Any]:
+        """Filter canonical vulnerability payload findings to selected severity tiers."""
+        if not tiers:
+            return payload
+        if str(payload.get("report_type") or "").strip().lower() != "vulnerability":
+            return payload
+        wanted = {str(t or "").strip().lower() for t in tiers if str(t or "").strip()}
+        if not wanted:
+            return payload
+
+        data = deepcopy(payload)
+        files = data.get("files")
+        if not isinstance(files, list):
+            return data
+
+        filtered_files: List[Dict[str, Any]] = []
+        sev_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        total_findings_count = 0
+        potential_chunk_count = 0
+
+        for file_item in files:
+            if not isinstance(file_item, dict):
+                continue
+            chunk_list = file_item.get("chunk_analyses")
+            kept_chunks: List[Dict[str, Any]] = []
+            if isinstance(chunk_list, list):
+                for chunk in chunk_list:
+                    if not isinstance(chunk, dict):
+                        continue
+                    findings = chunk.get("findings")
+                    if not isinstance(findings, list):
+                        continue
+                    kept_findings: List[Dict[str, Any]] = []
+                    for finding in findings:
+                        if not isinstance(finding, dict):
+                            continue
+                        sev = str(finding.get("severity") or "").strip().lower()
+                        if sev in wanted:
+                            kept_findings.append(finding)
+                            total_findings_count += 1
+                            if sev in sev_counts:
+                                sev_counts[sev] += 1
+                    if kept_findings:
+                        chunk_copy = dict(chunk)
+                        chunk_copy["findings"] = kept_findings
+                        kept_chunks.append(chunk_copy)
+                        if bool(chunk_copy.get("potential_vulnerabilities")):
+                            potential_chunk_count += 1
+            if kept_chunks or file_item.get("error"):
+                file_copy = dict(file_item)
+                file_copy["chunk_analyses"] = kept_chunks
+                filtered_files.append(file_copy)
+
+        data["files"] = filtered_files
+        stats = data.get("stats")
+        original_stats = dict(stats) if isinstance(stats, dict) else {}
+        stats_copy = dict(stats) if isinstance(stats, dict) else {}
+        if rewrite_stats_totals:
+            stats_copy["critical_risk"] = sev_counts["critical"]
+            stats_copy["high_risk"] = sev_counts["high"]
+            stats_copy["medium_risk"] = sev_counts["medium"]
+            stats_copy["low_risk"] = sev_counts["low"]
+            # Keep totals aligned with kept findings even when non-canonical severities are present.
+            stats_copy["total_findings"] = total_findings_count
+            stats_copy["files_analyzed"] = len(filtered_files)
+            # Compatibility note: ``potential_findings`` remains chunk-granular (historical behavior).
+            stats_copy["potential_findings"] = potential_chunk_count
+        data["stats"] = stats_copy
+        if rewrite_stats_totals and original_stats:
+            data["stats_unfiltered"] = original_stats
+        return data
+
     def _update_stats_for_report(self, stats: dict, report: dict) -> None:
         stats["total_reports"] += 1
         if model := report.get("model"):
@@ -2636,6 +3266,12 @@ class WebServer:
 
         language = (report.get("language") or "en").lower()
         stats["languages"][language] = stats["languages"].get(language, 0) + 1
+
+        normalized_project = normalize_dashboard_project_key(report.get("project"))
+        if normalized_project:
+            stats["projects"][normalized_project] = (
+                stats["projects"].get(normalized_project, 0) + 1
+            )
 
         if report_date := report.get("date"):
             date_only = report_date.split()[0]

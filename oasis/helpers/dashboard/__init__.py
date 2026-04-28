@@ -13,6 +13,7 @@ from .audit_metrics import (
     AUDIT_METRICS_SECTION_HEADING_PATTERN,
     AUDIT_METRICS_TABLE_HEADER_LABELS,
     audit_metric_key_from_label,
+    audit_metrics_from_audit_payload,
     audit_metrics_from_markdown_content,
     iter_audit_metrics_table_rows,
     normalize_audit_metric_label,
@@ -31,7 +32,7 @@ from .exec_summary_tiers import (
     executive_summary_tiers_inline_text,
     executive_summary_tiers_markdown_bullets,
 )
-from .report_preview_html import rewrite_report_preview_anchor_hrefs
+from .report_preview_html import rewrite_report_preview_anchor_hrefs, strip_report_header_for_web_preview
 
 # --- Output formats / Socket.IO / phase cell parsing ---------------------------------
 

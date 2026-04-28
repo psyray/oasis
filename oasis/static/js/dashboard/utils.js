@@ -242,7 +242,12 @@ if (typeof DashboardApp !== 'undefined') {
             language,
             date_visible,
             timestamp_dir,
-            audit_metrics
+            audit_metrics,
+            project,
+            analysis_root,
+            analysis_root_resolved,
+            codebase_accessible,
+            assistant_context_warning,
         } = report;
         
         // Construction of a simplified report
@@ -253,11 +258,16 @@ if (typeof DashboardApp !== 'undefined') {
             date,
             format,
             date_visible: date_visible !== undefined ? date_visible : true,
-            stats: stats || { high_risk: 0, medium_risk: 0, low_risk: 0, total_findings: 0, files_analyzed: 0 },
+            stats: stats || { critical_risk: 0, high_risk: 0, medium_risk: 0, low_risk: 0, total_findings: 0, files_analyzed: 0 },
             language,
             alternative_formats: alternative_formats || {},
             timestamp_dir: timestamp_dir || "",
-            audit_metrics: audit_metrics || {}
+            audit_metrics: audit_metrics || {},
+            project,
+            analysis_root,
+            analysis_root_resolved,
+            codebase_accessible,
+            assistant_context_warning,
         };
     });
     };
@@ -319,6 +329,24 @@ if (typeof DashboardApp !== 'undefined') {
         } else {
             formattedName = name;
         }
+    }
+
+    if (type === 'severity') {
+        const tier = String(name || '').toLowerCase();
+        const labels = {
+            critical: 'Critical',
+            high: 'High',
+            medium: 'Medium',
+            low: 'Low',
+        };
+        const label = labels[tier] || String(name || 'Unknown');
+        if (emoji) {
+            const em = { critical: '🔴', high: '🟠', medium: '🟡', low: '🔵' };
+            formattedName = `${em[tier] || '⚪'} ${label}`;
+        } else {
+            formattedName = label;
+        }
+        return formattedName;
     }
     
     // For vulnerability types and models
@@ -428,6 +456,85 @@ if (typeof DashboardApp !== 'undefined') {
     const encoded = DashboardApp.encodeSelectedModels(modelNames);
     card.dataset.selectedModels = encoded;
     return encoded;
+    };
+
+    /** Warning badge when the scanned codebase directory is not reachable from the dashboard. */
+    DashboardApp.buildDateTagCodebaseWarningBadgeHtml = function (entry) {
+        const h = DashboardApp._escapeHtml;
+        const codebaseWarn = entry.codebase_accessible === false;
+        const warnDetail = String(entry.assistant_context_warning || '');
+        return codebaseWarn
+            ? `<span class="report-codebase-warning-badge" title="${h(warnDetail)}" aria-label="${h(warnDetail)}">⚠️</span>`
+            : '';
+    };
+
+    /** One row: project label and optional codebase warning badge. */
+    DashboardApp.buildDateTagProjectRowHtml = function (entry) {
+        const h = DashboardApp._escapeHtml;
+        const projLabel = entry.project != null && String(entry.project).trim() !== ''
+            ? String(entry.project)
+            : '';
+        const warnBadge = DashboardApp.buildDateTagCodebaseWarningBadgeHtml(entry);
+        const projectRowParts = [];
+        if (projLabel) {
+            projectRowParts.push(`<span class="date-tag-project">${h(projLabel)}</span>`);
+        }
+        if (warnBadge) {
+            projectRowParts.push(warnBadge);
+        }
+        return projectRowParts.length
+            ? `<div class="date-tag-meta-row">${projectRowParts.join(' ')}</div>`
+            : '';
+    };
+
+    /** One row: stored analysis_root string from report JSON (if present). */
+    DashboardApp.buildDateTagAnalysisRootRowHtml = function (entry) {
+        const h = DashboardApp._escapeHtml;
+        const arRaw = entry.analysis_root;
+        const arLabel = arRaw != null && String(arRaw).trim() !== '' ? String(arRaw) : '';
+        return arLabel
+            ? `<div class="date-tag-meta-row date-tag-meta-row--root"><code class="date-tag-ar" title="Analysis root (as stored in report JSON)">${h(arLabel)}</code></div>`
+            : '';
+    };
+
+    /**
+     * Wrapped project + analysis_root meta block for date pills.
+     * Adjust layout/classes here to keep list, tree, and filter refresh UIs aligned.
+     */
+    DashboardApp.buildDateTagMetaBlockHtml = function (entry) {
+        const projectRow = DashboardApp.buildDateTagProjectRowHtml(entry);
+        const rootRow = DashboardApp.buildDateTagAnalysisRootRowHtml(entry);
+        const metaInner = [projectRow, rootRow].filter(Boolean).join('');
+        return metaInner ? `<div class="date-tag-meta">${metaInner}</div>` : '';
+    };
+
+    /**
+     * Inner markup for a dashboard date pill: language flag, model emoji, project/analysis_root meta,
+     * date/time. Shared by list view, tree view, and client-side refreshes after model/card filters.
+     *
+     * @param {object} entry — fields like report rows: date, language, model, project, analysis_root,
+     *   codebase_accessible, assistant_context_warning.
+     */
+    DashboardApp.buildDateTagInnerHtml = function (entry) {
+        const h = DashboardApp._escapeHtml;
+        const modelName = entry.model || 'Unknown';
+        const languageMeta = DashboardApp.getLanguageMeta(entry.language || 'en');
+        const metaBlock = DashboardApp.buildDateTagMetaBlockHtml(entry);
+
+        const reportDate = entry.date ? new Date(entry.date) : null;
+        const formattedDate = reportDate ? reportDate.toLocaleDateString() : 'No date';
+        const formattedTime = reportDate
+            ? reportDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : '';
+        const emoji = (DashboardApp.getModelEmoji(modelName) || '🤖').trim();
+
+        return (
+            `<span class="language-flag" title="${h(languageMeta.name)}">${h(languageMeta.emoji)}</span>` +
+            `<span class="model-emoji" title="${h(modelName)}">${h(emoji)}</span>` +
+            metaBlock +
+            `<div class="date-main">${h(formattedDate)}</div>` +
+            `<div class="date-time">${h(formattedTime)}</div>`
+        );
     };
 
     DashboardApp.auditComparison = DashboardApp.auditComparison || {};

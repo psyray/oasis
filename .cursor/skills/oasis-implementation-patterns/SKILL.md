@@ -63,13 +63,22 @@ Treat **audit** modal work as reusing this spine when aligning with the vulnerab
 
 ### Incremental scan progress (see Cursor rules)
 
-Details live in `.cursor/rules/oasis-python-architecture.mdc` (constants, sidecar, helper modules) and `.cursor/rules/oasis-dashboard-js-patterns.mdc` (REST, Socket.IO, stale `updated_at` guard). Touch `oasis/helpers/progress_constants.py`, `report.py`, `web.py`, and dashboard JS together when the wire contract changes; extend `tests/test_report_schema.py` when behavior is contract-visible.
+Details live in `.cursor/rules/oasis-python-architecture.mdc` (constants in `oasis/helpers/progress/__init__.py`, sidecar, helper modules) and `.cursor/rules/oasis-dashboard-js-patterns.mdc` (REST, Socket.IO, stale `updated_at` guard). Touch `oasis/helpers/progress/__init__.py`, `report.py`, `web.py`, and dashboard JS together when the wire contract changes; extend `tests/test_report_schema.py` when behavior is contract-visible.
 
 ### Audit metrics and dashboard comparison
 
 - `Report.generate_audit_report` must keep an `Audit Metrics Summary` markdown table with stable `Metric | Value` rows (count/similarity/high-medium-low tiers).
-- `WebServer` parses these markdown metrics into `audit_metrics` entries exposed by `/api/reports`.
+- When **`json`** is in output formats, OASIS also writes **`audit_report.json`** (`oasis/schemas/audit_report.py`); Markdown and JSON must reflect the same document. The dashboard prefers sibling JSON for listing metrics and modal HTML via `/api/report-html` when the file exists.
+- `WebServer` parses metrics into `audit_metrics` for `/api/reports` (JSON first, then Markdown). Shared **`md` → `json`** rules live in `oasis/helpers/dashboard/json_sibling.py` and dashboard **`audit-report-paths.js`**—keep them aligned with `web.py` preview routes.
 - Dashboard comparison UI (`utils.js` + `views.js` + `interactions.js`) depends on those keys; treat report/web/dashboard as one contract surface and update tests in `tests/test_report_schema.py` together.
+
+### Report storage, executive JSON, and dashboard filters
+
+- **Output tree**: Default **`security_reports/<project_slug>/YYYYMMDD_HHMMSS/…`**; optional **`--project-name` / `-pn`** overrides slug naming—coordinate **`oasis/helpers/report_project.py`**, CLI (`oasis/oasis.py`), exporters, and **`README.md`** when behavior shifts.
+- **Executive summary canonical JSON**: Rich **`schema_version`** document built in **`oasis/helpers/executive_summary.py`** and **`oasis/report.py`** (overview KPIs, **`guidance_markdown`**, **`tier_definitions`**, capped **`similarity_highlights`**). HTML preview uses **`executive_summary_from_json.html.j2`** and **`executive-preview.js`** (TOC, Chart.js)—change schema, templates, and dashboard consumers together.
+- **`analysis_root`**: Stored **relative to `security_reports/`** in new JSON; resolution lives in **`oasis/helpers/analysis_root_path.py`**—reuse for assistant/RAG and **`scan_root`**; never duplicate path guessing in `web.py`.
+- **Dashboard**: **Severity** (tier) + **project** filters and **scoped previews** (queries wrapped with active filters; server rejects out-of-scope paths). **`/api/stats`** exposes **`severity_finding_totals`**. Python: **`oasis/helpers/dashboard/severity_filter.py`** and **`web.py`**; JS: **`filters.js`**, **`api.js`**, **`modal.js`**.
+- **Web UI theme**: Header light/dark toggle and **`oasis:theme-change`** in **`bootstrap.js`**; charts must follow (**`views.js`**, **`executive-preview.js`**).
 
 ### Duplication and centralization (strict)
 
@@ -91,5 +100,5 @@ Details live in `.cursor/rules/oasis-python-architecture.mdc` (constants, sideca
 - No obvious module boundary violation; **no new helper-shaped logic** left outside `oasis/helpers/` without a strong, documented reason.
 - Any CLI option change is documented.
 - Structured output/report changes stay aligned across `oasis/schemas/`, `oasis/report.py`, `oasis/templates/reports/`, and `tests/test_report_schema.py`.
-- Incremental progress contract changes stay aligned across `progress_constants.py`, `report.py`, `web.py`, dashboard JS, and contract tests when applicable (same spirit as report schema alignment).
+- Incremental progress contract changes stay aligned across `oasis/helpers/progress/__init__.py`, `report.py`, `web.py`, dashboard JS, and contract tests when applicable (same spirit as report schema alignment).
 - Change intent can be summarized with a conventional commit subject.

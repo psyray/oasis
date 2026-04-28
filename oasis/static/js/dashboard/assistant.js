@@ -34,9 +34,9 @@ DashboardApp._validateStatusTone = function (status) {
 };
 
 DashboardApp._validateShortenPath = function (value, keep) {
-    const s = String(value == null ? '' : value);
+    const s = value == null ? '' : String(value);
     const k = typeof keep === 'number' && keep > 0 ? keep : 3;
-    const parts = s.split('/');
+    const parts = s ? s.split('/') : [];
     if (parts.length <= k + 1) {
         return s;
     }
@@ -246,10 +246,9 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
         container.classList.remove('oasis-assistant-validate-panel--' + t);
     });
     container.classList.add('oasis-assistant-validate-panel--' + tone);
-    const confidencePct =
-        typeof result.confidence === 'number'
-            ? Math.max(0, Math.min(100, Math.round(result.confidence * 100)))
-            : null;
+    const confidencePct = typeof result.confidence === 'number'
+        ? Math.max(0, Math.min(100, Math.round(result.confidence * 100)))
+        : null;
     const statusText = String(result.status || '—').replace(/_/g, ' ');
     const familyText = String(result.family || '—');
     const vulnName =
@@ -306,16 +305,24 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
         container.appendChild(gauge);
     }
 
-    if (result.summary) {
+    const summaryText = typeof result.summary === 'string' ? result.summary.trim() : '';
+    if (summaryText) {
         const narrative = document.createElement('p');
         narrative.className = 'oasis-assistant-validate-narrative';
-        narrative.textContent = result.summary;
+        narrative.textContent = summaryText;
         container.appendChild(narrative);
     }
 
     const llmMd =
         result.narrative_markdown && String(result.narrative_markdown).trim()
             ? String(result.narrative_markdown).trim()
+            : '';
+    const synthesisModelText = typeof result.synthesis_model === 'string'
+        ? String(result.synthesis_model).trim()
+        : '';
+    const synthesisErrorText =
+        result.synthesis_error && String(result.synthesis_error).trim()
+            ? String(result.synthesis_error).trim()
             : '';
     if (llmMd) {
         const llmHead = document.createElement('div');
@@ -324,10 +331,10 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
         llmTitle.className = 'oasis-assistant-validate-llm-title';
         llmTitle.textContent = label('validateLlmNarrativeTitle', 'LLM narrative');
         llmHead.appendChild(llmTitle);
-        if (result.synthesis_model) {
+        if (synthesisModelText) {
             const llmModel = document.createElement('span');
             llmModel.className = 'oasis-assistant-validate-llm-model';
-            llmModel.textContent = String(result.synthesis_model);
+            llmModel.textContent = synthesisModelText;
             llmHead.appendChild(llmModel);
         }
         container.appendChild(llmHead);
@@ -350,12 +357,13 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
                 copiedCode: label('assistantCopiedCode', 'Copied'),
             });
         }
-    } else if (result.synthesis_error && String(result.synthesis_error).trim()) {
+    }
+    if (!llmMd && synthesisErrorText) {
         const synErr = document.createElement('p');
         synErr.className = 'oasis-assistant-validate-synthesis-error';
         synErr.textContent =
             label('validateSynthesisErrorPrefix', 'Narrative synthesis: ') +
-            String(result.synthesis_error).trim();
+            synthesisErrorText;
         container.appendChild(synErr);
     }
 
@@ -760,14 +768,16 @@ DashboardApp.matchChatModelToOptions = function (reportModel, optionValues) {
     const seed = String(reportModel).trim();
     const opts = Array.isArray(optionValues) ? optionValues.map(String) : [];
     const lower = seed.toLowerCase();
-    const fam = seed.indexOf(':') >= 0 ? seed.slice(0, seed.indexOf(':')).trim() : seed;
+    const seedParts = seed.split(':');
+    const fam = seedParts.length > 1 ? seedParts[0].trim() : seed;
     const famLower = fam.toLowerCase();
 
     const optsLower = opts.map(function (s) {
         return s.toLowerCase();
     });
     const optFamPrefix = opts.map(function (s) {
-        return s.indexOf(':') >= 0 ? s.slice(0, s.indexOf(':')).trim() : s;
+        const parts = s.split(':');
+        return parts.length > 1 ? parts[0].trim() : s;
     });
     const optFamPrefixLower = optFamPrefix.map(function (p) {
         return p.toLowerCase();
@@ -1090,6 +1100,26 @@ DashboardApp.mountReportAssistantPanel = function () {
         return typeof v === 'string' ? v : fallback;
     };
 
+    const pathEntry =
+        DashboardApp.reportFormatsByPath && DashboardApp.reportFormatsByPath[reportPath];
+    const scopedReport = pathEntry && pathEntry.report ? pathEntry.report : null;
+    const codebaseBroken = !!(scopedReport && scopedReport.codebase_accessible === false);
+    const codebaseWarningBanner = codebaseBroken
+        ? `<div class="oasis-assistant-codebase-warning" role="alert" title="${DashboardApp._escapeHtml(
+              txt('codebaseUnavailableDetail', '')
+          )}">
+          <div class="oasis-assistant-codebase-warning__headline">
+            <span class="oasis-assistant-codebase-warning__emoji" aria-hidden="true">⚠️</span>
+            <strong class="oasis-assistant-codebase-warning__title">${DashboardApp._escapeHtml(
+                txt('codebaseUnavailableShort', 'Codebase unreachable')
+            )}</strong>
+          </div>
+          <p class="oasis-assistant-codebase-warning__body">${DashboardApp._escapeHtml(
+              txt('codebaseUnavailableDetail', '')
+          )}</p>
+        </div>`
+        : '';
+
     const contextBadgeText = execSummary
         ? txt('contextExecutiveAggregate', 'Context: full scan (aggregate JSON)')
         : txt('contextSingleVuln', 'Context: single vulnerability report');
@@ -1107,6 +1137,7 @@ DashboardApp.mountReportAssistantPanel = function () {
     panel.setAttribute('role', 'region');
     panel.setAttribute('aria-label', txt('panelSummary', 'Assistant'));
     panel.innerHTML = `
+            ${codebaseWarningBanner}
             <div class="oasis-assistant-meta-bar">
                 <span class="oasis-assistant-context-badge" id="oasis-assistant-context-badge">${DashboardApp._escapeHtml(contextBadgeText)}</span>
                 <label class="oasis-assistant-model-field">${DashboardApp._escapeHtml(txt('chatModelLabel', 'Chat model'))}
@@ -1807,7 +1838,7 @@ DashboardApp.mountReportAssistantPanel = function () {
     };
 
     const loadSessionById = function (sessionId, loadOpts) {
-        loadOpts = loadOpts && typeof loadOpts === 'object' ? loadOpts : {};
+        const opts = loadOpts && typeof loadOpts === 'object' ? loadOpts : {};
         if (!sessionId) {
             startNewChat();
             return Promise.resolve();
@@ -1820,7 +1851,7 @@ DashboardApp.mountReportAssistantPanel = function () {
                 let useReportWhenNoStore = false;
                 // No chat-model localStorage: prefer the conversation stored under the report's model.
                 if (
-                    loadOpts.useReportModelIfNoStored === true &&
+                    opts.useReportModelIfNoStored === true &&
                     reportPreferredModelStr
                 ) {
                     // (1) Branch selection: map report JSON model string → a key in model_branches (via

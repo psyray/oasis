@@ -1,0 +1,34 @@
+---
+description: Prevent recurring Python/JS lint regressions with mandatory pre-completion checks
+globs: **/*.{py,js}
+alwaysApply: false
+---
+
+# OASIS Lint Gates (Python + JavaScript)
+
+Apply this checklist before claiming implementation is done.
+
+## Mandatory final checks
+
+- Run `ReadLints` on every edited Python/JS file.
+- If any new diagnostics appear, fix them before final response.
+- Do not stop at “logic is correct”; code must also be lint-clean.
+
+## Python guardrails
+
+- Do not use broad `except Exception` unless explicitly justified.
+- Prefer specific exception tuples and log warnings on safe fallbacks.
+- Normalize untrusted/coerced values with defensive helpers before casting.
+- Keep shaping logic in small helpers (avoid oversized orchestration functions).
+
+## JavaScript guardrails
+
+- Prefer `else if` over nested `if` inside `else`.
+- Remove redundant operations (`slice(0)`, duplicated transforms, dead branches).
+- Normalize dynamic values once (e.g., `trim()`/`String(...)`) and reuse.
+- Keep rendering blocks decomposed into focused helpers to reduce complexity.
+
+## Verification evidence in responses
+
+- Mention which lint checks were executed.
+- Mention whether diagnostics are now zero (for edited files).
