@@ -55,7 +55,7 @@
 - 🌐 **Web Interface**: Secure, password-protected web dashboard for exploring reports
 - ⚡ **Incremental Reporting**: Vulnerability reports are published as soon as each vulnerability analysis completes
 - 📈 **Live Scan Progress**: Executive summary is created early and updated progressively during long scans
-- 📌 **v0.5.2**: Structured **audit JSON** for dashboard metrics and modal preview; use **`--project-name`** for clearer folders and filters ([Output structure](#-output-structure)).
+- 📌 **v0.6.0**: Structured **audit JSON** for dashboard metrics and modal preview; use **`--project-name`** for clearer folders and filters ([Output structure](#-output-structure)); see **CHANGELOG** for breaking storage / `analysis_root` notes.
 
 ## 🚀 Getting started
 
