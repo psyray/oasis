@@ -247,7 +247,7 @@ class TestWebCollectRunLayouts(unittest.TestCase):
         model_dir = self.security / "example" / "20100202_120000" / "embed_m"
         report_json = model_dir / "json" / "xss.json"
         self.assertTrue(report_json.is_file())
-        self.server._project_field_cache.clear()
+        self.server._canonical_json_fields_cache.clear()
 
         open_calls = {"count": 0}
         original_open = open
@@ -269,7 +269,7 @@ class TestWebCollectRunLayouts(unittest.TestCase):
         model_dir = self.security / "example" / "20100202_120000" / "embed_m"
         report_json = model_dir / "json" / "xss.json"
         self.assertTrue(report_json.is_file())
-        self.server._project_field_cache.clear()
+        self.server._canonical_json_fields_cache.clear()
 
         open_calls = {"count": 0}
         original_open = open

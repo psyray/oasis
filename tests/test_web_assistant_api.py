@@ -1101,21 +1101,28 @@ class TestAssistantRagRootResolution(unittest.TestCase):
         from oasis.helpers.assistant.web.rag import resolve_assistant_cache_root
 
         with tempfile.TemporaryDirectory() as td:
-            fallback = Path(td)
+            td_path = Path(td).resolve()
+            sec = td_path / "security_reports"
+            sec.mkdir(parents=True, exist_ok=True)
+            fallback = td_path / "fallback"
+            fallback.mkdir(parents=True, exist_ok=True)
             payload = {"analysis_root": "/root/code-audit/Tchatche/Code"}
-            out = resolve_assistant_cache_root(payload, fallback)
+            out = resolve_assistant_cache_root(payload, sec, fallback)
             self.assertEqual(out, fallback.resolve())
 
     def test_resolve_assistant_cache_root_keeps_valid_local_root(self):
         from oasis.helpers.assistant.web.rag import resolve_assistant_cache_root
 
         with tempfile.TemporaryDirectory() as td:
-            fallback = Path(td) / "fallback"
+            td_path = Path(td).resolve()
+            sec = td_path / "security_reports"
+            sec.mkdir(parents=True, exist_ok=True)
+            fallback = td_path / "fallback"
             fallback.mkdir(parents=True, exist_ok=True)
-            local_root = Path(td) / "project_root"
+            local_root = td_path / "project_root"
             local_root.mkdir(parents=True, exist_ok=True)
             payload = {"analysis_root": str(local_root)}
-            out = resolve_assistant_cache_root(payload, fallback)
+            out = resolve_assistant_cache_root(payload, sec, fallback)
             self.assertEqual(out, local_root.resolve())
 
 

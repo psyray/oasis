@@ -1,10 +1,15 @@
 {% import "reports/_macros.html.j2" as macros %}
+{% set preview = preview if preview is defined else {} %}
 
 <article class="report-audit-json">
+  {{ macros.render_codebase_warning_banner(preview) }}
   <h1 id="audit-title">{{ document.title | default('Embeddings Distribution Analysis Report') }}</h1>
   <p><strong>Generated at:</strong> {{ document.generated_at | default('') }}</p>
   {% if document.project is defined and document.project %}
   <p><strong>Project:</strong> {{ document.project }}</p>
+  {% endif %}
+  {% if document.analysis_root is defined and document.analysis_root %}
+  <p><strong>Analysis root:</strong> <code class="report-meta-code">{{ document.analysis_root }}</code></p>
   {% endif %}
   <p><strong>OASIS version:</strong> {{ document.oasis_version | default('') }}</p>
   <p><strong>Embedding model:</strong> {{ document.embedding_model | default('') }}</p>

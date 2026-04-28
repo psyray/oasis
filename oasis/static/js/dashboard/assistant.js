@@ -1090,6 +1090,26 @@ DashboardApp.mountReportAssistantPanel = function () {
         return typeof v === 'string' ? v : fallback;
     };
 
+    const pathEntry =
+        DashboardApp.reportFormatsByPath && DashboardApp.reportFormatsByPath[reportPath];
+    const scopedReport = pathEntry && pathEntry.report ? pathEntry.report : null;
+    const codebaseBroken = !!(scopedReport && scopedReport.codebase_accessible === false);
+    const codebaseWarningBanner = codebaseBroken
+        ? `<div class="oasis-assistant-codebase-warning" role="alert" title="${DashboardApp._escapeHtml(
+              txt('codebaseUnavailableDetail', '')
+          )}">
+          <div class="oasis-assistant-codebase-warning__headline">
+            <span class="oasis-assistant-codebase-warning__emoji" aria-hidden="true">⚠️</span>
+            <strong class="oasis-assistant-codebase-warning__title">${DashboardApp._escapeHtml(
+                txt('codebaseUnavailableShort', 'Codebase unreachable')
+            )}</strong>
+          </div>
+          <p class="oasis-assistant-codebase-warning__body">${DashboardApp._escapeHtml(
+              txt('codebaseUnavailableDetail', '')
+          )}</p>
+        </div>`
+        : '';
+
     const contextBadgeText = execSummary
         ? txt('contextExecutiveAggregate', 'Context: full scan (aggregate JSON)')
         : txt('contextSingleVuln', 'Context: single vulnerability report');
@@ -1107,6 +1127,7 @@ DashboardApp.mountReportAssistantPanel = function () {
     panel.setAttribute('role', 'region');
     panel.setAttribute('aria-label', txt('panelSummary', 'Assistant'));
     panel.innerHTML = `
+            ${codebaseWarningBanner}
             <div class="oasis-assistant-meta-bar">
                 <span class="oasis-assistant-context-badge" id="oasis-assistant-context-badge">${DashboardApp._escapeHtml(contextBadgeText)}</span>
                 <label class="oasis-assistant-model-field">${DashboardApp._escapeHtml(txt('chatModelLabel', 'Chat model'))}

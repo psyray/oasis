@@ -3,6 +3,37 @@
  * (`/api/report-html`). Mirrors key rules from templates/report_styles.css, scoped so
  * they do not affect the rest of the dashboard.
  */
+
+#report-modal-content .html-content-container .report-codebase-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin: 0 0 1rem;
+    padding: 0.65rem 0.75rem;
+    border: 1px solid #f5c2c7;
+    border-radius: 6px;
+    background: #fff8f8;
+    color: #8b1538;
+    font-size: 0.88rem;
+}
+#report-modal-content .html-content-container .report-codebase-warning__icon {
+    flex-shrink: 0;
+    font-size: 1.25rem;
+    line-height: 1.2;
+}
+#report-modal-content .html-content-container .report-codebase-warning__body {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    line-height: 1.4;
+}
+#report-modal-content .html-content-container .report-codebase-warning__detail {
+    margin: 0.35rem 0 0;
+}
+#report-modal-content .html-content-container .report-meta-code {
+    font-size: 0.85rem;
+    word-break: break-all;
+}
 #report-modal-content .html-content-container .report-toc,
 #report-modal-content .html-content-container .report-stats-chart {
     box-sizing: border-box;

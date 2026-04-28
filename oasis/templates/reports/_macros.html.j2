@@ -1,7 +1,27 @@
-{% macro render_header(document) -%}
+{% macro render_codebase_warning_banner(preview) -%}
+{% if preview and preview.get('show_codebase_warning') %}
+<div class="report-codebase-warning" role="alert"
+     title="{{ preview.get('codebase_warning_detail', '') | e }}">
+  <span class="report-codebase-warning__icon" aria-hidden="true">⚠️</span>
+  <div class="report-codebase-warning__body">
+    <strong class="report-codebase-warning__short">{{ preview.get('codebase_warning_short', '') }}</strong>
+    <p class="report-codebase-warning__detail">{{ preview.get('codebase_warning_detail', '') }}</p>
+  </div>
+</div>
+{% endif %}
+{%- endmacro %}
+
+{% macro render_header(document, preview=None) -%}
+{{ render_codebase_warning_banner(preview) }}
 <h1>{{ document.title }}</h1>
 <p><strong>Date:</strong> {{ document.generated_at }} &mdash; <strong>Model:</strong> {{ document.model_name }}</p>
 <p><strong>Vulnerability:</strong> {{ document.vulnerability_name }}</p>
+{% if document.project %}
+<p><strong>Project:</strong> {{ document.project }}</p>
+{% endif %}
+{% if document.analysis_root %}
+<p><strong>Analysis root:</strong> <code class="report-meta-code">{{ document.analysis_root }}</code></p>
+{% endif %}
 {%- endmacro %}
 
 {% macro render_table_of_contents() -%}

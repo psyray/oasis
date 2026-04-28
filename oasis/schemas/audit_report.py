@@ -58,6 +58,13 @@ class AuditReportDocument(BaseModel):
     generated_at: str
     language: str = "en"
     project: Optional[str] = None
+    analysis_root: Optional[str] = Field(
+        default=None,
+        description=(
+            "Scanned project root path: relative to the security_reports directory for new reports; "
+            "legacy reports may omit this field."
+        ),
+    )
     oasis_version: str = ""
     embedding_model: str
     total_files_analyzed: int = 0

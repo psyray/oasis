@@ -1,6 +1,15 @@
+{% import "reports/_macros.html.j2" as macros %}
+{% set preview = preview if preview is defined else {} %}
 <article class="report-executive-summary">
+  {{ macros.render_codebase_warning_banner(preview) }}
   <h1>{{ payload.title }}</h1>
   <p><strong>Generated at:</strong> {{ payload.generated_at }}</p>
+  {% if payload.project %}
+  <p><strong>Project:</strong> {{ payload.project }}</p>
+  {% endif %}
+  {% if payload.analysis_root %}
+  <p><strong>Analysis root:</strong> <code class="report-meta-code">{{ payload.analysis_root }}</code></p>
+  {% endif %}
   <h2>Models Used</h2>
   <ul>
     <li><strong>Deep model:</strong> {{ payload.deep_model }}</li>

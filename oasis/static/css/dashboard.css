@@ -905,6 +905,7 @@ body.report-modal-scroll-locked .footer {
     display: flex;
     flex-direction: column;
     justify-content: space-between;
+    min-width: 0;
 }
 
 /* Styles for the model and date lists */
@@ -925,6 +926,7 @@ body.report-modal-scroll-locked .footer {
     gap: 5px;
     margin-bottom: 8px;
     max-height: 250px;
+    overflow-x: hidden;
     overflow-y: auto;
 }
 
@@ -937,6 +939,11 @@ body.report-modal-scroll-locked .footer {
     font-size: 0.8em;
     cursor: pointer;
     transition: all 0.2s ease;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .model-tag:hover {
@@ -1353,6 +1360,8 @@ body.report-modal-scroll-locked .footer {
     flex-wrap: wrap;
     gap: 4px;
     margin-bottom: 10px;
+    min-width: 0;
+    overflow-x: hidden;
 }
 
 /* Styles for the tree elements */
@@ -3091,4 +3100,73 @@ pre.http-raw {
 .oasis-assistant-validate-errors ul {
     margin: 0.25rem 0 0;
     padding-left: 1.1rem;
+}
+
+.oasis-assistant-codebase-warning {
+    margin: 0 0 0.75rem;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid #f5c2c7;
+    border-radius: 6px;
+    background: #fff8f8;
+    color: #8b1538;
+    font-size: 0.85rem;
+}
+.oasis-assistant-codebase-warning__headline {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+}
+.oasis-assistant-codebase-warning__emoji {
+    flex-shrink: 0;
+    font-size: 1.2rem;
+    line-height: 1.2;
+}
+.oasis-assistant-codebase-warning__title {
+    margin: 0;
+    font-size: inherit;
+}
+.oasis-assistant-codebase-warning__body {
+    margin: 0;
+    line-height: 1.35;
+}
+
+.date-tag-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.15rem;
+    margin: 0.15rem 0 0.2rem;
+    font-size: 0.72rem;
+    max-width: 100%;
+    text-align: center;
+}
+.date-tag-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem 0.5rem;
+    max-width: 100%;
+}
+.date-tag-meta-row--root {
+    width: 100%;
+    justify-content: center;
+}
+.date-tag-project {
+    font-weight: 600;
+    color: var(--dark-blue-2);
+}
+.date-tag-ar {
+    font-size: 0.68rem;
+    background: rgba(14, 31, 43, 0.06);
+    padding: 0.05rem 0.25rem;
+    border-radius: 3px;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.report-codebase-warning-badge {
+    cursor: help;
+    font-size: 1rem;
+    line-height: 1;
 }

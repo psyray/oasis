@@ -1,9 +1,11 @@
 // Filter management functions
 DashboardApp.VULNERABILITY_FILTER_STORAGE_KEY = 'oasis.dashboard.vulnerabilityFilters';
 DashboardApp.LANGUAGE_FILTER_STORAGE_KEY = 'oasis.dashboard.languageFilters';
+DashboardApp.PROJECT_FILTER_STORAGE_KEY = 'oasis.dashboard.projectFilters';
 DashboardApp.FILTER_STORAGE_KEYS = {
     vulnerabilities: DashboardApp.VULNERABILITY_FILTER_STORAGE_KEY,
     languages: DashboardApp.LANGUAGE_FILTER_STORAGE_KEY,
+    projects: DashboardApp.PROJECT_FILTER_STORAGE_KEY,
 };
 
 DashboardApp.normalizeFilterList = function(value) {
@@ -76,6 +78,30 @@ DashboardApp.clearLanguageFilterStorage = function() {
         localStorage.removeItem(DashboardApp.LANGUAGE_FILTER_STORAGE_KEY);
     } catch (error) {
         DashboardApp.debug('Unable to clear language filters from localStorage:', error);
+    }
+};
+
+DashboardApp.loadProjectFiltersFromStorage = function() {
+    try {
+        const rawFilters = localStorage.getItem(DashboardApp.PROJECT_FILTER_STORAGE_KEY);
+        if (!rawFilters) {
+            DashboardApp.activeFilters.projects = [];
+            return;
+        }
+
+        const parsedFilters = JSON.parse(rawFilters);
+        DashboardApp.activeFilters.projects = DashboardApp.normalizeFilterList(parsedFilters);
+    } catch (error) {
+        DashboardApp.activeFilters.projects = [];
+        DashboardApp.debug('Unable to load project filters from localStorage:', error);
+    }
+};
+
+DashboardApp.clearProjectFilterStorage = function() {
+    try {
+        localStorage.removeItem(DashboardApp.PROJECT_FILTER_STORAGE_KEY);
+    } catch (error) {
+        DashboardApp.debug('Unable to clear project filters from localStorage:', error);
     }
 };
 
@@ -175,6 +201,38 @@ DashboardApp.populateFilters = function() {
         vulnFiltersContainer.innerHTML = vulnFiltersHtml || '<div class="no-data">No vulnerability type available</div>';
     }
 
+    // Populate project filters
+    const projectFiltersContainer = document.getElementById('project-filters');
+    let projectFiltersHtml = '';
+    const availableProjects = Object.keys(DashboardApp.stats.projects || {}).sort((a, b) =>
+        a.localeCompare(b, 'fr', { sensitivity: 'base' })
+    );
+    const availableProjectSet = new Set(availableProjects);
+    const currentProjectFilters = DashboardApp.normalizeFilterList(DashboardApp.activeFilters.projects);
+    const reconciledProjectFilters = currentProjectFilters.filter((p) => availableProjectSet.has(p));
+    const previousProjectKey = currentProjectFilters.slice().sort().join('|');
+    const reconciledProjectKey = reconciledProjectFilters.slice().sort().join('|');
+    const hasReconciledProjectFilters = previousProjectKey !== reconciledProjectKey;
+    DashboardApp.activeFilters.projects = reconciledProjectFilters;
+    DashboardApp.saveFilterListToStorage('projects', DashboardApp.activeFilters.projects);
+
+    availableProjects.forEach((proj) => {
+        const count = DashboardApp.stats.projects[proj];
+        const isChecked = DashboardApp.activeFilters.projects.includes(proj) ? 'checked' : '';
+        projectFiltersHtml += `
+            <div class="filter-option" data-type="project" data-value="${proj}">
+                <label>
+                    <input type="checkbox" class="filter-checkbox" data-type="project" data-value="${proj}" ${isChecked}>
+                    ${proj} <span class="filter-count">(${count})</span>
+                </label>
+            </div>
+        `;
+    });
+
+    if (projectFiltersContainer) {
+        projectFiltersContainer.innerHTML = projectFiltersHtml || '<div class="no-data">No project label available</div>';
+    }
+
     // Populate language filters
     const languageFiltersContainer = document.getElementById('language-filters');
     let languageFiltersHtml = '';
@@ -240,6 +298,7 @@ DashboardApp.populateFilters = function() {
                 'vulnerability': 'vulnerabilities',
                 'format': 'formats',
                 'language': 'languages',
+                'project': 'projects',
             };
             
             const filterType = typeMapping[type];
@@ -265,6 +324,9 @@ DashboardApp.populateFilters = function() {
             }
             if (type === 'language') {
                 DashboardApp.saveFilterListToStorage('languages', DashboardApp.activeFilters.languages);
+            }
+            if (type === 'project') {
+                DashboardApp.saveFilterListToStorage('projects', DashboardApp.activeFilters.projects);
             }
             
             // Refresh reports and stats with new filters
@@ -315,6 +377,10 @@ DashboardApp.populateFilters = function() {
         DashboardApp.fetchReports();
         DashboardApp.fetchStats();
     }
+    if (hasReconciledProjectFilters) {
+        DashboardApp.fetchReports();
+        DashboardApp.fetchStats();
+    }
 };
 
 DashboardApp.updateFilterCounts = function() {
@@ -325,6 +391,7 @@ DashboardApp.updateFilterCounts = function() {
         vulnerability: {},
         format: {},
         language: {},
+        project: {},
     };
     
     document.querySelectorAll('.filter-checkbox').forEach(checkbox => {
@@ -383,6 +450,15 @@ DashboardApp.updateFilterCounts = function() {
             countSpan.textContent = `(${DashboardApp.stats.languages[languageValue] || 0})`;
         }
     });
+
+    const projectFilters = document.querySelectorAll('.filter-option[data-type="project"]');
+    projectFilters.forEach(option => {
+        const projectValue = option.dataset.value;
+        const countSpan = option.querySelector('.filter-count');
+        if (projectValue && countSpan && DashboardApp.stats.projects) {
+            countSpan.textContent = `(${DashboardApp.stats.projects[projectValue] || 0})`;
+        }
+    });
 };
 
 DashboardApp.initializeFilters = function() {
@@ -401,6 +477,7 @@ DashboardApp.initializeFilters = function() {
                 'vulnerability': 'vulnerabilities',
                 'format': 'formats',
                 'language': 'languages',
+                'project': 'projects',
             };
             
             const filterType = typeMapping[type];
@@ -419,6 +496,10 @@ DashboardApp.initializeFilters = function() {
             } else {
                 // Remove value if it's present
                 DashboardApp.activeFilters[filterType] = DashboardApp.activeFilters[filterType].filter(item => item !== value);
+            }
+
+            if (type === 'project') {
+                DashboardApp.saveFilterListToStorage('projects', DashboardApp.activeFilters.projects);
             }
             
             // Pour le débogage
@@ -439,9 +520,11 @@ DashboardApp.initializeFilters = function() {
             DashboardApp.activeFilters.formats = [];
             DashboardApp.activeFilters.languages = [];
             DashboardApp.activeFilters.vulnerabilities = [];
+            DashboardApp.activeFilters.projects = [];
             DashboardApp.activeFilters.dateRange = null;
             DashboardApp.clearVulnerabilityFilterStorage();
             DashboardApp.clearLanguageFilterStorage();
+            DashboardApp.clearProjectFilterStorage();
             
             // Reset checkboxes
             document.querySelectorAll('.filter-checkbox').forEach(checkbox => {
@@ -472,10 +555,12 @@ DashboardApp.clearFilters = function() {
         formats: [],
         languages: [],
         vulnerabilities: [],
+        projects: [],
         dateRange: null
     };
     DashboardApp.clearVulnerabilityFilterStorage();
     DashboardApp.clearLanguageFilterStorage();
+    DashboardApp.clearProjectFilterStorage();
     
     // Refresh reports only - stats will be calculated from reports
     DashboardApp.fetchReports();

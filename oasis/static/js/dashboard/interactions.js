@@ -35,6 +35,7 @@ DashboardApp.filterByModel = function(model) {
         formats: [],
         languages: [],
         vulnerabilities: [],
+        projects: [],
         dateRange: null
     };
     
@@ -156,51 +157,19 @@ DashboardApp._buildDateTagElement = function(dateInfo, options = {}) {
     const path = dateInfo.path || '';
     const format = dateInfo.format || 'md';
     const modelName = dateInfo.model || fallbackModelName;
-    const languageMeta = DashboardApp.getLanguageMeta(dateInfo.language);
+    const h = DashboardApp._escapeHtml;
 
     const tag = document.createElement('span');
     tag.className = 'date-tag clickable';
-    tag.dataset.model = modelName;
+    tag.dataset.model = DashboardApp.modelDataAttrValue(modelName);
     tag.addEventListener('click', () => DashboardApp.openReport(path, format));
 
+    let innerHtml = '';
     if (includeModelLabel) {
-        const label = document.createElement('div');
-        label.className = 'date-label';
-        label.textContent = `${modelName}:`;
-        tag.appendChild(label);
+        innerHtml += `<div class="date-label">${h(modelName)}:</div>`;
     }
-
-    const languageFlag = document.createElement('span');
-    languageFlag.className = 'language-flag';
-    languageFlag.title = languageMeta.name;
-    languageFlag.textContent = languageMeta.emoji;
-    tag.appendChild(languageFlag);
-
-    const modelEmoji = document.createElement('span');
-    modelEmoji.className = 'model-emoji';
-    modelEmoji.title = modelName;
-    const emoji = DashboardApp.getModelEmoji(modelName) || '🤖';
-    modelEmoji.textContent = String(emoji).trim();
-    tag.appendChild(modelEmoji);
-
-    const hasDate = !!dateInfo.date;
-    const main = document.createElement('div');
-    main.className = 'date-main';
-    if (hasDate) {
-        const dateObj = new Date(dateInfo.date);
-        main.textContent = dateObj.toLocaleDateString();
-    } else {
-        main.textContent = 'No date';
-    }
-    tag.appendChild(main);
-
-    if (hasDate) {
-        const time = document.createElement('div');
-        time.className = 'date-time';
-        const dateObj = new Date(dateInfo.date);
-        time.textContent = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        tag.appendChild(time);
-    }
+    innerHtml += DashboardApp.buildDateTagInnerHtml(Object.assign({}, dateInfo, { model: modelName }));
+    tag.innerHTML = innerHtml;
 
     return tag;
 };
@@ -217,7 +186,13 @@ DashboardApp._normalizeDateEntries = function(entries) {
             path: item.path,
             format: item.format,
             language: item.language || 'en',
-            model: item.model || 'Unknown'
+            model: item.model || 'Unknown',
+            project: item.project != null ? String(item.project) : '',
+            analysis_root: item.analysis_root != null ? String(item.analysis_root) : '',
+            codebase_accessible: item.codebase_accessible,
+            assistant_context_warning: item.assistant_context_warning != null
+                ? String(item.assistant_context_warning)
+                : ''
         }))
         .sort((a, b) => {
             const leftTs = toMillis(a.date);
@@ -257,7 +232,13 @@ DashboardApp._buildDateEntriesFromLocalReports = function(reports, vulnType, sel
             path: report.path,
             format: report.format,
             language: report.language,
-            model: report.model
+            model: report.model,
+            project: report.project != null ? String(report.project) : '',
+            analysis_root: report.analysis_root != null ? String(report.analysis_root) : '',
+            codebase_accessible: report.codebase_accessible,
+            assistant_context_warning: report.assistant_context_warning != null
+                ? String(report.assistant_context_warning)
+                : ''
         }));
     return DashboardApp._normalizeDateEntries(localEntries);
 };

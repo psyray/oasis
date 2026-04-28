@@ -1,5 +1,14 @@
 ## Unreleased
 
+### ✨ Added
+
+- 📁 **Dashboard**: filter reports by **project** (`/api/reports?project=…`, stats include `projects` counts).
+- ⚠️ **Dashboard / previews**: reports expose **`codebase_accessible`** and **`assistant_context_warning`** when the scanned tree cannot be resolved or read next to **`security_reports`**; warning banners in list chips, HTML preview (vulnerability / executive / audit), and assistant panel.
+
+### ⚡ Changed
+
+- 📎 **Canonical JSON `analysis_root`**: new reports store the scanned project root **relative to the `security_reports/` directory**; legacy **absolute** paths remain supported via resolution heuristics. Helpers live in **`oasis.helpers.analysis_root_path`** (shared by assistant RAG cache root and **`scan_root`** candidate resolution).
+
 ## 🚀 [0.5.2] - 2026-04-28
 
 ### ✨ Added

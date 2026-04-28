@@ -13,6 +13,7 @@ const DashboardApp = {
         formats: [],
         languages: [],
         vulnerabilities: [],
+        projects: [],
         dateRange: null
     },
     filtersPopulated: false,
@@ -250,6 +251,9 @@ const DashboardApp = {
                 if (typeof this.loadLanguageFiltersFromStorage === 'function') {
                     this.loadLanguageFiltersFromStorage();
                 }
+                if (typeof this.loadProjectFiltersFromStorage === 'function') {
+                    this.loadProjectFiltersFromStorage();
+                }
 
                 // Initialize the dashboard only after templates are loaded
                 this.initializeFilters();
@@ -295,6 +299,7 @@ const DashboardApp = {
                     formats: [],
                     languages: [],
                     vulnerabilities: [],
+                    projects: [],
                     dateRange: null
                 };
                 if (typeof self.clearVulnerabilityFilterStorage === 'function') {
@@ -302,6 +307,9 @@ const DashboardApp = {
                 }
                 if (typeof self.clearLanguageFilterStorage === 'function') {
                     self.clearLanguageFilterStorage();
+                }
+                if (typeof self.clearProjectFilterStorage === 'function') {
+                    self.clearProjectFilterStorage();
                 }
                 
                 // Reset checkboxes

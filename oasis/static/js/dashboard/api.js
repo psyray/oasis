@@ -25,6 +25,10 @@ DashboardApp.buildFilterParams = function(options = {}) {
     ) {
         params.append('vulnerability', DashboardApp.activeFilters.vulnerabilities.join(','));
     }
+
+    if (DashboardApp.activeFilters.projects && DashboardApp.activeFilters.projects.length > 0) {
+        params.append('project', DashboardApp.activeFilters.projects.join(','));
+    }
     
     if (DashboardApp.activeFilters.dateRange) {
         if (DashboardApp.activeFilters.dateRange.start) {

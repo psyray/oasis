@@ -76,10 +76,17 @@ from .helpers.dashboard import (
 from .helpers.progress import SCAN_PROGRESS_EXTENDED_KEYS, coerce_scan_progress_event_version
 from .report import Report, executive_summary_progress_sidecar_path, is_executive_summary_progress_sidecar
 from .ollama_manager import OllamaManager
+from .helpers.analysis_root_path import (
+    CODEBASE_UNAVAILABLE_DETAIL,
+    CODEBASE_UNAVAILABLE_SHORT,
+    assistant_context_warning,
+    codebase_access_state,
+    resolve_assistant_cache_root,
+    resolve_first_existing_scan_root,
+)
 from .helpers.assistant.web.rag import (
     embedding_cache_file_path,
     load_embedding_code_base,
-    resolve_assistant_cache_root,
     retrieve_relevant_snippets,
 )
 from .helpers.context.path_containment import is_path_within_root
@@ -281,12 +288,18 @@ class WebServer:
         self._default_ollama_url = default_ollama_url or OLLAMA_URL
         self._assistant_ollama_manager: Optional[OllamaManager] = None
         self.report_data = None
+        self.global_stats: Optional[Dict[str, Any]] = None
         self.socketio = None
         self.app = None
         self._progress_monitor_started = False
         self._stop_progress_monitor = False
         self._last_emitted_progress_key = None
-        self._project_field_cache: Dict[Path, Optional[str]] = {}
+        self._canonical_json_fields_cache: Dict[
+            Path, Tuple[Optional[str], Optional[str]]
+        ] = {}
+        self._codebase_access_state_cache: Dict[
+            Tuple[Optional[str], Path], Tuple[Optional[Path], bool]
+        ] = {}
         if not isinstance(report, Report):
             raise ValueError("Report must be an instance of Report")
         
@@ -344,7 +357,8 @@ class WebServer:
         self._stop_progress_monitor = False
         self._last_emitted_progress_key = None
         self._assistant_ollama_manager = None
-        self._project_field_cache.clear()
+        self._canonical_json_fields_cache.clear()
+        self._codebase_access_state_cache.clear()
 
         app = Flask(
             __name__, template_folder=str(Path(__file__).parent / "templates"),
@@ -714,7 +728,11 @@ class WebServer:
     ) -> Tuple[str, bool]:
         """Return ``(rag_block, rag_unavailable)`` for assistant context."""
         em_model = self._embed_model_for_assistant(report_payload)
-        root_path = resolve_assistant_cache_root(report_payload, self.input_path_absolute)
+        root_path = resolve_assistant_cache_root(
+            report_payload,
+            self.security_dir.resolve(),
+            self.input_path_absolute,
+        )
         project_name = report_payload.get("project") if isinstance(report_payload, dict) else None
         cache_path = embedding_cache_file_path(root_path, em_model, project_name=project_name)
 
@@ -1352,7 +1370,7 @@ class WebServer:
         @login_required
         def dashboard():
             """Main dashboard page"""
-            
+
             return render_template(
                 'dashboard.html',
                 model_emojis=MODEL_EMOJIS,
@@ -1367,7 +1385,7 @@ class WebServer:
                 dashboard_assistant_enabled=True,
                 dashboard_assistant_rag_default=bool(getattr(self, "web_assistant_rag", True)),
             )
-            
+
         @app.route('/api/reports')
         @login_required
         def get_reports():
@@ -1376,6 +1394,7 @@ class WebServer:
             format_filter = request.args.get('format', '')
             vuln_filter = request.args.get('vulnerability', '')
             language_filter = request.args.get('language', '')
+            project_filter = request.args.get('project', '')
             start_date = request.args.get('start_date', None)
             end_date = request.args.get('end_date', None)
             md_dates_only = request.args.get('md_dates_only', '1') == '1'
@@ -1388,12 +1407,13 @@ class WebServer:
                 format_filter=format_filter,
                 vuln_filter=vuln_filter,
                 language_filter=language_filter,
+                project_filter=project_filter,
                 start_date=start_date,
                 end_date=end_date,
                 md_dates_only=md_dates_only,
             )
             return jsonify(filtered_data)
-            
+
         @app.route('/api/stats')
         @login_required
         def get_stats():
@@ -1403,6 +1423,7 @@ class WebServer:
                 format_filter=request.args.get('format', ''),
                 vuln_filter=request.args.get('vulnerability', ''),
                 language_filter=request.args.get('language', ''),
+                project_filter=request.args.get('project', ''),
                 start_date=request.args.get('start_date', None),
                 end_date=request.args.get('end_date', None),
                 md_dates_only=request.args.get('md_dates_only', '1') == '1',
@@ -1417,19 +1438,20 @@ class WebServer:
                 format_filter='',
                 vuln_filter='Executive Summary',
                 language_filter=request.args.get('language', ''),
+                project_filter=request.args.get('project', ''),
                 start_date=request.args.get('start_date', None),
                 end_date=request.args.get('end_date', None),
                 md_dates_only=request.args.get('md_dates_only', '1') == '1',
             )
             return jsonify(self.get_scan_progress(filtered_reports=filtered_data))
-        
+
         @app.route('/reports/<path:filename>')
         @login_required
         def serve_report(filename):
             security_dir = self.security_dir
             # The complete path now includes the timestamp directory
             return send_from_directory(security_dir, filename)
-            
+
         @app.route('/api/report-content/<path:filename>')
         @login_required
         def get_report_content(filename):
@@ -1667,12 +1689,10 @@ class WebServer:
                 if isinstance(raw, str) and raw.strip():
                     scan_root_candidates.append(raw.strip())
 
-            scan_root: Optional[Path] = None
-            for candidate_raw in scan_root_candidates:
-                candidate = Path(candidate_raw).expanduser().resolve(strict=False)
-                if candidate.exists() and candidate.is_dir():
-                    scan_root = candidate
-                    break
+            scan_root = resolve_first_existing_scan_root(
+                scan_root_candidates,
+                security_root,
+            )
 
             if scan_root is None:
                 if not scan_root_candidates:
@@ -1758,11 +1778,7 @@ class WebServer:
                 pass
 
             synthesize_raw = data.get('synthesize_narrative')
-            if synthesize_raw is None:
-                synthesize_narrative = True
-            else:
-                synthesize_narrative = bool(synthesize_raw)
-
+            synthesize_narrative = True if synthesize_raw is None else bool(synthesize_raw)
             if synthesize_narrative:
                 chat_model_inv = data.get('model')
                 if isinstance(chat_model_inv, str) and chat_model_inv.strip():
@@ -2013,7 +2029,20 @@ class WebServer:
                 if not isinstance(payload, dict):
                     return jsonify({'error': 'Invalid JSON report payload'}), 422
 
-                html_content = self.report.render_report_html_from_json_payload(payload)
+                ar_raw = payload.get("analysis_root")
+                ar_text = ar_raw.strip() if isinstance(ar_raw, str) else None
+                _, codebase_ok = self._cached_codebase_access_state(ar_text)
+                preview_ctx = {
+                    "show_codebase_warning": not codebase_ok,
+                    "codebase_warning_short": CODEBASE_UNAVAILABLE_SHORT,
+                    "codebase_warning_detail": (
+                        "" if codebase_ok else CODEBASE_UNAVAILABLE_DETAIL
+                    ),
+                }
+                html_content = self.report.render_report_html_from_json_payload(
+                    payload,
+                    preview_context=preview_ctx,
+                )
                 return jsonify({'content': html_content}), 200
             except Exception:
                 return self._report_preview_error_response("Error while generating HTML preview from canonical JSON report")
@@ -2039,22 +2068,22 @@ class WebServer:
             report_path = request.args.get('path', '')
             if not report_path:
                 return jsonify({'error': 'No path provided'}), 400
-            
+
             try:
                 # Convert the relative path to absolute
                 abs_path = self.security_dir / report_path
-                
+
                 # Security check - make sure path is within the security reports directory
                 if not str(abs_path.resolve()).startswith(str(self.security_dir.resolve())):
                     return jsonify({'error': 'Invalid path'}), 403
-                
+
                 if not abs_path.exists():
                     return jsonify({'error': 'File not found'}), 404
-                
+
                 # Get the directory and filename
                 directory = abs_path.parent
                 filename = abs_path.name
-                
+
                 # Set the appropriate content type based on file extension
                 content_types = {
                     '.md': 'text/markdown',
@@ -2064,7 +2093,7 @@ class WebServer:
                     '.sarif': 'application/sarif+json',
                 }
                 content_type = content_types.get(abs_path.suffix, 'application/octet-stream')
-                
+
                 return send_from_directory(
                     directory=str(directory),
                     path=filename,
@@ -2097,7 +2126,7 @@ class WebServer:
                 if 'date' in report:
                     # Create a dictionary date_info from the date string
                     date_info = {'date': report['date']}
-                    
+
                     af = report.get('alternative_formats', {})
                     open_path = None
                     open_fmt = None
@@ -2114,20 +2143,19 @@ class WebServer:
                         date_info['path'] = report['path']
                         date_info['format'] = report.get('format', 'md')
                     date_info['language'] = report.get('language', 'en')
+                    date_info['model'] = report.get('model')
+                    date_info['project'] = report.get('project')
+                    date_info['analysis_root'] = report.get('analysis_root')
+                    date_info['codebase_accessible'] = report.get('codebase_accessible')
+                    date_info['assistant_context_warning'] = report.get('assistant_context_warning')
                     dates.append(date_info)
-            
+
             # Sort dates from newest to oldest
             dates.sort(key=lambda x: x.get('date', ''), reverse=True)
-            
+
             return jsonify({'dates': dates})
 
         return app
-
-    def collect_report_data(self):
-        """Collect and process all report data for efficient filtering and display"""
-        reports = self._collect_reports_from_directories()
-        self.report_data = reports
-        self.global_stats = self._calculate_global_statistics(reports)
 
     @staticmethod
     def _stats_from_json_report_file(report_file: Path) -> dict:
@@ -2453,6 +2481,12 @@ class WebServer:
         reports.sort(key=lambda x: x["date"] or "", reverse=True)
         return reports
 
+    def collect_report_data(self) -> None:
+        """Refresh ``report_data`` and ``global_stats`` from ``security_reports`` layout."""
+        reports = self._collect_reports_from_directories()
+        self.report_data = reports
+        self.global_stats = self._calculate_global_statistics(reports)
+
     def _iter_run_directories(self, security_reports_dir: Path):
         """
         Legacy top-level run dirs, top-level ``YYYYMMDD_HHMMSS`` runs, and
@@ -2512,57 +2546,87 @@ class WebServer:
             )
         return model_reports
 
-    def _process_report_file(
-        self, report_file, model_name, fmt, report_date, run_key: str, model_dir
-    ):
-        """Process a single report file and extract metadata"""
-        # Extract vulnerability type from filename
-        vulnerability_type = self._extract_vulnerability_type(report_file.stem)
+    def _progress_payload_for_dashboard_entry(
+        self, vulnerability_type: str, fmt: str, report_file: Path
+    ) -> Dict[str, Any]:
+        if vulnerability_type != "Executive Summary":
+            return {}
+        if fmt == "json":
+            return self._summary_progress_from_json_report_file(report_file)
+        if fmt == "md":
+            return self._summary_progress_from_markdown_report_file(report_file)
+        return {}
 
-        stats = self._stats_from_json_report_file(report_file) if fmt == 'json' else {}
-        progress = {}
-        if vulnerability_type == "Executive Summary":
-            if fmt == "json":
-                progress = self._summary_progress_from_json_report_file(report_file)
-            elif fmt == "md":
-                progress = self._summary_progress_from_markdown_report_file(report_file)
-        audit_metrics = {}
-        if vulnerability_type == "Audit Report":
-            if fmt == "json":
-                audit_metrics = self._audit_metrics_from_audit_json_report_file(report_file)
-            elif fmt == "md":
-                json_side = json_sibling_for_format_artifact(report_file)
-                if json_side.is_file():
-                    audit_metrics = self._audit_metrics_from_audit_json_report_file(json_side)
-                else:
-                    audit_metrics = self._audit_metrics_from_markdown_report_file(report_file)
+    def _audit_metrics_for_dashboard_entry(
+        self, vulnerability_type: str, fmt: str, report_file: Path
+    ) -> Dict[str, Any]:
+        if vulnerability_type != "Audit Report":
+            return {}
+        if fmt == "json":
+            return self._audit_metrics_from_audit_json_report_file(report_file)
+        if fmt == "md":
+            json_side = json_sibling_for_format_artifact(report_file)
+            if json_side.is_file():
+                return self._audit_metrics_from_audit_json_report_file(json_side)
+            return self._audit_metrics_from_markdown_report_file(report_file)
+        return {}
 
-        # Build relative path for web access
-        relative_path = report_file.relative_to(self.security_dir)
-
-        alternative_formats = self._find_alternative_formats(model_dir, report_file.stem)
-
-        language = None
+    def _language_for_dashboard_entry(self, report_file: Path, fmt: str) -> str:
         if fmt == "json":
             language = self._language_from_json_report_file(report_file)
         else:
             sibling_json = json_sibling_for_format_artifact(report_file)
-            if sibling_json.exists():
-                language = self._language_from_json_report_file(sibling_json)
+            language = (
+                self._language_from_json_report_file(sibling_json)
+                if sibling_json.exists()
+                else None
+            )
         if language is None:
             language = self._language_from_legacy_file(report_file)
-        if language is None:
-            language = "en"
+        return language if language is not None else "en"
 
+    def _project_and_analysis_root_for_dashboard_entry(
+        self, fmt: str, report_file: Path, run_key: str
+    ) -> Tuple[Optional[str], Optional[str]]:
         project: Optional[str] = None
+        analysis_root_raw: Optional[str] = None
         if fmt == "json":
-            project = self._project_field_from_json_path(report_file)
+            project, analysis_root_raw = self._canonical_json_fields_from_path(report_file)
         else:
             json_side = json_sibling_for_format_artifact(report_file)
             if json_side.is_file():
-                project = self._project_field_from_json_path(json_side)
+                project, analysis_root_raw = self._canonical_json_fields_from_path(json_side)
         if project is None:
             project = self._project_inferred_from_run_key(run_key)
+        return project, analysis_root_raw
+
+    def _process_report_file(
+        self,
+        report_file: Path,
+        model_name,
+        fmt,
+        report_date,
+        run_key: str,
+        model_dir,
+    ) -> Dict[str, Any]:
+        """Build one dashboard index entry for a report artifact."""
+        vulnerability_type = self._extract_vulnerability_type(report_file.stem)
+        stats = self._stats_from_json_report_file(report_file) if fmt == "json" else {}
+        progress = self._progress_payload_for_dashboard_entry(
+            vulnerability_type, fmt, report_file
+        )
+        audit_metrics = self._audit_metrics_for_dashboard_entry(
+            vulnerability_type, fmt, report_file
+        )
+        relative_path = report_file.relative_to(self.security_dir)
+        alternative_formats = self._find_alternative_formats(model_dir, report_file.stem)
+        language = self._language_for_dashboard_entry(report_file, fmt)
+        project, analysis_root_raw = self._project_and_analysis_root_for_dashboard_entry(
+            fmt, report_file, run_key
+        )
+        resolved_root, codebase_ok = self._cached_codebase_access_state(
+            analysis_root_raw
+        )
 
         return {
             "model": model_name,
@@ -2578,6 +2642,10 @@ class WebServer:
             "progress": progress,
             "audit_metrics": audit_metrics,
             "project": project,
+            "analysis_root": analysis_root_raw,
+            "analysis_root_resolved": str(resolved_root) if resolved_root else None,
+            "codebase_accessible": codebase_ok,
+            "assistant_context_warning": assistant_context_warning(not codebase_ok),
         }
         
     def _calculate_global_statistics(self, reports):
@@ -2648,26 +2716,55 @@ class WebServer:
         """
         return json_path.expanduser().absolute()
 
-    def _project_field_from_json_path(self, json_path: Path) -> Optional[str]:
+    def _cached_codebase_access_state(
+        self, stored_raw: Optional[str]
+    ) -> Tuple[Optional[Path], bool]:
+        """Memoize :func:`codebase_access_state` per normalized ``analysis_root`` key."""
+        sec_resolved = self.security_dir.resolve()
+        if isinstance(stored_raw, str):
+            key_raw = stored_raw.strip() or None
+        else:
+            key_raw = None
+        key = (key_raw, sec_resolved)
+        hit = self._codebase_access_state_cache.get(key)
+        if hit is not None:
+            return hit
+        out = codebase_access_state(
+            stored_raw=key_raw,
+            security_reports_root=sec_resolved,
+        )
+        self._codebase_access_state_cache[key] = out
+        return out
+
+    def _canonical_json_fields_from_path(
+        self, json_path: Path
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Return ``(project, analysis_root)`` from a canonical report JSON file."""
         key = self._project_field_cache_key(json_path)
-        if key in self._project_field_cache:
-            return self._project_field_cache[key]
+        if key in self._canonical_json_fields_cache:
+            return self._canonical_json_fields_cache[key]
         try:
             with open(json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError, TypeError):
-            self._project_field_cache[key] = None
-            return None
+            self._canonical_json_fields_cache[key] = (None, None)
+            return None, None
         if not isinstance(data, dict):
-            self._project_field_cache[key] = None
-            return None
+            self._canonical_json_fields_cache[key] = (None, None)
+            return None, None
+        proj_val: Optional[str] = None
         p = data.get("project")
         if isinstance(p, str) and p.strip():
-            value = p.strip()
-            self._project_field_cache[key] = value
-            return value
-        self._project_field_cache[key] = None
-        return None
+            proj_val = p.strip()
+        ar_raw = data.get("analysis_root")
+        ar_val: Optional[str] = None
+        if isinstance(ar_raw, str) and ar_raw.strip():
+            ar_val = ar_raw.strip()
+        self._canonical_json_fields_cache[key] = (proj_val, ar_val)
+        return proj_val, ar_val
+
+    def _project_field_from_json_path(self, json_path: Path) -> Optional[str]:
+        return self._canonical_json_fields_from_path(json_path)[0]
 
     @staticmethod
     def _project_inferred_from_run_key(run_key: str) -> Optional[str]:
@@ -2749,7 +2846,7 @@ class WebServer:
         report_format = report.get("format")
         return report_format == "json" or (report_format == "md" and not has_json)
 
-    def filter_reports(self, model_filter='', format_filter='', vuln_filter='', language_filter='', start_date=None, end_date=None, md_dates_only=True, mandatory_filters=None):
+    def filter_reports(self, model_filter='', format_filter='', vuln_filter='', language_filter='', project_filter='', start_date=None, end_date=None, md_dates_only=True, mandatory_filters=None):
         """Filter reports based on criteria"""
         if not self.report_data:
             self.collect_report_data()
@@ -2762,6 +2859,7 @@ class WebServer:
                 "format": format_filter,
                 "vulnerability": vuln_filter,
                 "language": language_filter,
+                "project": project_filter,
                 "start_date": start_date,
                 "end_date": end_date,
             }
@@ -2801,6 +2899,19 @@ class WebServer:
                 if ((r.get("language") or "en").strip().lower() in language_filters)
             ]
 
+        if project_filter:
+            if isinstance(project_filter, (list, tuple, set)):
+                project_filters = [str(p).strip().lower() for p in project_filter if str(p).strip()]
+            else:
+                project_filters = [
+                    p.strip().lower() for p in str(project_filter).split(',') if p.strip()
+                ]
+            filtered = [
+                r
+                for r in filtered
+                if str(r.get("project") or "").strip().lower() in project_filters
+            ]
+
         for report in filtered:
             report["date_visible"] = self._is_date_visible_for_report(report) if md_dates_only else True
 
@@ -2830,6 +2941,7 @@ class WebServer:
             "languages": {},
             "formats": {},
             "dates": {},
+            "projects": {},
             "risk_summary": {
                 "total_findings": 0,
                 "critical": 0,
@@ -2897,6 +3009,9 @@ class WebServer:
 
         language = (report.get("language") or "en").lower()
         stats["languages"][language] = stats["languages"].get(language, 0) + 1
+
+        if project := report.get("project"):
+            stats["projects"][project] = stats["projects"].get(project, 0) + 1
 
         if report_date := report.get("date"):
             date_only = report_date.split()[0]

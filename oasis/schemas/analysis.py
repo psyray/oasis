@@ -140,7 +140,10 @@ class VulnerabilityReportDocument(BaseModel):
     stats: DashboardStats = Field(default_factory=DashboardStats)
     analysis_root: Optional[str] = Field(
         default=None,
-        description="Resolved scanned project root when available (assistant / cache linkage)",
+        description=(
+            "Scanned project root path: relative to the security_reports directory for new reports; "
+            "legacy reports may store an absolute path."
+        ),
     )
     embed_model: Optional[str] = Field(
         default=None,

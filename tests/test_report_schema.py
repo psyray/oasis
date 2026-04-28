@@ -1701,6 +1701,33 @@ Not a table line anymore.
         self.assertEqual(models, {"Model A", "Model B"})
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_filter_reports_project_is_exact_match_not_substring(self):
+        server = WebServer.__new__(WebServer)
+        server.report_data = [
+            {
+                "vulnerability_type": "SQL Injection",
+                "model": "M",
+                "format": "json",
+                "date": "2026-04-17 10:00:00",
+                "language": "en",
+                "project": "test",
+            },
+            {
+                "vulnerability_type": "SQL Injection",
+                "model": "M",
+                "format": "json",
+                "date": "2026-04-17 10:00:00",
+                "language": "en",
+                "project": "test_project",
+            },
+        ]
+        server.collect_report_data = lambda: None
+
+        filtered = server.filter_reports(project_filter="test")
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]["project"], "test")
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_web_socketio_cors_origins_match_web_port_and_config(self):
         from oasis import config
 
@@ -1753,7 +1780,7 @@ Not a table line anymore.
             / "views.js"
         )
         content = views_js.read_text(encoding="utf-8")
-        self.assertIn("model-emoji", content)
+        self.assertIn("DashboardApp.buildDateTagInnerHtml", content)
         self.assertIn("datesSelectionBadgeHTML", content)
         self.assertIn("buildAuditComparisonTableHtml", content)
         self.assertIn("DashboardApp.auditComparison.buildTableHtml", content)
@@ -1771,6 +1798,8 @@ Not a table line anymore.
         )
         content = utils_js.read_text(encoding="utf-8")
         self.assertIn("DashboardApp.auditComparison", content)
+        self.assertIn("DashboardApp.buildDateTagInnerHtml", content)
+        self.assertIn("model-emoji", content)
         self.assertIn("buildTableHtml", content)
         self.assertIn("Embedding models comparison (latest available audit scores)", content)
         self.assertIn("audit-comparison-table", content)
@@ -1820,7 +1849,7 @@ Not a table line anymore.
         self.assertIn("Date.parse", content)
         self.assertIn("DashboardApp._buildDateEntriesFromApiPayload", content)
         self.assertIn("params.append('model', modelName)", content)
-        self.assertIn("model-emoji", content)
+        self.assertIn("DashboardApp.buildDateTagInnerHtml", content)
         self.assertIn("readSelectedModelsFromCard(card)", content)
         self.assertIn("writeSelectedModelsToCard(card, selectedList)", content)
         self.assertIn("isModelSelected(selectedModels, tag.dataset.model)", content)
