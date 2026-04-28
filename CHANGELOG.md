@@ -21,6 +21,7 @@
 ### 🐛 Fixed
 
 - 🖼️ **Dashboard HTML preview**: Executive Summary **canonical JSON** (`json/_executive_summary.json`) uses the same compact report-modal spine as other previews: **`executive-preview`** wrapper, **table of contents**, section anchors, and **return-to-TOC** links so **Chart.js** severity rollup and styling match the markdown-augmented path.
+- 🤖 **Ollama**: `ensure_model_available` runs for both **scan** and **deep** models (not only the scan model), with deduplication when names refer to the same local tag; failed pull or missing model surfaces as a **RuntimeError** at analyzer init instead of failing later without a download attempt.
 
 ### ⚡ Changed
 

@@ -227,7 +227,22 @@ class SecurityAnalyzer:
         
         # Set up scanning model (lighter model for initial passes)
         self.scan_model = scan_model or llm_model
-        self.ollama_manager.ensure_model_available(self.scan_model)
+
+        # Pull any missing Ollama weights for both scan and deep models (v0.4+ split).
+        models_to_ensure: List[str] = []
+        seen_normalized: set[str] = set()
+        for candidate in (self.scan_model, self.llm_model):
+            normalized = OllamaManager._normalize_model_reference(candidate)
+            if not normalized or normalized in seen_normalized:
+                continue
+            seen_normalized.add(normalized)
+            models_to_ensure.append(candidate)
+        for model_name in models_to_ensure:
+            if not self.ollama_manager.ensure_model_available(model_name):
+                raise RuntimeError(
+                    f"Required Ollama model could not be pulled or is unavailable: {model_name}"
+                )
+
         logger.info(
             f"{MODEL_EMOJIS['default']} Using {cli_bold(self.ollama_manager.get_model_display_name(self.scan_model))} "
             f"for initial scanning and {cli_bold(self.ollama_manager.get_model_display_name(self.llm_model))} for deep analysis"

@@ -4,7 +4,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -191,6 +191,133 @@ class TestAnalyzeOrchestration(unittest.TestCase):
         prompt = kwargs["messages"][0]["content"]
         self.assertIn("USER_ADDITIONAL_INSTRUCTIONS", prompt)
         self.assertIn("curl", prompt)
+
+    @patch("oasis.analyze.CacheManager")
+    def test_init_ensures_scan_and_deep_models_when_distinct(self, _mock_cache):
+        ollama = MagicMock()
+        ollama.get_client.return_value = object()
+        ollama.ensure_model_available.return_value = True
+        ollama.get_model_display_name.side_effect = lambda m: m
+
+        em = MagicMock()
+        em.embedding_model = "embed-m"
+        em.code_base = {}
+        em.analyze_by_function = False
+        em.threshold = 0.5
+        em.input_path = "/tmp/oasis-test-project"
+
+        args = SimpleNamespace(
+            clear_cache_scan=False,
+            cache_days=7,
+            project_name=None,
+            language="en",
+        )
+
+        SecurityAnalyzer(
+            args,
+            llm_model="deep-model",
+            embedding_manager=em,
+            ollama_manager=ollama,
+            scan_model="scan-model",
+        )
+
+        ollama.ensure_model_available.assert_has_calls(
+            [call("scan-model"), call("deep-model")]
+        )
+
+    @patch("oasis.analyze.CacheManager")
+    def test_init_ensures_model_once_when_scan_matches_deep(self, _mock_cache):
+        ollama = MagicMock()
+        ollama.get_client.return_value = object()
+        ollama.ensure_model_available.return_value = True
+        ollama.get_model_display_name.side_effect = lambda m: m
+
+        em = MagicMock()
+        em.embedding_model = "embed-m"
+        em.code_base = {}
+        em.analyze_by_function = False
+        em.threshold = 0.5
+        em.input_path = "/tmp/oasis-test-project"
+
+        args = SimpleNamespace(
+            clear_cache_scan=False,
+            cache_days=7,
+            project_name=None,
+            language="en",
+        )
+
+        SecurityAnalyzer(
+            args,
+            llm_model="shared-model",
+            embedding_manager=em,
+            ollama_manager=ollama,
+            scan_model=None,
+        )
+
+        ollama.ensure_model_available.assert_called_once_with("shared-model")
+
+    @patch("oasis.analyze.CacheManager")
+    def test_init_dedupes_normalized_model_aliases(self, _mock_cache):
+        ollama = MagicMock()
+        ollama.get_client.return_value = object()
+        ollama.ensure_model_available.return_value = True
+        ollama.get_model_display_name.side_effect = lambda m: m
+
+        em = MagicMock()
+        em.embedding_model = "embed-m"
+        em.code_base = {}
+        em.analyze_by_function = False
+        em.threshold = 0.5
+        em.input_path = "/tmp/oasis-test-project"
+
+        args = SimpleNamespace(
+            clear_cache_scan=False,
+            cache_days=7,
+            project_name=None,
+            language="en",
+        )
+
+        SecurityAnalyzer(
+            args,
+            llm_model="llama3:latest",
+            embedding_manager=em,
+            ollama_manager=ollama,
+            scan_model="llama3",
+        )
+
+        ollama.ensure_model_available.assert_called_once_with("llama3")
+
+    @patch("oasis.analyze.CacheManager")
+    def test_init_raises_when_model_cannot_be_made_available(self, _mock_cache):
+        ollama = MagicMock()
+        ollama.get_client.return_value = object()
+        ollama.ensure_model_available.side_effect = [True, False]
+        ollama.get_model_display_name.side_effect = lambda m: m
+
+        em = MagicMock()
+        em.embedding_model = "embed-m"
+        em.code_base = {}
+        em.analyze_by_function = False
+        em.threshold = 0.5
+        em.input_path = "/tmp/oasis-test-project"
+
+        args = SimpleNamespace(
+            clear_cache_scan=False,
+            cache_days=7,
+            project_name=None,
+            language="en",
+        )
+
+        with self.assertRaises(RuntimeError) as ctx:
+            SecurityAnalyzer(
+                args,
+                llm_model="deep-model",
+                embedding_manager=em,
+                ollama_manager=ollama,
+                scan_model="scan-model",
+            )
+
+        self.assertIn("deep-model", str(ctx.exception))
 
 @unittest.skipIf(route_after_report is None, "agent routing dependencies unavailable")
 class TestAgentRouting(unittest.TestCase):
