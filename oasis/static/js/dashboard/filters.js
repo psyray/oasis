@@ -657,6 +657,12 @@ DashboardApp.setupMobileNavigation = function() {
     DashboardApp.debug("Setting up mobile navigation...");
     const toggleFiltersBtn = document.getElementById('toggle-filters');
     const sidebar = document.querySelector('.sidebar');
+    const isMobileViewport = () => window.matchMedia('(max-width: 991px)').matches;
+
+    const previousMobileNavigationCleanup = DashboardApp._cleanupMobileNavigation;
+    if (typeof previousMobileNavigationCleanup === 'function') {
+        previousMobileNavigationCleanup();
+    }
     
     if (!toggleFiltersBtn || !sidebar) {
         DashboardApp.debug("Toggle button or sidebar not found");
@@ -668,8 +674,8 @@ DashboardApp.setupMobileNavigation = function() {
     overlay.className = 'sidebar-overlay';
     document.body.appendChild(overlay);
     
-    // Restore the previous menu state if saved
-    if (localStorage.getItem('filtersExpanded') === 'true') {
+    // Restore the previous menu state only on mobile viewport
+    if (isMobileViewport() && localStorage.getItem('filtersExpanded') === 'true') {
         sidebar.classList.add('expanded');
         overlay.classList.add('active');
     }
@@ -690,17 +696,38 @@ DashboardApp.setupMobileNavigation = function() {
     };
     
     // Click event on the button
-    toggleFiltersBtn.addEventListener('click', function(e) {
+    const onToggleFiltersClick = function(e) {
         e.stopPropagation(); // Prevent propagation to the document
         toggleMenu();
-    });
+    };
+    toggleFiltersBtn.addEventListener('click', onToggleFiltersClick);
     
     // Close the menu when clicking on the overlay
-    overlay.addEventListener('click', function() {
+    const onOverlayClick = function() {
         sidebar.classList.remove('expanded');
         overlay.classList.remove('active');
         localStorage.setItem('filtersExpanded', 'false');
-    });
+    };
+    overlay.addEventListener('click', onOverlayClick);
+
+    // Keep desktop behavior stable: no off-canvas state above lg breakpoint.
+    const onWindowResize = function () {
+        if (!isMobileViewport()) {
+            sidebar.classList.remove('expanded');
+            overlay.classList.remove('active');
+            localStorage.setItem('filtersExpanded', 'false');
+        }
+    };
+    window.addEventListener('resize', onWindowResize);
+
+    DashboardApp._cleanupMobileNavigation = function() {
+        toggleFiltersBtn.removeEventListener('click', onToggleFiltersClick);
+        overlay.removeEventListener('click', onOverlayClick);
+        window.removeEventListener('resize', onWindowResize);
+        if (overlay.parentNode) {
+            overlay.parentNode.removeChild(overlay);
+        }
+    };
 };
 
 DashboardApp.debug("Filters module loaded"); 

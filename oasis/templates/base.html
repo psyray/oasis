@@ -3,6 +3,86 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>
+        (function () {
+            var storageKey = 'oasis-ui-theme';
+            var root = document.documentElement;
+            function detectTheme() {
+                var preferred = 'light';
+                try {
+                    var saved = window.localStorage ? window.localStorage.getItem(storageKey) : null;
+                    if (saved === 'light' || saved === 'dark') {
+                        return saved;
+                    }
+                } catch (_error) {
+                    // Ignore localStorage failures and fallback to system preference.
+                }
+                if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                    preferred = 'dark';
+                }
+                return preferred;
+            }
+            function applyTheme(theme) {
+                var resolved = theme === 'dark' ? 'dark' : 'light';
+                root.setAttribute('data-theme', resolved);
+                root.style.colorScheme = resolved;
+                return resolved;
+            }
+            function syncThemeButton(theme) {
+                var button = document.getElementById('theme-toggle');
+                if (!button) {
+                    return;
+                }
+                var icon = button.querySelector('.theme-toggle-icon');
+                var label = button.querySelector('.theme-toggle-label');
+                var next = theme === 'dark' ? 'light' : 'dark';
+                if (icon) {
+                    icon.textContent = theme === 'dark' ? '☀️' : '🌙';
+                }
+                if (label) {
+                    label.textContent = theme === 'dark' ? 'Light' : 'Dark';
+                }
+                button.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
+                button.setAttribute('aria-label', 'Switch to ' + next + ' mode');
+                button.setAttribute('title', 'Switch to ' + next + ' mode');
+            }
+            function bindThemeToggleOnce() {
+                var button = document.getElementById('theme-toggle');
+                if (!button || button.dataset.oasisThemeBound === '1') {
+                    return;
+                }
+                button.addEventListener('click', function () {
+                    window.OasisTheme.toggleTheme();
+                });
+                button.dataset.oasisThemeBound = '1';
+            }
+            var initialTheme = applyTheme(detectTheme());
+            window.OasisTheme = {
+                detectTheme: detectTheme,
+                applyTheme: applyTheme,
+                syncThemeButton: syncThemeButton,
+                bindToggle: bindThemeToggleOnce,
+                toggleTheme: function () {
+                    var current = root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+                    var next = current === 'dark' ? 'light' : 'dark';
+                    try {
+                        if (window.localStorage) {
+                            window.localStorage.setItem(storageKey, next);
+                        }
+                    } catch (_error) {
+                        // Ignore localStorage failures and keep runtime state.
+                    }
+                    var applied = applyTheme(next);
+                    syncThemeButton(applied);
+                    return applied;
+                }
+            };
+            document.addEventListener('DOMContentLoaded', function () {
+                syncThemeButton(initialTheme);
+                bindThemeToggleOnce();
+            });
+        })();
+    </script>
     <title>{% block title %}OASIS{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/favicon/favicon-96x96.png') }}" sizes="96x96" />

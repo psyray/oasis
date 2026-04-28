@@ -345,6 +345,55 @@ DashboardApp._destroyStatsSeverityChart = function () {
         }
         DashboardApp._statsSeverityChart = null;
     }
+    if (DashboardApp._statsSeverityThemeSyncRaf) {
+        window.cancelAnimationFrame(DashboardApp._statsSeverityThemeSyncRaf);
+        DashboardApp._statsSeverityThemeSyncRaf = null;
+    }
+    if (DashboardApp._statsSeverityThemeSyncHandler) {
+        document.removeEventListener(DashboardApp.THEME_CHANGE_EVENT, DashboardApp._statsSeverityThemeSyncHandler);
+        DashboardApp._statsSeverityThemeSyncHandler = null;
+    }
+    DashboardApp._statsSeverityThemeSyncBound = false;
+};
+
+DashboardApp._applyStatsSeverityChartTheme = function (chart) {
+    if (!chart || !chart.options || !chart.options.scales) {
+        return;
+    }
+    const activeTheme = DashboardApp.getCurrentTheme();
+    if (chart._oasisAppliedTheme === activeTheme) {
+        return;
+    }
+    const palette = DashboardApp.getDashboardChartThemeColors(activeTheme);
+    const xAxis = chart.options.scales.x || {};
+    const yAxis = chart.options.scales.y || {};
+    xAxis.ticks = xAxis.ticks || {};
+    xAxis.grid = xAxis.grid || {};
+    yAxis.ticks = yAxis.ticks || {};
+    xAxis.ticks.color = palette.text;
+    xAxis.grid.color = palette.grid;
+    yAxis.ticks.color = palette.text;
+    chart.options.scales.x = xAxis;
+    chart.options.scales.y = yAxis;
+    chart._oasisAppliedTheme = activeTheme;
+    chart.update('none');
+};
+
+DashboardApp._ensureStatsSeverityChartThemeSync = function () {
+    if (DashboardApp._statsSeverityThemeSyncBound) {
+        return;
+    }
+    DashboardApp._statsSeverityThemeSyncHandler = function () {
+        if (DashboardApp._statsSeverityThemeSyncRaf) {
+            return;
+        }
+        DashboardApp._statsSeverityThemeSyncRaf = window.requestAnimationFrame(function () {
+            DashboardApp._statsSeverityThemeSyncRaf = null;
+            DashboardApp._applyStatsSeverityChartTheme(DashboardApp._statsSeverityChart);
+        });
+    };
+    DashboardApp._statsSeverityThemeSyncBound = true;
+    document.addEventListener(DashboardApp.THEME_CHANGE_EVENT, DashboardApp._statsSeverityThemeSyncHandler);
 };
 
 /** Horizontal bar chart for severity counts (requires Chart.js on ``window``). */
@@ -363,6 +412,7 @@ DashboardApp._initStatsSeverityChart = function () {
     if (!ctx) {
         return;
     }
+    const palette = DashboardApp.getDashboardChartThemeColors();
     DashboardApp._statsSeverityChart = new Chart(ctx, {
         type: 'bar',
         data: {
@@ -398,15 +448,23 @@ DashboardApp._initStatsSeverityChart = function () {
                     beginAtZero: true,
                     ticks: {
                         precision: 0,
+                        color: palette.text,
                     },
-                    grid: { display: true },
+                    grid: {
+                        display: true,
+                        color: palette.grid,
+                    },
                 },
                 y: {
+                    ticks: {
+                        color: palette.text,
+                    },
                     grid: { display: false },
                 },
             },
         },
     });
+    DashboardApp._ensureStatsSeverityChartThemeSync();
 };
 
 DashboardApp.renderStats = function() {
@@ -542,7 +600,7 @@ DashboardApp.renderStats = function() {
         `
         : '';
     
-    statsContainer.innerHTML = `
+    const statsHtml = `
         <div class="dashboard-cards">
             <div class="card">
                 <div class="card-title">📊 Reports</div>
@@ -570,11 +628,12 @@ DashboardApp.renderStats = function() {
                     <span class="badge badge-medium">⚠️ ${DashboardApp.stats.risk_summary.medium || 0} Medium</span>
                     <span class="badge badge-low">📌 ${DashboardApp.stats.risk_summary.low || 0} Low</span>
                 </div>
-                <div class="card-label">From structured findings, not embedding similarity tiers</div>
+                <div class="card-label card-label-structured-findings">From structured findings, not embedding similarity tiers</div>
             </div>
             ${progressCard}
         </div>
     `;
+    DashboardApp._appendSanitizedHtml(statsContainer, statsHtml);
     DashboardApp._initStatsSeverityChart();
 };
 

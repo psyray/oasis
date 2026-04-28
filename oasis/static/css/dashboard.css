@@ -1,4 +1,16 @@
 :root {
+    --cards-columns: 1;
+    --theme-surface: #f5f2e9;
+    --theme-surface-elevated: #ffffff;
+    --theme-surface-muted: #f5f5f5;
+    --theme-text: #0e1f2b;
+    --theme-text-muted: #7f8c8d;
+    --theme-border: #ddd;
+    --theme-overlay: rgba(0, 0, 0, 0.7);
+    --theme-header-bg: #0e1f2b;
+    --theme-header-bg-strong: #1a3a5f;
+    --theme-header-link-text: #ffffff;
+    --muted-text: #5c6570;
     --dark-blue: #0e1f2b;
     --dark-blue-2: #1a3a5f;
     --sand: #e6e0cc;
@@ -11,19 +23,42 @@
     --white: #fff;
 }
 
+[data-theme='dark'] {
+    --theme-surface: #0f1722;
+    --theme-surface-elevated: #152133;
+    --theme-surface-muted: #1a2a3d;
+    --theme-text: #e6edf5;
+    --theme-text-muted: #c6d3e0;
+    --theme-border: #2e4158;
+    --theme-overlay: rgba(0, 0, 0, 0.82);
+    --theme-header-bg: #0c1520;
+    --theme-header-bg-strong: #111f2f;
+    --theme-header-link-text: #ffffff;
+    --dark-blue: #e6edf5;
+    --dark-blue-2: #d5e1ef;
+    --sand: #22344a;
+    --light-sand: #0f1722;
+    --light-gray: #1a2a3d;
+    --border-color: #2e4158;
+    --white: #152133;
+    --medium-gray: #c6d3e0;
+    --muted-text: #c6d3e0;
+}
+
 body {
     font-family: Arial, sans-serif;
     margin: 0;
     padding: 0;
-    background-color: var(--light-sand);
-    color: var(--dark-blue);
+    background-color: var(--theme-surface);
+    color: var(--theme-text);
     display: flex;
     flex-direction: column;
     min-height: 100vh;
 }
 
 .header {
-    background-color: var(--dark-blue);
+    background-color: var(--theme-header-bg);
+    color: #fff;
     padding: 15px 20px;
     display: flex;
     align-items: center;
@@ -38,7 +73,7 @@ body {
 }
 
 .header-link {
-    color: var(--white);
+    color: var(--theme-header-link-text);
     text-decoration: none;
     font-weight: bold;
     font-size: 1.1rem;
@@ -49,6 +84,84 @@ body {
 
 .header-link:hover {
     background-color: rgba(255, 255, 255, 0.1);
+}
+
+.header-theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.header-theme-toggle:hover {
+    border-color: rgba(255, 255, 255, 0.42);
+}
+
+.theme-toggle-label {
+    line-height: 1;
+}
+
+.header-link-icon {
+    line-height: 1;
+}
+
+.visually-hidden {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    clip-path: inset(50%) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
+@media (max-width: 575.98px) {
+    .header {
+        padding: 10px 12px;
+        gap: 8px;
+    }
+
+    .logo-container {
+        min-width: 0;
+        gap: 8px;
+    }
+
+    .logo-circle {
+        width: 36px;
+        height: 36px;
+        margin-right: 0;
+    }
+
+    .oasis-logo-img {
+        width: 30px;
+        height: 30px;
+    }
+
+    .title {
+        font-size: 1rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 40vw;
+    }
+
+    .header-actions {
+        gap: 8px;
+        flex-shrink: 0;
+    }
+
+    .header-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 6px 8px;
+        font-size: 1rem;
+    }
+
 }
 
 .logo-container {
@@ -100,7 +213,7 @@ body {
 
 .sidebar {
     width: 300px;
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
     border-right: 1px solid var(--border-color);
     padding: 20px;
     box-shadow: 2px 0 5px rgba(0,0,0,0.05);
@@ -149,25 +262,32 @@ body {
 
 .dashboard-cards {
     display: grid;
-    grid-template-columns: repeat(1, minmax(0, 1fr));
+    grid-template-columns: repeat(var(--cards-columns), minmax(0, 1fr));
     gap: 20px;
     margin-bottom: 30px;
 }
 
-@media (min-width: 780px) {
-    .dashboard-cards {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+/* Shared card-grid breakpoints (single source of truth for dashboard/report cards). */
+@media (min-width: 768px) {
+    :root {
+        --cards-columns: 2;
     }
 }
 
 @media (min-width: 1200px) {
-    .dashboard-cards {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+    :root {
+        --cards-columns: 3;
+    }
+}
+
+@media (min-width: 1750px) {
+    :root {
+        --cards-columns: 4;
     }
 }
 
 .card {
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
     border-radius: 8px;
     box-shadow: 0 2px 5px rgba(0,0,0,0.1);
     padding: 20px;
@@ -191,6 +311,10 @@ body {
 .card-label {
     font-size: 14px;
     color: var(--medium-gray);
+}
+
+.card-label-structured-findings {
+    padding-top: 10px;
 }
 
 .progress-card .progress-meta {
@@ -338,28 +462,6 @@ body {
     }
 }
 
-@media (min-width: 1710px) {
-    .dashboard-cards {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-    }
-
-    /* Keep metric cards as single-column blocks. */
-    .dashboard-cards > .card:not(.progress-card) {
-        grid-column: span 1;
-    }
-
-    /* Keep "Findings by severity" on the same row as "Scan progress". */
-    .dashboard-cards .risk-summary-card {
-        grid-column: 1;
-        grid-row: 2;
-    }
-
-    .dashboard-cards .progress-card {
-        grid-column: 2 / span 2;
-        grid-row: 2;
-    }
-}
-
 .card-icon {
     position: absolute;
     right: 15px;
@@ -389,7 +491,7 @@ body {
 }
 
 .reports-table tbody tr {
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
 }
 
 .reports-table tbody tr:nth-child(even) {
@@ -433,6 +535,7 @@ body {
     width: 100%;
     height: 168px;
     margin-top: 8px;
+    color: var(--medium-gray);
 }
 
 .stats-severity-badges {
@@ -512,7 +615,7 @@ body {
 }
 
 .footer {
-    background-color: var(--dark-blue);
+    background-color: var(--theme-header-bg);
     color: white;
     text-align: center;
     padding: 15px;
@@ -590,7 +693,7 @@ body.report-modal-scroll-locked .footer {
 .tree-section {
     border: 1px solid var(--border-color);
     border-radius: 5px;
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
     overflow: hidden;
 }
 
@@ -784,7 +887,22 @@ body.report-modal-scroll-locked .footer {
 }
 
 .btn-primary {
+    background-color: var(--light-turquoise);
+    color: white;
+}
+
+.btn-primary:hover {
     background-color: var(--turquoise);
+    color: white;
+}
+
+[data-theme='dark'] .btn-primary {
+    background-color: #35506a;
+    color: white;
+}
+
+[data-theme='dark'] .btn-primary:hover {
+    background-color: #4a6b8c;
     color: white;
 }
 
@@ -820,44 +938,9 @@ body.report-modal-scroll-locked .footer {
 /* Add the style for the report grid */
 .report-grid {
     display: grid;
-    grid-template-columns: repeat(1, 1fr);
+    grid-template-columns: repeat(var(--cards-columns), minmax(0, 1fr));
     gap: 20px;
     margin-top: 20px;
-}
-
-/* Style for small screens (mobile) */
-@media (min-width: 780px) {
-    .report-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-}
-
-/* Style for large screens (desktop) */
-@media (min-width: 1200px) {
-    .report-grid {
-        grid-template-columns: repeat(3, 1fr);
-    }
-}
-
-/* Style for x large screens (desktop) */
-@media (min-width: 1710px) {
-    .report-grid {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-    }
-}
-
-/* Style for x large screens (desktop) */
-@media (min-width: 2200px) {
-    .report-grid {
-        grid-template-columns: repeat(5, 1fr);
-    }
-}
-
-/* Style for xx large screens (desktop) */
-@media (min-width: 2600px) {
-    .report-grid {
-        grid-template-columns: repeat(6, 1fr);
-    }
 }
 
 /* Style for the report cards */
@@ -865,7 +948,7 @@ body.report-modal-scroll-locked .footer {
     display: flex;
     flex-direction: column;
     position: relative;
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
     border-radius: 8px;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
     padding: 0px;
@@ -883,11 +966,11 @@ body.report-modal-scroll-locked .footer {
 }
 
 .report-card-header, .modal-header {
-    color: var(--white);
+    color: #fff;
     padding: 10px;
     border-radius: 5px 5px 0 0;
     padding: 12px 15px;
-    background-color: var(--dark-blue-2);
+    background-color: var(--theme-header-bg-strong);
     border-bottom: 2px solid var(--turquoise);
 }
 
@@ -977,6 +1060,16 @@ body.report-modal-scroll-locked .footer {
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
+[data-theme='dark'] .date-tag.clickable {
+    background-color: #35506a;
+    color: white;
+}
+
+[data-theme='dark'] .date-tag.clickable:hover {
+    background-color: #4a6b8c;
+    color: white;
+}
+
 /* Improvement of statistics */
 .report-stats {
     display: flex;
@@ -1061,6 +1154,16 @@ body.report-modal-scroll-locked .footer {
 .btn-format:hover {
     background-color: var(--dark-blue);
     transform: translateY(-2px);
+}
+
+[data-theme='dark'] .btn-format {
+    background-color: #35506a;
+    color: white;
+}
+
+[data-theme='dark'] .btn-format:hover {
+    background-color: #4a6b8c;
+    color: white;
 }
 
 /* Style for date filter */
@@ -1594,8 +1697,8 @@ body.report-modal-scroll-locked .footer {
 }
 
 #report-modal-content th {
-    background-color: var(--dark-blue);
-    color: white;
+    background-color: var(--theme-header-bg-strong);
+    color: #fff;
     padding: 10px;
     text-align: left;
 }
@@ -1649,7 +1752,7 @@ body.report-modal-scroll-locked .footer {
     height: calc(100vh - 200px);
     border: 1px solid var(--border-color);
     border-radius: 5px;
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
 }
 
 .dates-list::-webkit-scrollbar {
@@ -1688,26 +1791,38 @@ body.report-modal-scroll-locked .footer {
     box-shadow: 0 2px 3px rgba(0,0,0,0.1);
 }
 
-/* Style for the toggle filters button */
+/* Style for the toggle filters button (colors aligned with .btn-primary) */
 .toggle-filters-btn {
     display: none;
     position: fixed;
     top: 70px;
     right: 20px;
     z-index: 100;
-    background-color: var(--turquoise);
+    background-color: var(--light-turquoise);
     color: white;
     border: none;
     border-radius: 4px;
     padding: 8px 12px;
     font-size: 14px;
+    font-weight: bold;
     cursor: pointer;
     box-shadow: 0 2px 5px rgba(0,0,0,0.2);
     transition: all 0.3s ease;
 }
 
 .toggle-filters-btn:hover {
-    background-color: var(--dark-blue);
+    background-color: var(--turquoise);
+    color: white;
+}
+
+[data-theme='dark'] .toggle-filters-btn {
+    background-color: #35506a;
+    color: white;
+}
+
+[data-theme='dark'] .toggle-filters-btn:hover {
+    background-color: #4a6b8c;
+    color: white;
 }
 
 .filter-icon {
@@ -1730,8 +1845,8 @@ body.report-modal-scroll-locked .footer {
     display: block;
 }
 
-/* Media query for small screens */
-@media (max-width: 780px) {
+/* Mobile filters menu (Bootstrap lg breakpoint: below 992px). */
+@media (max-width: 991px) {
     .toggle-filters-btn {
         display: flex;
         align-items: center;
@@ -1746,7 +1861,7 @@ body.report-modal-scroll-locked .footer {
         padding-top: 60px; /* Space for the header */
         transition: left 0.3s ease;
         z-index: 90;
-        background-color: white;
+        background-color: var(--theme-surface-elevated);
         box-shadow: 2px 0 10px rgba(0,0,0,0.1);
         overflow-y: auto;
     }
@@ -1785,7 +1900,7 @@ body.report-modal-scroll-locked .footer {
     height: 80vh;
 }
 .login-container {
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.1);
     padding: 30px;
@@ -1840,10 +1955,12 @@ h1 {
 .login-body input[type="password"] {
     width: 100%;
     padding: 10px;
-    border: 1px solid #ddd;
+    border: 1px solid var(--theme-border);
     border-radius: 4px;
     font-size: 16px;
     box-sizing: border-box;
+    background: var(--theme-surface-muted);
+    color: var(--theme-text);
 }
 .login-body button {
     background-color: var(--turquoise);
@@ -1946,7 +2063,7 @@ h1 {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
     width: 80%;
     height: 80%;
     border-radius: 8px;
@@ -2029,8 +2146,8 @@ h1 {
     font-size: 1.5rem;
     font-weight: 700;
     line-height: 1;
-    color: #000;
-    text-shadow: 0 1px 0 #fff;
+    color: var(--theme-text);
+    text-shadow: none;
     opacity: .5;
     background: none;
     border: none;
@@ -2063,14 +2180,14 @@ h1 {
 }
 
 .report-html-content pre {
-    background-color: #f5f5f5;
+    background-color: var(--theme-surface-muted);
     padding: 10px;
     border-radius: 5px;
     overflow-x: auto;
 }
 
 .report-html-content code {
-    background-color: #f5f5f5;
+    background-color: var(--theme-surface-muted);
     padding: 2px 4px;
     border-radius: 3px;
 }
@@ -2092,7 +2209,7 @@ h1 {
     z-index: 1000;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.7);
+    background-color: var(--theme-overlay);
     transform: none;
     box-shadow: none;
     /* Do not scroll the overlay — only .modal-body scrolls — avoids chaining scroll to the page */
@@ -2112,7 +2229,7 @@ h1 {
 
 .modal-dialog {
     position: relative;
-    background: white;
+    background: var(--theme-surface-elevated);
     border-radius: 5px;
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
     width: min(96vw, clamp(560px, 85vw, 1520px));
@@ -2133,7 +2250,7 @@ h1 {
     min-height: 0;
     height: auto;
     max-height: 100%;
-    background: #fff;
+    background: var(--theme-surface-elevated);
     border-radius: 5px;
 }
 
@@ -2142,7 +2259,7 @@ h1 {
     justify-content: space-between;
     align-items: center;
     padding: 15px;
-    border-bottom: 1px solid #e5e5e5;
+    border-bottom: 1px solid var(--theme-border);
     flex-shrink: 0;
 }
 
@@ -2167,10 +2284,10 @@ body.report-modal-scroll-locked {
 
 .modal-footer {
     padding: 15px;
-    border-top: 1px solid #e5e5e5;
+    border-top: 1px solid var(--theme-border);
     text-align: right;
     flex-shrink: 0;
-    background: #fff;
+    background: var(--theme-surface-elevated);
 }
 
 .close {
@@ -2391,7 +2508,7 @@ body.modal-open {
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--text-secondary, #5a6a75);
+    color: var(--text-secondary, #6d7f8c);
     margin: 0 0 0.45rem;
 }
 .oasis-assistant-q-index-nav {
@@ -2421,7 +2538,7 @@ body.modal-open {
 .oasis-assistant-index-num {
     flex-shrink: 0;
     font-weight: 700;
-    color: var(--text-secondary, #5a6a75);
+    color: var(--text-secondary, #6d7f8c);
     margin-top: 0.05rem;
 }
 .oasis-assistant-index-btn .oasis-assistant-md--index {
@@ -2506,9 +2623,15 @@ body.modal-open {
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--text-secondary, #5a6a75);
+    color: var(--text-secondary, #6d7f8c);
     margin: 0 0 0.4rem;
     line-height: 1.2;
+}
+
+[data-theme='dark'] .oasis-assistant-index-heading,
+[data-theme='dark'] .oasis-assistant-index-num,
+[data-theme='dark'] .oasis-assistant-msg-hd {
+    color: #c4d2de;
 }
 .oasis-assistant-msg-body {
     margin: 0;
@@ -2528,8 +2651,11 @@ body.modal-open {
     scroll-margin-top: 5px;
 }
 .oasis-assistant-msg--user .oasis-assistant-msg-hd {
-    color: rgba(14, 31, 43, 0.65);
+    color: rgba(14, 31, 43, 0.55);
     text-align: right;
+}
+[data-theme='dark'] .oasis-assistant-msg--user .oasis-assistant-msg-hd {
+    color: #c4d2de;
 }
 .oasis-assistant-msg--user .oasis-assistant-msg-body--rich .oasis-assistant-md {
     text-align: left;
@@ -2639,7 +2765,7 @@ body.modal-open {
     white-space: normal;
 }
 pre.http-raw {
-    background: #f8f8f8;
+    background: var(--theme-surface-muted);
     padding: 0.35rem;
     overflow-x: auto;
 }
@@ -2867,6 +2993,16 @@ pre.http-raw {
     font-size: 0.84rem;
     max-height: 22rem;
     overflow: auto;
+}
+
+[data-theme='dark'] .oasis-assistant-md pre {
+    background: #233448;
+}
+
+[data-theme='dark'] .oasis-assistant-validate-llm-body {
+    background: #233448;
+    color: var(--theme-text);
+    border-color: var(--theme-border);
 }
 .oasis-assistant-validate-synthesis-error {
     margin: 0.35rem 0 0.6rem;
