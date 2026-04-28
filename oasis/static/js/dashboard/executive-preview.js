@@ -62,6 +62,8 @@ DashboardApp.setupExecutivePreviewCharts = function (reportPath) {
                 return Number.isFinite(n) ? n : 0;
             });
             const colors = ['#dc3545', '#fd7e14', '#ffc107', '#6c757d'];
+            const isDarkTheme = document.documentElement.getAttribute('data-theme') === 'dark';
+            const chartTextColor = isDarkTheme ? '#c4d2de' : '#5a6a75';
             const ctx = canvas.getContext('2d');
             const chart = new Chart(ctx, {
                 type: 'doughnut',
@@ -79,10 +81,16 @@ DashboardApp.setupExecutivePreviewCharts = function (reportPath) {
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: { position: 'bottom' },
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                color: chartTextColor,
+                            },
+                        },
                         title: {
                             display: true,
                             text: 'Findings by severity (rollup)',
+                            color: chartTextColor,
                         },
                     },
                 },

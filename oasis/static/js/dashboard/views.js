@@ -363,6 +363,9 @@ DashboardApp._initStatsSeverityChart = function () {
     if (!ctx) {
         return;
     }
+    const isDarkTheme = document.documentElement.getAttribute('data-theme') === 'dark';
+    const axisLabelColor = isDarkTheme ? '#c4d2de' : '#5a6a75';
+    const gridColor = isDarkTheme ? 'rgba(196, 210, 222, 0.24)' : 'rgba(90, 106, 117, 0.2)';
     DashboardApp._statsSeverityChart = new Chart(ctx, {
         type: 'bar',
         data: {
@@ -398,10 +401,17 @@ DashboardApp._initStatsSeverityChart = function () {
                     beginAtZero: true,
                     ticks: {
                         precision: 0,
+                        color: axisLabelColor,
                     },
-                    grid: { display: true },
+                    grid: {
+                        display: true,
+                        color: gridColor,
+                    },
                 },
                 y: {
+                    ticks: {
+                        color: axisLabelColor,
+                    },
                     grid: { display: false },
                 },
             },
@@ -570,7 +580,7 @@ DashboardApp.renderStats = function() {
                     <span class="badge badge-medium">⚠️ ${DashboardApp.stats.risk_summary.medium || 0} Medium</span>
                     <span class="badge badge-low">📌 ${DashboardApp.stats.risk_summary.low || 0} Low</span>
                 </div>
-                <div class="card-label">From structured findings, not embedding similarity tiers</div>
+                <div class="card-label card-label-structured-findings">From structured findings, not embedding similarity tiers</div>
             </div>
             ${progressCard}
         </div>

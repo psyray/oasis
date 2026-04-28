@@ -41,11 +41,12 @@
     gap: 0.55rem;
     margin: 0 0 1rem;
     padding: 0.55rem 0.7rem;
-    border: 1px solid #8bd0dc;
+    border: 1px solid #6ec3d1;
     border-radius: 6px;
-    background: #f0fbfd;
+    background: #e7f8fb;
     color: var(--dark-blue-2);
     font-size: 0.88rem;
+    box-shadow: 0 1px 2px rgba(14, 31, 43, 0.08);
 }
 
 #report-modal-content .html-content-container .report-filter-guard__icon {
@@ -419,9 +420,10 @@
 }
 
 [data-theme='dark'] #report-modal-content .html-content-container .report-filter-guard {
-    border-color: #2f5666;
-    background: #162533;
+    border-color: #4f7891;
+    background: #264057;
     color: var(--theme-text);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 [data-theme='dark'] #report-modal-content .html-content-container pre.http-raw {

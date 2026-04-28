@@ -46,11 +46,22 @@
                 button.setAttribute('aria-label', 'Switch to ' + next + ' mode');
                 button.setAttribute('title', 'Switch to ' + next + ' mode');
             }
+            function bindThemeToggleOnce() {
+                var button = document.getElementById('theme-toggle');
+                if (!button || button.dataset.oasisThemeBound === '1') {
+                    return;
+                }
+                button.addEventListener('click', function () {
+                    window.OasisTheme.toggleTheme();
+                });
+                button.dataset.oasisThemeBound = '1';
+            }
             var initialTheme = applyTheme(detectTheme());
             window.OasisTheme = {
                 detectTheme: detectTheme,
                 applyTheme: applyTheme,
                 syncThemeButton: syncThemeButton,
+                bindToggle: bindThemeToggleOnce,
                 toggleTheme: function () {
                     var current = root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
                     var next = current === 'dark' ? 'light' : 'dark';
@@ -68,14 +79,7 @@
             };
             document.addEventListener('DOMContentLoaded', function () {
                 syncThemeButton(initialTheme);
-                var button = document.getElementById('theme-toggle');
-                if (!button || button.dataset.themeBound) {
-                    return;
-                }
-                button.addEventListener('click', function () {
-                    window.OasisTheme.toggleTheme();
-                });
-                button.dataset.themeBound = '1';
+                bindThemeToggleOnce();
             });
         })();
     </script>

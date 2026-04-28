@@ -1,4 +1,5 @@
 :root {
+    --cards-columns: 1;
     --theme-surface: #f5f2e9;
     --theme-surface-elevated: #ffffff;
     --theme-surface-muted: #f5f5f5;
@@ -199,20 +200,27 @@ body {
 
 .dashboard-cards {
     display: grid;
-    grid-template-columns: repeat(1, minmax(0, 1fr));
+    grid-template-columns: repeat(var(--cards-columns), minmax(0, 1fr));
     gap: 20px;
     margin-bottom: 30px;
 }
 
-@media (min-width: 780px) {
-    .dashboard-cards {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+/* Shared card-grid breakpoints (single source of truth for dashboard/report cards). */
+@media (min-width: 768px) {
+    :root {
+        --cards-columns: 2;
     }
 }
 
 @media (min-width: 1200px) {
-    .dashboard-cards {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+    :root {
+        --cards-columns: 3;
+    }
+}
+
+@media (min-width: 1750px) {
+    :root {
+        --cards-columns: 4;
     }
 }
 
@@ -241,6 +249,10 @@ body {
 .card-label {
     font-size: 14px;
     color: var(--medium-gray);
+}
+
+.card-label-structured-findings {
+    padding-top: 10px;
 }
 
 .progress-card .progress-meta {
@@ -385,28 +397,6 @@ body {
         width: 100%;
         max-width: 100%;
         justify-self: stretch;
-    }
-}
-
-@media (min-width: 1710px) {
-    .dashboard-cards {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-    }
-
-    /* Keep metric cards as single-column blocks. */
-    .dashboard-cards > .card:not(.progress-card) {
-        grid-column: span 1;
-    }
-
-    /* Keep "Findings by severity" on the same row as "Scan progress". */
-    .dashboard-cards .risk-summary-card {
-        grid-column: 1;
-        grid-row: 2;
-    }
-
-    .dashboard-cards .progress-card {
-        grid-column: 2 / span 2;
-        grid-row: 2;
     }
 }
 
@@ -563,7 +553,7 @@ body {
 }
 
 .footer {
-    background-color: var(--dark-blue);
+    background-color: var(--theme-header-bg);
     color: white;
     text-align: center;
     padding: 15px;
@@ -835,7 +825,22 @@ body.report-modal-scroll-locked .footer {
 }
 
 .btn-primary {
+    background-color: var(--light-turquoise);
+    color: white;
+}
+
+.btn-primary:hover {
     background-color: var(--turquoise);
+    color: white;
+}
+
+[data-theme='dark'] .btn-primary {
+    background-color: #35506a;
+    color: white;
+}
+
+[data-theme='dark'] .btn-primary:hover {
+    background-color: #4a6b8c;
     color: white;
 }
 
@@ -871,44 +876,9 @@ body.report-modal-scroll-locked .footer {
 /* Add the style for the report grid */
 .report-grid {
     display: grid;
-    grid-template-columns: repeat(1, 1fr);
+    grid-template-columns: repeat(var(--cards-columns), minmax(0, 1fr));
     gap: 20px;
     margin-top: 20px;
-}
-
-/* Style for small screens (mobile) */
-@media (min-width: 780px) {
-    .report-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-}
-
-/* Style for large screens (desktop) */
-@media (min-width: 1200px) {
-    .report-grid {
-        grid-template-columns: repeat(3, 1fr);
-    }
-}
-
-/* Style for x large screens (desktop) */
-@media (min-width: 1710px) {
-    .report-grid {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-    }
-}
-
-/* Style for x large screens (desktop) */
-@media (min-width: 2200px) {
-    .report-grid {
-        grid-template-columns: repeat(5, 1fr);
-    }
-}
-
-/* Style for xx large screens (desktop) */
-@media (min-width: 2600px) {
-    .report-grid {
-        grid-template-columns: repeat(6, 1fr);
-    }
 }
 
 /* Style for the report cards */
@@ -1801,8 +1771,8 @@ body.report-modal-scroll-locked .footer {
     display: block;
 }
 
-/* Media query for small screens */
-@media (max-width: 780px) {
+/* Mobile filters menu (Bootstrap lg breakpoint: below 992px). */
+@media (max-width: 991px) {
     .toggle-filters-btn {
         display: flex;
         align-items: center;
@@ -2464,7 +2434,7 @@ body.modal-open {
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--text-secondary, #5a6a75);
+    color: var(--text-secondary, #6d7f8c);
     margin: 0 0 0.45rem;
 }
 .oasis-assistant-q-index-nav {
@@ -2494,7 +2464,7 @@ body.modal-open {
 .oasis-assistant-index-num {
     flex-shrink: 0;
     font-weight: 700;
-    color: var(--text-secondary, #5a6a75);
+    color: var(--text-secondary, #6d7f8c);
     margin-top: 0.05rem;
 }
 .oasis-assistant-index-btn .oasis-assistant-md--index {
@@ -2579,9 +2549,15 @@ body.modal-open {
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--text-secondary, #5a6a75);
+    color: var(--text-secondary, #6d7f8c);
     margin: 0 0 0.4rem;
     line-height: 1.2;
+}
+
+[data-theme='dark'] .oasis-assistant-index-heading,
+[data-theme='dark'] .oasis-assistant-index-num,
+[data-theme='dark'] .oasis-assistant-msg-hd {
+    color: #c4d2de;
 }
 .oasis-assistant-msg-body {
     margin: 0;
@@ -2601,8 +2577,11 @@ body.modal-open {
     scroll-margin-top: 5px;
 }
 .oasis-assistant-msg--user .oasis-assistant-msg-hd {
-    color: rgba(14, 31, 43, 0.65);
+    color: rgba(14, 31, 43, 0.55);
     text-align: right;
+}
+[data-theme='dark'] .oasis-assistant-msg--user .oasis-assistant-msg-hd {
+    color: #c4d2de;
 }
 .oasis-assistant-msg--user .oasis-assistant-msg-body--rich .oasis-assistant-md {
     text-align: left;
@@ -2940,6 +2919,16 @@ pre.http-raw {
     font-size: 0.84rem;
     max-height: 22rem;
     overflow: auto;
+}
+
+[data-theme='dark'] .oasis-assistant-md pre {
+    background: #233448;
+}
+
+[data-theme='dark'] .oasis-assistant-validate-llm-body {
+    background: #233448;
+    color: var(--theme-text);
+    border-color: var(--theme-border);
 }
 .oasis-assistant-validate-synthesis-error {
     margin: 0.35rem 0 0.6rem;

@@ -13,6 +13,17 @@ DashboardApp.THEME_LIGHT = 'light';
 DashboardApp.THEME_DARK = 'dark';
 
 DashboardApp.resolvePreferredTheme = function () {
+    try {
+        if (window.localStorage) {
+            const stored = window.localStorage.getItem(DashboardApp.THEME_STORAGE_KEY);
+            if (stored === DashboardApp.THEME_DARK || stored === DashboardApp.THEME_LIGHT) {
+                return stored;
+            }
+        }
+    } catch (_error) {
+        // Ignore storage failures and fall back to detectTheme/default.
+    }
+
     if (window.OasisTheme && typeof window.OasisTheme.detectTheme === 'function') {
         const detected = window.OasisTheme.detectTheme();
         return detected === DashboardApp.THEME_DARK
@@ -88,12 +99,8 @@ DashboardApp.toggleTheme = function () {
 DashboardApp.initThemeControls = function () {
     const initial = DashboardApp.resolvePreferredTheme();
     DashboardApp.applyTheme(initial);
-    const toggle = document.getElementById('theme-toggle');
-    if (toggle && !toggle.dataset.themeBound) {
-        toggle.addEventListener('click', function () {
-            DashboardApp.toggleTheme();
-        });
-        toggle.dataset.themeBound = '1';
+    if (window.OasisTheme && typeof window.OasisTheme.bindToggle === 'function') {
+        window.OasisTheme.bindToggle();
     }
 };
 

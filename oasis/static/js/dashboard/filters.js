@@ -657,6 +657,7 @@ DashboardApp.setupMobileNavigation = function() {
     DashboardApp.debug("Setting up mobile navigation...");
     const toggleFiltersBtn = document.getElementById('toggle-filters');
     const sidebar = document.querySelector('.sidebar');
+    const isMobileViewport = () => window.matchMedia('(max-width: 991px)').matches;
     
     if (!toggleFiltersBtn || !sidebar) {
         DashboardApp.debug("Toggle button or sidebar not found");
@@ -668,8 +669,8 @@ DashboardApp.setupMobileNavigation = function() {
     overlay.className = 'sidebar-overlay';
     document.body.appendChild(overlay);
     
-    // Restore the previous menu state if saved
-    if (localStorage.getItem('filtersExpanded') === 'true') {
+    // Restore the previous menu state only on mobile viewport
+    if (isMobileViewport() && localStorage.getItem('filtersExpanded') === 'true') {
         sidebar.classList.add('expanded');
         overlay.classList.add('active');
     }
@@ -700,6 +701,15 @@ DashboardApp.setupMobileNavigation = function() {
         sidebar.classList.remove('expanded');
         overlay.classList.remove('active');
         localStorage.setItem('filtersExpanded', 'false');
+    });
+
+    // Keep desktop behavior stable: no off-canvas state above lg breakpoint.
+    window.addEventListener('resize', function () {
+        if (!isMobileViewport()) {
+            sidebar.classList.remove('expanded');
+            overlay.classList.remove('active');
+            localStorage.setItem('filtersExpanded', 'false');
+        }
     });
 };
 
