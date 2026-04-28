@@ -562,15 +562,11 @@ DashboardApp.openReport = function(path, format, options) {
         if (folderIdx >= 0 && segs[folderIdx]) {
             currentFormat = String(segs[folderIdx]).toLowerCase();
         } else if (fh && fh.formatPatternRegexForReportPaths) {
-            const m = path.match(fh.formatPatternRegexForReportPaths());
-            if (m) {
-                currentFormat = m[1].toLowerCase();
-            }
+            const patternMatch = path.match(fh.formatPatternRegexForReportPaths());
+            currentFormat = patternMatch ? patternMatch[1].toLowerCase() : currentFormat;
         } else {
-            const legacy = path.match(/\/(md|html|pdf|json|sarif)\//);
-            if (legacy) {
-                currentFormat = legacy[1].toLowerCase();
-            }
+            const legacyMatch = path.match(/\/(md|html|pdf|json|sarif)\//);
+            currentFormat = legacyMatch ? legacyMatch[1].toLowerCase() : currentFormat;
         }
 
         const availableFormats = DashboardApp.getAvailableFormatsForPath(path, currentFormat);
@@ -665,8 +661,7 @@ DashboardApp.convertMarkdownToHtml = function (markdown) {
         if (typeof marked !== 'undefined' && marked !== null) {
             if (typeof marked.parse === 'function') {
                 return marked.parse(markdown);
-            }
-            if (typeof marked === 'function') {
+            } else if (typeof marked === 'function') {
                 return marked(markdown);
             }
         }

@@ -12,8 +12,11 @@
 - 🖥️ **Dashboard**: `/api/reports` reads audit metrics from sibling JSON when available (fallback Markdown); report modal uses `/api/report-html` for `json/audit_report.json` when opening `md/audit_report.md` (canonical JSON preview UX).
 - 📁 **Project-aware reports**: optional **project alias** for organization and improved **project-based** report storage and metadata alongside existing project workflow.
 - 📁 **Dashboard**: filter reports by **project** (`/api/reports?project=…`, stats include `projects` counts).
+- 📊 **Dashboard**: **severity** filter (tier bands) alongside model / project / date; aligned **`/api/reports`**, **`/api/stats`**, and card stats with optional **severity** cues on vulnerability rows.
+- 🔒 **Filtered previews**: When filters are active, report **JSON / HTML / content** preview routes only serve paths **within** the filtered index; out-of-scope paths return a **guard error** instead of cross-leaking other runs.
 - ⚠️ **Dashboard / previews**: reports expose **`codebase_accessible`** and **`assistant_context_warning`** when the scanned tree cannot be resolved or read next to **`security_reports`**; warning banners in list chips, HTML preview (vulnerability / executive / audit), and assistant panel.
-- 🌗 **WebUI theming**: added a global light/dark mode toggle in the header (dashboard, report modal, and login), with first-load system preference detection and persisted manual override.
+- 🌗 **WebUI theming**: global light/dark toggle in the header (dashboard, report modal, login), first-load system preference, persisted override; **Chart.js** severity rollups **follow** theme changes via a shared **`oasis:theme-change`** hook.
+- 🛡️ **Report HTML**: Jinja **autoescaping** enabled and user-controlled strings in vulnerability / executive templates passed through explicit escaping for modal and exported HTML.
 
 ### 🐛 Fixed
 

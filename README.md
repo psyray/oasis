@@ -35,6 +35,34 @@
   <em>Advanced code security analysis through the power of AI</em>
 </p>
 
+<a id="readme-contents"></a>
+
+## 📑 Table of contents
+
+| Section | Topics |
+|---------|--------|
+| [Features](#readme-features) | Highlights, dashboard, canonical reports |
+| [Getting started](#readme-getting-started) | Prerequisites, pipx install, Docker (quick), maintenance |
+| [Hardware Requirements](#readme-hardware) | CPUs, GPU, scaling |
+| [Advanced Usage Examples](#readme-advanced-usage-examples) | Example CLI invocations |
+| [Command Line Arguments](#readme-command-line-args) | Flags, web/assistant options, streaming |
+| [Getting the Most out of OASIS](#readme-best-practices) | Models, LangGraph workflow, tips |
+| [Supported Vulnerability Types](#readme-vuln-types) | Type tags reference table |
+| [Output Structure](#readme-output-structure) | `security_reports/`, project slug, canonical JSON |
+| [Run with Docker](#readme-docker) | Compose, `docker run`, web from container |
+| [Cache Management](#readme-cache) | Embeddings and scan caches |
+| [Audit Mode](#readme-audit) | Pre-scan audit, structured `audit_report.json` |
+| [Web Interface](#readme-web) | `--web`, security |
+| [Changelog](#readme-changelog) | Release notes |
+| [Contributing](#readme-contributing) | PRs and issues |
+| [License](#readme-license) | GPL v3 |
+| [Acknowledgments](#readme-acknowledgments) | Credits |
+| [Support](#readme-support) | Discord / issues |
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-features"></a>
+
 ## 🌟 Features
 
 - 🤖 **Dashboard assistant**: In the report modal, the AI assistant triages **single-vulnerability JSON** reports or **executive / scan-wide** mode (aggregated JSON under the run) with optional **RAG** over the local embedding cache, a **chat model** selector (Ollama tags), **Markdown** replies, persisted **chat sessions** keyed by the canonical report path, and configurable Ollama/RAG flags (`--web-ollama-url`, `--web-embed-model`, `--web-assistant-rag`)
@@ -47,15 +75,20 @@
 - 🔧 **Scan Result Caching**: Store and reuse vulnerability analysis results with model-specific caching
 - 📊 **Rich Reporting**: Canonical JSON reports plus derived HTML, PDF, and Markdown exports
 - 🔄 **Parallel Processing**: Optimized performance through parallel vulnerability analysis
-- 📝 **Executive Summaries**: Clear overview of all detected vulnerabilities
+- 📝 **Executive summaries**: Structured **canonical JSON** with overview KPIs, tier context, similarity highlights, and matching dashboard/modal HTML (TOC, anchors, charts); generation starts during the scan and updates as phases complete (**live progress** during long runs)
 - 🎯 **Customizable Scans**: Support for specific vulnerability types and file extensions
-- 📈 **Distribution / audit mode**: Embedding-based similarity audit before a full scan; with JSON in your output formats you get a structured **audit report file** beside Markdown—the dashboard reads it for **comparison tables** and **HTML preview** in the report modal when available.
+- 📈 **Distribution / audit mode**: Embedding-based similarity audit before a full scan; with JSON in your output formats you get **`audit_report.json`** (and Markdown) with the same facts—the dashboard reads it for **comparison tables** and **HTML preview** in the report modal when available.
 - 🔄 **Content Chunking**: Intelligent content splitting for better analysis of large files
 - 🤖 **Interactive Model Installation**: Guided installation for required Ollama models
 - 🌐 **Web Interface**: Secure, password-protected web dashboard for exploring reports
 - ⚡ **Incremental Reporting**: Vulnerability reports are published as soon as each vulnerability analysis completes
-- 📈 **Live Scan Progress**: Executive summary is created early and updated progressively during long scans
-- 📌 **v0.6.0**: Structured **audit JSON** for dashboard metrics and modal preview; use **`--project-name`** for clearer folders and filters ([Output structure](#-output-structure)); see **CHANGELOG** for breaking storage / `analysis_root` notes.
+- 🎚️ **Dashboard filters**: Narrow listings by **project**, **severity** (tier bands), model, and date; report modal **JSON/HTML/content** previews stay within the active filter set
+- 🌗 **Web UI themes**: **Light/dark** toggle in the header; Chart.js severity rollups follow the selected theme
+- 📁 **Project grouping**: Optional **`--project-name` / `-pn`** for **`security_reports/`** layout and dashboard filters ([Output structure](#readme-output-structure))
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-getting-started"></a>
 
 ## 🚀 Getting started
 
@@ -89,7 +122,7 @@ pipx install -e .
 oasis --input test_files/
 ```
 
-Reports are written under **`security_reports/`** beside the path you analyze (see [Output structure](#-output-structure)).
+Reports are written under **`security_reports/`** beside the path you analyze (see [Output structure](#readme-output-structure)).
 
 ### Docker (optional)
 
@@ -100,7 +133,7 @@ docker compose build
 docker compose run --rm oasis -i /work/test_files -ol http://host.docker.internal:11434
 ```
 
-Code is mounted at **`/work`**; use `-i` paths under `/work`. More options (bundled Ollama, dashboard, `docker run`) are in [Run with Docker](#-run-with-docker).
+Code is mounted at **`/work`**; use `-i` paths under `/work`. More options (bundled Ollama, dashboard, `docker run`) are in [Run with Docker](#readme-docker).
 
 ### Maintenance
 
@@ -135,7 +168,9 @@ git fetch --all
 git checkout feat/vX.X
 ```
 
----
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-hardware"></a>
 
 ## 🛠️ Hardware Requirements
 
@@ -171,6 +206,9 @@ git checkout feat/vX.X
 - Consider running overnight for large codebases
 - For enterprise usage, dedicated server with 128GB+ RAM and A100/H100 GPU recommended
 
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-advanced-usage-examples"></a>
 
 ## 🔥 Advanced Usage Examples
 
@@ -197,6 +235,10 @@ Full production scan:
 # Comprehensive scan of a large codebase
 oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.7 --vulns all
 ```
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-command-line-args"></a>
 
 ## 🎮 Command Line Arguments
 
@@ -251,7 +293,7 @@ For **JSON** reports, the dashboard modal includes an **Assistant** panel (triag
 
 Assistant replies are rendered as **Markdown** (sanitized HTML). Model “thinking” sections wrapped in tags such as `<think>…</think>` are stripped from the visible answer and shown in collapsible blocks when present.
 
-**Chat persistence** stores each conversation under `security_reports/<project_slug>/<run_timestamp>/.../json/.../<report>.json` in a sibling `chat/` folder (one JSON file per session). The UI can resume the latest session, start a new chat, or delete saved sessions. Data stays on the server filesystem next to your reports (no separate database). REST endpoints: `GET /api/assistant/sessions`, `GET /api/assistant/session`, `POST /api/assistant/chat`, `DELETE /api/assistant/session`, `DELETE /api/assistant/sessions`.
+**Chat persistence** stores each conversation under `security_reports/<project_slug>/<run_timestamp>/.../json/.../<report>.json` in a sibling `chat/` folder (one JSON file per session). The UI can resume the latest session, start a new chat, or delete saved sessions. Data stays on the server filesystem next to your reports (no separate database). REST endpoints: `GET /api/assistant/sessions`, `GET /api/assistant/session`, `POST /api/assistant/chat`, **`POST /api/assistant/chat-stream`** (NDJSON progressive replies—the UI falls back to `POST /api/assistant/chat` when streaming is unavailable), `POST /api/assistant/session-branch`, `DELETE /api/assistant/session`, `DELETE /api/assistant/sessions`.
 
 ### Logging and Debug
 - `--debug` `-d`: Enable debug output
@@ -274,6 +316,10 @@ Optional **`OASIS_*`** variables tune timeouts and heuristic budgets without edi
 - **`OASIS_STRUCTURED_DEGENERACY_*`** — thresholds for repetitive structured-output detection.
 
 Higher limits increase worst-case latency and memory use on the Ollama host.
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-best-practices"></a>
 
 ## 💡 Getting the Most out of OASIS
 
@@ -351,6 +397,10 @@ For the best results with OASIS:
    - Use the web interface (`--web`) for team collaboration
    - Export PDF reports for documentation and sharing
 
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-vuln-types"></a>
+
 ## 🛡️ Supported Vulnerability Types
 
 | Tag | Description |
@@ -381,6 +431,10 @@ For the best results with OASIS:
 | `secrets` | Hardcoded Secrets |
 | `upload` | File Upload Vulnerabilities |
 
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-output-structure"></a>
+
 ## 📁 Output Structure
 
 Vulnerability runs are stored under **`security_reports/<project_slug>/YYYYMMDD_HHMMSS/`**, where `project_slug` is derived from the **last segment of your `--input` path** when it points to a **directory** (e.g. `example/test_files` → `test_files`), or from the **folder that contains the file** when you pass a file path, then sanitized for safe folder names. If you provide **`--project-name/-pn`**, that alias overrides the default value derived from `-i` for both folder naming and UI filters. For predictable grouping in the web UI, prefer `--input` on a project folder, not a single file, and avoid generic paths like `.` or `/` as the sole argument (the CLI will warn in those cases). Older scans may still use the previous flat layout, **`security_reports/<input_basename>_YYYYMMDD_HHMMSS/`**; the dashboard reads both. For each model, per-format folders include a **canonical JSON** report (`json/*.json`) used by the web dashboard for statistics and previews. Chunk objects may include **`start_line` / `end_line`** (1-based inclusive bounds for the analyzed source segment, computed at split time, not inferred by the model). Each finding may include **`snippet_start_line` / `snippet_end_line`** when the tool can match `vulnerable_code` inside that chunk (otherwise SARIF falls back to the chunk span). **SARIF 2.1.0** (`sarif/*.sarif`) is generated from the same document for toolchains (DefectDojo, SonarQube, IDE SARIF viewers) and maps those spans to `region.startLine` / `region.endLine` when available. HTML and PDF are rendered from that JSON via Jinja2; Markdown is an additional human-readable export. Canonical JSON includes a top-level **`project`** field (human-readable label) alongside `report_type`, `title`, etc.
@@ -404,9 +458,13 @@ security_reports/
                 └── vulnerability_type.pdf
 ```
 
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-docker"></a>
+
 ## 🐋 Run with Docker
 
-The quickest Docker flow is under [Getting started](#getting-started) → **Docker (optional)**. This section is the full reference: Compose variants, plain `docker run`, and Ollama behaviour notes.
+The quickest Docker flow is under [Getting started](#readme-getting-started) → **Docker (optional)**. This section is the full reference: Compose variants, plain `docker run`, and Ollama behaviour notes.
 
 The container installs OASIS with **pipx** (same isolation as local development). Reports are written under `security_reports/` next to the parent of your `--input` path—the project root is mounted at **`/work`**, so analyze paths under `/work`.
 
@@ -497,6 +555,12 @@ oasis -i ./critical-service -sm qwen2.5-coder:7b -m bugtraceai-apex-q4 -t 0.6 -s
 - Executive summary now records all model roles used for the run: **Deep model**, **Small model** (Scan model), and **Embedding model**. These fields are rendered in markdown and therefore propagated to HTML/PDF outputs, and also included in the executive-summary progress sidecar JSON. For backward compatibility, sidecar `model` remains the legacy primary deep-model field.
 - **Audit** runs: comparison cards use metrics from the structured audit JSON when present, otherwise from Markdown; model-tag filters apply to dates and comparison rows (multi-select).
 - Date-based filtering supports multiple `model` query params (`/api/dates?model=...&model=...&vulnerability=...`) and falls back to API fetch if local in-memory report data is stale.
+- **Severity filter**: narrows vulnerability listings and aligns stats (**tier bands**); when filters are applied, modal **JSON/HTML/content** previews return only reports that match the current filter set (**guard error** otherwise).
+- Sidebar / stats JSON uses **`severity_finding_totals`** (per-tier finding counts) from **`/api/stats`**.
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-cache"></a>
 
 ## 💾 Cache Management
 
@@ -529,6 +593,10 @@ The cache system intelligently handles:
 For the best performance:
 - Only clear the embedding cache when changing embedding models or after major code changes
 - Clear the scan cache when upgrading to a newer/better model or after fixing vulnerabilities
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-audit"></a>
 
 ## 📊 Audit Mode
 
@@ -575,6 +643,10 @@ oasis --input [path_to_analyze] --audit -em qwen3-embedding:4b,bge-m3
 
 The Audit Mode is especially valuable for large codebases where a full scan might be time-consuming, allowing you to make informed decisions about where to focus your security analysis efforts.
 
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-web"></a>
+
 ## 🌐 Web Interface
 
 OASIS includes a web interface to view and explore security reports:
@@ -602,9 +674,17 @@ oasis --input [path_to_analyze] --web --web-password mysecretpassword
 
 When no password is specified, a secure random password will be generated and displayed in the console output. The web interface provides a dashboard to explore security reports, filter results, and view detailed vulnerability information.
 
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-changelog"></a>
+
 ## 📝 Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for the latest updates and changes.
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-contributing"></a>
 
 ## 🤝 Contributing
 
@@ -614,9 +694,17 @@ Alternatively, you can also contribute by reporting issues or suggesting feature
 
 Come and join our [Discord server](https://discord.gg/dW3sFwTtN3) to discuss the project.
 
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-license"></a>
+
 ## 📄 License
 
 [GPL v3](LICENSE) - feel free to use this project for your security needs.
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-acknowledgments"></a>
 
 ## 🙏 Acknowledgments
 
@@ -625,6 +713,12 @@ Come and join our [Discord server](https://discord.gg/dW3sFwTtN3) to discuss the
 - Uses [Jinja2](https://jinja.palletsprojects.com/) for report templating
 - Special thanks to all contributors and the open-source community
 
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-support"></a>
+
 ## 📫 Support
 
 If you encounter any issues or have questions, come asking help on our [Discord server](https://discord.gg/dW3sFwTtN3) or please file an issue.
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
