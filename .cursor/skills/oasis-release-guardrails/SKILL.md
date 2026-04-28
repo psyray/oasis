@@ -12,12 +12,12 @@ Keep release changes coherent across code, docs, and metadata like historical `r
 ## Checklist
 
 - [ ] Confirm impact scope (`fix` only, feature, or release candidate).
-- [ ] If version changes, update authoritative version files consistently.
+- [ ] If version changes, bump **both** authoritative locations together: **`pyproject.toml`** `[project].version` and **`oasis/__init__.py`** `__version__` (same semver). Optionally run `oasis -V` / `pipx run … python -c "from oasis import __version__"` to verify.
 - [ ] Update `CHANGELOG.md` for user-visible behavior changes.
 - [ ] Verify `README.md` reflects CLI options and workflow changes (including LangGraph flags: `--langgraph-max-expand`, `--poc-hints`, `--poc-assist` when user-visible).
-- [ ] If audit behavior changes, keep `README.md` aligned for multi-model embedding audits (`--audit -em model_a,model_b`) and dashboard comparison behavior.
-- [ ] Ensure dashboard/web changes include matching template/assets updates when required.
-- [ ] For structured output/report changes, keep schema models, templates, and report contract tests in sync.
+- [ ] If audit behavior changes, keep `README.md` aligned for multi-model embedding audits (`--audit -em model_a,model_b`), **`audit_report.json`** vs Markdown fallbacks, and dashboard comparison behavior.
+- [ ] Ensure dashboard/web changes include matching template/assets updates when required (including **`bootstrap.js`** theme hooks, **`executive-preview.js`** / Chart.js, filtered-preview query params).
+- [ ] For structured output/report changes, keep schema models, templates, and report contract tests in sync (executive **`schema_version`**, **`analysis_root`** semantics, audit **`AuditReportDocument`**).
 - [ ] If `Audit Metrics Summary` markdown format changes, align `oasis/report.py`, `oasis/web.py` metrics parsing, dashboard audit comparison rendering, and changelog notes in one batch.
 - [ ] Shared utilities introduced or refactored for the release live under `oasis/helpers/` in the correct category module, with exports updated in `oasis/helpers/__init__.py` when they are part of the public helper surface.
 - [ ] **No duplicated or parallel implementations**: no copy-pasted logic, divergent duplicates, or second sources of truth for the same rule (Python or dashboard JS)—everything is centralized behind a single implementation.
