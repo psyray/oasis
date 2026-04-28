@@ -119,6 +119,29 @@ body {
     border: 0 !important;
 }
 
+@media (min-width: 576px) {
+    .header-actions .header-link,
+    .header-actions .header-theme-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    /* Show link labels next to icons from sm breakpoint up */
+    .header-actions .visually-hidden {
+        position: static !important;
+        width: auto !important;
+        height: auto !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        overflow: visible !important;
+        clip: auto !important;
+        clip-path: none !important;
+        white-space: normal !important;
+        border: 0 !important;
+    }
+}
+
 @media (max-width: 575.98px) {
     .header {
         padding: 10px 12px;

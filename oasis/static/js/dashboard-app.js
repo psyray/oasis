@@ -344,13 +344,11 @@ const DashboardApp = {
             });
         }
         
-        // Reload/refresh links
+        // Reload/refresh links (clicks on inner spans must resolve to the anchor)
         const self = this;
         document.addEventListener('click', function(e) {
-            if (e.target.tagName === 'A' && 
-                (e.target.innerText.includes('Reload') || 
-                 e.target.href?.includes('get_stats'))) {
-                
+            const link = e.target.closest('a.header-link-reload');
+            if (link) {
                 self.refreshDashboard();
                 e.preventDefault();
             }
