@@ -17,12 +17,12 @@ _STATS_KEYS: Mapping[str, str] = {
 
 def parse_severity_filter_param(raw: str) -> Tuple[str, ...]:
     """Parse comma-separated severity tiers; unknown tokens dropped; order preserved."""
-    if not raw or not str(raw).strip():
+    if not raw or not raw.strip():
         return ()
     allowed = frozenset(DASHBOARD_SEVERITY_TIERS)
     seen: set[str] = set()
     out: list[str] = []
-    for token in str(raw).split(","):
+    for token in raw.split(","):
         t = token.strip().lower()
         if t in allowed and t not in seen:
             seen.add(t)
@@ -51,13 +51,15 @@ def report_passes_dashboard_severity_filter(report: Mapping[str, Any], tiers: Se
     return json_report_matches_any_severity_tier(report, tiers)
 
 
-def merge_severity_histogram_for_report(
-    severities: MutableMapping[str, int], report: Mapping[str, Any]
+def merge_severity_finding_totals_for_report(
+    finding_totals_by_tier: MutableMapping[str, int], report: Mapping[str, Any]
 ) -> None:
     """
-    Increment per-tier report counts for JSON vulnerability files (excludes Executive Summary).
+    Add per-tier **finding** counts from a JSON vulnerability report (excludes Executive Summary).
 
-    A single report may increment multiple tiers.
+    ``finding_totals_by_tier`` accumulates sums of LLM severity counters (``critical_risk``, …),
+    aligned with dashboard ``risk_summary`` and the "Findings by severity" chart — not the number
+    of report files per tier.
     """
     if report.get("format") != "json":
         return
@@ -66,9 +68,9 @@ def merge_severity_histogram_for_report(
     st = report.get("stats") or {}
     for tier in DASHBOARD_SEVERITY_TIERS:
         key = _STATS_KEYS[tier]
-        if int(st.get(key, 0)) > 0:
-            severities[tier] = severities.get(tier, 0) + 1
+        finding_totals_by_tier[tier] = finding_totals_by_tier.get(tier, 0) + int(st.get(key, 0) or 0)
 
 
-def empty_severity_histogram() -> Dict[str, int]:
+def empty_severity_finding_totals() -> Dict[str, int]:
+    """Return zeroed finding totals per canonical severity tier (for ``/api/stats`` aggregation)."""
     return {tier: 0 for tier in DASHBOARD_SEVERITY_TIERS}

@@ -485,6 +485,48 @@ class TestReportSchema(unittest.TestCase):
         self.assertIn("deep-model", html)
         self.assertIn("SQL Injection", html)
         self.assertIn("strong", html)
+        self.assertIn('class="executive-preview"', html)
+        self.assertIn('class="report-toc executive-preview-toc"', html)
+        self.assertIn('id="table-of-contents"', html)
+        self.assertIn('id="exec-models"', html)
+        self.assertIn('href="#exec-vuln-summary"', html)
+        self.assertIn('id="exec-situation"', html)
+        self.assertIn("Security posture at a glance", html)
+        self.assertIn("How to read this executive summary", html)
+        self.assertIn("Priority embedding matches", html)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_executive_summary_html_rejects_noncanonical_guidance_markdown(self):
+        """HTML rendering must not convert attacker-controlled Markdown from JSON to HTML."""
+        from oasis.config import REPORT
+
+        report = Report(input_path=".", output_format=["md"])
+        malicious = '<script>alert("x")</script>\n\n## Evil'
+        payload = {
+            "report_type": "executive_summary",
+            "title": "Executive Summary",
+            "generated_at": "2026-01-01T00:00:00Z",
+            "model_name": "m",
+            "guidance_markdown": malicious,
+            "vulnerability_summary": {},
+            "similarity_tier_counts": {},
+        }
+        html = report.render_report_html_from_json_payload(payload)
+        self.assertNotIn("<script>", html)
+        self.assertNotIn("Evil", html)
+        self.assertIn("embedding similarity", html.lower())
+
+        trusted = REPORT["EXPLAIN_EXECUTIVE_SUMMARY"].strip()
+        payload["guidance_markdown"] = trusted
+        html_ok = report.render_report_html_from_json_payload(payload)
+        self.assertIn("embedding similarity", html_ok.lower())
+
+        payload["guidance_id"] = "default.v1"
+        payload["guidance_markdown"] = trusted + "\n\n<script>tampered()</script>"
+        html_tampered = report.render_report_html_from_json_payload(payload)
+        self.assertNotIn("<script>", html_tampered)
+        self.assertNotIn("tampered()", html_tampered)
+        self.assertIn("embedding similarity", html_tampered.lower())
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_build_executive_summary_json_document_handles_none_deep_model_name(self):
@@ -501,6 +543,13 @@ class TestReportSchema(unittest.TestCase):
 
         self.assertEqual(payload["model_name"], "fallback-model")
         self.assertEqual(payload["deep_model"], "")
+        self.assertEqual(payload.get("schema_version"), 2)
+        self.assertEqual(payload["overview"]["vulnerability_types_count"], 0)
+        self.assertEqual(payload["overview"]["embedding_comparisons_total"], 0)
+        self.assertEqual(payload["overview"]["unique_source_files"], 0)
+        self.assertIn("guidance_markdown", payload)
+        self.assertEqual(len(payload["tier_definitions"]), 3)
+        self.assertEqual(payload["similarity_highlights"], [])
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_render_report_html_from_json_payload_rejects_unknown_report_type(self):
@@ -672,8 +721,17 @@ class TestReportSchema(unittest.TestCase):
             self.assertTrue(canon.is_file())
             parsed = json.loads(canon.read_text(encoding="utf-8"))
             self.assertEqual(parsed.get("report_type"), "executive_summary")
+            self.assertEqual(parsed.get("schema_version"), 2)
             self.assertEqual(parsed.get("model_name"), "test-model")
             self.assertEqual(parsed.get("vulnerability_summary"), {"SQL Injection": 1})
+            self.assertEqual(parsed["overview"]["vulnerability_types_count"], 1)
+            self.assertEqual(parsed["overview"]["embedding_comparisons_total"], 1)
+            self.assertEqual(parsed["overview"]["unique_source_files"], 1)
+            self.assertEqual(len(parsed.get("similarity_highlights") or []), 1)
+            hl0 = parsed["similarity_highlights"][0]
+            self.assertEqual(hl0.get("tier_id"), "strong")
+            self.assertIn("tier_description", hl0)
+            self.assertIn("Strong", hl0["tier_description"])
 
             content = "\n".join(captured["report_content"])
             self.assertIn("Scan Progress", content)
@@ -806,7 +864,7 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(stats.get("formats"), {})
         self.assertEqual(stats["risk_summary"]["total_findings"], 0)
         self.assertEqual(stats["risk_summary"]["critical"], 0)
-        self.assertEqual(stats.get("severities", {}).get("critical"), 0)
+        self.assertEqual(stats.get("severity_finding_totals", {}).get("critical"), 0)
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_executive_summary_notifier_receives_progress_payload(self):

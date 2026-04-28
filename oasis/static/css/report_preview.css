@@ -283,6 +283,70 @@
     max-height: 240px;
 }
 
+#report-modal-content .html-content-container .report-executive-lead {
+    margin: 0.5rem 0 1rem;
+    max-width: min(100%, 52rem);
+    font-size: 1.02rem;
+    line-height: 1.45;
+    color: var(--dark-blue-2);
+}
+
+#report-modal-content .html-content-container .report-executive-meta-inline {
+    font-weight: normal;
+}
+
+#report-modal-content .html-content-container .report-executive-section h2 {
+    margin-top: 1.25rem;
+}
+
+#report-modal-content .html-content-container .report-executive-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 0.75rem 1rem;
+    margin: 0.5rem 0 0;
+}
+
+#report-modal-content .html-content-container .report-executive-kpi {
+    padding: 0.65rem 0.85rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--white);
+}
+
+#report-modal-content .html-content-container .report-executive-kpi dt {
+    margin: 0;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--muted-text, #5c6570);
+}
+
+#report-modal-content .html-content-container .report-executive-kpi dd {
+    margin: 0.35rem 0 0;
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--dark-blue);
+}
+
+#report-modal-content .html-content-container .report-executive-guidance-body {
+    margin-top: 0.5rem;
+}
+
+#report-modal-content .html-content-container .report-executive-guidance-body h2 {
+    font-size: 1.05rem;
+    margin-top: 0.75rem;
+}
+
+#report-modal-content .html-content-container .report-executive-note {
+    margin: 0.35rem 0 0.75rem;
+    font-size: 0.92rem;
+    color: var(--dark-blue-2);
+}
+
+#report-modal-content .html-content-container .report-executive-partial {
+    color: var(--warning-color, #b45309);
+    font-weight: 600;
+}
+
 /* Footer from report_template.html is moved after the assistant panel in JS; normalize print-oriented rules. */
 #report-modal-content > footer.report-footer {
     position: static;

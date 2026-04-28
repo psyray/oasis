@@ -144,3 +144,94 @@
 </div>
 </details>
 {%- endmacro %}
+
+{# Executive summary (reports/executive_summary_from_json.html.j2) — reusable blocks for parity with other report views #}
+
+{% macro render_executive_guidance_html(guidance_html) -%}
+<section id="exec-guidance" class="report-executive-section report-executive-guidance" aria-labelledby="exec-guidance-heading">
+  <h2 id="exec-guidance-heading">How to read this executive summary</h2>
+  <div class="report-executive-guidance-body">{{ guidance_html | safe }}</div>
+  {{ render_return_to_toc() }}
+</section>
+{%- endmacro %}
+
+{% macro render_executive_kpi_grid(overview) -%}
+<section id="exec-situation" class="report-executive-section" aria-labelledby="exec-situation-heading">
+  <h2 id="exec-situation-heading">Security posture at a glance</h2>
+  <dl class="report-executive-kpi-grid">
+    <div class="report-executive-kpi">
+      <dt>Vulnerability types analyzed</dt>
+      <dd>{{ overview.vulnerability_types_count | default(0, true) }}</dd>
+    </div>
+    <div class="report-executive-kpi">
+      <dt>Distinct source files (embedded scan)</dt>
+      <dd>{% if overview.unique_source_files is defined and overview.unique_source_files is not none %}{{ overview.unique_source_files }}{% else %}—{% endif %}</dd>
+    </div>
+    <div class="report-executive-kpi">
+      <dt>Embedding comparisons (file × type)</dt>
+      <dd>{% if overview.embedding_comparisons_total is defined and overview.embedding_comparisons_total is not none %}{{ overview.embedding_comparisons_total }}{% else %}—{% endif %}</dd>
+    </div>
+  </dl>
+  {{ render_return_to_toc() }}
+</section>
+{%- endmacro %}
+
+{% macro render_executive_tier_definitions_table(tier_definitions) -%}
+<section id="exec-tier-defs" class="report-executive-section" aria-labelledby="exec-tier-defs-heading">
+  <h2 id="exec-tier-defs-heading">Embedding similarity tiers</h2>
+  <p class="report-executive-note">Tiers describe cosine similarity between vulnerability prototypes and source chunks — a <strong>retrieval</strong> signal. They are not CVE severity; always open the vulnerability-type report for structured findings.</p>
+  {% if tier_definitions %}
+  <table class="summary-table">
+    <thead><tr><th>Tier</th><th>Definition</th></tr></thead>
+    <tbody>
+      {% for t in tier_definitions %}
+      <tr><td><strong>{{ t.name | e }}</strong> (<code>{{ t.id | e }}</code>)</td><td>{{ t.description | e }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="report-executive-note">No embedding similarity tiers are defined for this report.</p>
+  {% endif %}
+  {{ render_return_to_toc() }}
+</section>
+{%- endmacro %}
+
+{% macro render_executive_similarity_highlights_table(similarity_rows) -%}
+<section id="exec-highlights" class="report-executive-section" aria-labelledby="exec-highlights-heading">
+  <h2 id="exec-highlights-heading">Priority embedding matches</h2>
+  <p class="report-executive-note">Highest-similarity rows per tier (caps apply). Use <strong>Detail report</strong> for full analysis, severities, and remediation.</p>
+  {% if similarity_rows %}
+  <table class="summary-table">
+    <thead>
+      <tr><th>Tier</th><th>Vulnerability type</th><th>File</th><th>Similarity</th><th>Detail report</th></tr>
+    </thead>
+    <tbody>
+      {% for row in similarity_rows %}
+      <tr>
+        <td><span {% if row.tier_description %}title="{{ row.tier_description | e }}"{% endif %}>{{ row.tier_name | e }}</span></td>
+        <td>{{ row.vuln_type | e }}</td>
+        <td><code>{{ row.file_path | e }}</code></td>
+        <td>{{ "%.4f"|format(row.similarity_score|float) }}</td>
+        <td>{% if row.detail_href %}<a href="{{ row.detail_href | e }}">Open report</a>{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No embedding highlights recorded for this summary.</p>
+  {% endif %}
+  {{ render_return_to_toc() }}
+</section>
+{%- endmacro %}
+
+{% macro render_executive_scan_status(progress_summary) -%}
+<section id="exec-scan-status" class="report-executive-section" aria-labelledby="exec-scan-status-heading">
+  <h2 id="exec-scan-status-heading">Scan status</h2>
+  <p>
+    <strong>{{ progress_summary.status_label | e }}</strong>
+    — vulnerabilities completed: {{ progress_summary.completed }}/{{ progress_summary.total }}
+    {% if progress_summary.is_partial %}<span class="report-executive-partial">(partial run)</span>{% endif %}
+  </p>
+  {{ render_return_to_toc() }}
+</section>
+{%- endmacro %}

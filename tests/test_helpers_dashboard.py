@@ -17,7 +17,7 @@ from oasis.helpers.dashboard import (
 )
 from oasis.helpers.dashboard.json_sibling import json_sibling_for_format_artifact
 from oasis.helpers.dashboard.severity_filter import (
-    merge_severity_histogram_for_report,
+    merge_severity_finding_totals_for_report,
     parse_severity_filter_param,
     report_passes_dashboard_severity_filter,
 )
@@ -75,9 +75,9 @@ class TestHelpersDashboard(unittest.TestCase):
         exec_row = {"format": "json", "vulnerability_type": "Executive Summary", "stats": {}}
         self.assertTrue(report_passes_dashboard_severity_filter(exec_row, ("medium",)))
 
-    def test_merge_severity_histogram_for_report(self):
+    def test_merge_severity_finding_totals_for_report(self):
         hist = {"critical": 0, "high": 0, "medium": 0, "low": 0}
-        merge_severity_histogram_for_report(
+        merge_severity_finding_totals_for_report(
             hist,
             {
                 "format": "json",
@@ -85,7 +85,7 @@ class TestHelpersDashboard(unittest.TestCase):
                 "stats": {"high_risk": 0, "medium_risk": 2, "low_risk": 0, "critical_risk": 0},
             },
         )
-        self.assertEqual(hist["medium"], 1)
+        self.assertEqual(hist["medium"], 2)
         self.assertEqual(hist["high"], 0)
 
     def test_preferred_detail_prefers_existing_json_over_pdf(self):

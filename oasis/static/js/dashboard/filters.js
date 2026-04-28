@@ -229,10 +229,10 @@ DashboardApp.populateFilters = function() {
         vulnFiltersContainer.innerHTML = vulnFiltersHtml || '<div class="no-data">No vulnerability type available</div>';
     }
 
-    // Populate severity filters (canonical tiers; counts from JSON vuln reports)
+    // Populate severity filters (canonical tiers; counts = finding totals per tier, same as stats.risk_summary)
     const severityFiltersContainer = document.getElementById('severity-filters');
     let severityFiltersHtml = '';
-    const severitiesStats = DashboardApp.stats.severities || {};
+    const severitiesStats = DashboardApp.stats.severity_finding_totals || {};
     const availableSeveritySet = new Set(DashboardApp.SEVERITY_FILTER_ORDER);
     const currentSeverityFilters = DashboardApp.normalizeFilterList(DashboardApp.activeFilters.severities);
     const reconciledSeverityFilters = currentSeverityFilters.filter((t) => availableSeveritySet.has(t));
@@ -523,7 +523,7 @@ DashboardApp.updateFilterCounts = function() {
         }
     });
 
-    const severitiesStats = DashboardApp.stats.severities || {};
+    const severitiesStats = DashboardApp.stats.severity_finding_totals || {};
     const severityFilters = document.querySelectorAll('.filter-option[data-type="severity"]');
     severityFilters.forEach(option => {
         const tier = option.dataset.value;

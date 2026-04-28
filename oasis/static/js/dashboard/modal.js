@@ -52,7 +52,7 @@ DashboardApp._relativePathUnderReportsHref = function(href) {
         if (!u.pathname.startsWith(prefix)) {
             return null;
         }
-        return decodeURIComponent(u.pathname.slice(prefix.length));
+        return decodeURIComponent(u.pathname.substring(prefix.length));
     } catch (e) {
         return null;
     }
@@ -327,7 +327,7 @@ DashboardApp.openReport = function(path, format, options) {
         // Determine vulnerability type from filename
         const vulnType = fileNameWithoutExt.replace(/_/g, ' ')
             .split(' ')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .map(word => word.charAt(0).toUpperCase() + word.substring(1))
             .join(' ');
         
         modalTitle.textContent = vulnType;

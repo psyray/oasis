@@ -72,6 +72,8 @@ Transport / diagnostics (same file, separate concern):
 
 Static lists (extensions, models, languages, …) follow those sections.
 """
+
+import contextlib
 import copy
 import logging
 import json
@@ -91,13 +93,11 @@ def _log_warning_main_process(msg: str, *args: Any, **kwargs: Any) -> None:
     Pool workers re-import this module; repeating env clamp warnings there duplicates
     console output and interleaves with tqdm on stderr, corrupting the progress line.
     """
-    try:
+    with contextlib.suppress(Exception):
         from multiprocessing import current_process
 
         if current_process().name != "MainProcess":
             return
-    except Exception:
-        pass
     logger.warning(msg, *args, **kwargs)
 
 
@@ -827,8 +827,15 @@ Your configured **scan threshold** (`--threshold`, default 0.5) decides which fi
 - Consider incorporating these checks into your CI/CD pipeline
 - Use the executive summary to communicate **coverage and similarity-based prioritization** to stakeholders (pair it with detail reports for actual severity)
     """,
+    # Short lead displayed above executive metadata in HTML preview/export.
+    'EXECUTIVE_SUMMARY_LEAD': (
+        "Primary scan-wide security overview: coverage across vulnerability types, "
+        "embedding-similarity tiers (retrieval signal), and quick links into per-type "
+        "reports for authoritative severities and findings."
+    ),
+    # Body only (no ``##`` heading): the Markdown report injects "## How to read…" in
+    # ``generate_executive_summary``; the HTML preview uses the Jinja section heading.
     'EXPLAIN_EXECUTIVE_SUMMARY': f"""
-## How to read this executive summary
 The tables below group analyzed files by **embedding similarity** between each vulnerability type and the file (cosine similarity). This ordering reflects **retrieval relevance**, not exploit severity and not the severity labels inside per-vulnerability JSON/HTML reports.
 
 **Tiers**: {_EXEC_SUMMARY_TIERS_INLINE_TEXT}. For authoritative finding counts and severities, open the linked vulnerability-type reports.

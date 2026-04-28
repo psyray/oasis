@@ -155,8 +155,8 @@ from .helpers.assistant.think.think_parse import (
 from .helpers.assistant.prompt.context_budget import assistant_total_system_budget_chars
 from .helpers.assistant.scan.scan_aggregate import model_directory_from_security_report_file
 from .helpers.dashboard.severity_filter import (
-    empty_severity_histogram,
-    merge_severity_histogram_for_report,
+    empty_severity_finding_totals,
+    merge_severity_finding_totals_for_report,
     parse_severity_filter_param,
     report_passes_dashboard_severity_filter,
 )
@@ -2972,7 +2972,7 @@ class WebServer:
             "formats": {},
             "dates": {},
             "projects": {},
-            "severities": empty_severity_histogram(),
+            "severity_finding_totals": empty_severity_finding_totals(),
             "risk_summary": {
                 "total_findings": 0,
                 "critical": 0,
@@ -2986,7 +2986,7 @@ class WebServer:
         for report in reports_to_analyze:
             if report["format"] == "json":
                 self._update_stats_for_report(stats, report)
-                merge_severity_histogram_for_report(stats["severities"], report)
+                merge_severity_finding_totals_for_report(stats["severity_finding_totals"], report)
 
             # count all available formats
             fmt = report["format"]
