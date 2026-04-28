@@ -32,7 +32,7 @@ from .exec_summary_tiers import (
     executive_summary_tiers_inline_text,
     executive_summary_tiers_markdown_bullets,
 )
-from .report_preview_html import rewrite_report_preview_anchor_hrefs
+from .report_preview_html import rewrite_report_preview_anchor_hrefs, strip_report_header_for_web_preview
 
 # --- Output formats / Socket.IO / phase cell parsing ---------------------------------
 

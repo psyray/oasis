@@ -11,8 +11,22 @@
 {% endif %}
 {%- endmacro %}
 
+{% macro render_active_filter_guard(preview) -%}
+{% if preview and preview.get('active_severity_filter') %}
+<div class="report-filter-guard" role="status" aria-live="polite">
+  <span class="report-filter-guard__icon" aria-hidden="true">🎯</span>
+  <span class="report-filter-guard__text">
+    Active severity filter:
+    <strong>{{ preview.get('active_severity_filter') | join(', ') }}</strong>
+    — findings shown below are filtered accordingly.
+  </span>
+</div>
+{% endif %}
+{%- endmacro %}
+
 {% macro render_header(document, preview=None) -%}
 {{ render_codebase_warning_banner(preview) }}
+{{ render_active_filter_guard(preview) }}
 <h1>{{ document.title }}</h1>
 <p><strong>Date:</strong> {{ document.generated_at }} &mdash; <strong>Model:</strong> {{ document.model_name }}</p>
 <p><strong>Vulnerability:</strong> {{ document.vulnerability_name }}</p>
@@ -100,46 +114,54 @@
 
 {% macro render_chunk_notes(chunk, file_index, chunk_index) -%}
 <h4>Chunk {{ file_index }}.{{ chunk_index }} notes</h4>
-<pre>{{ chunk.notes }}</pre>
+<pre>{{ chunk.notes | e }}</pre>
 {%- endmacro %}
 
 {% macro render_finding(finding, file_index, finding_index) -%}
 <details class="report-finding-details">
-<summary class="report-finding-summary">Finding {{ file_index }}.{{ finding_index }}: {{ finding.title }} <span class="severity">({{ finding.severity }})</span></summary>
+{% set sev_raw = (finding.severity | default('unknown', true) | string | lower) %}
+{% set sev = sev_raw if sev_raw in ['critical', 'high', 'medium', 'low'] else 'unknown' %}
+<summary class="report-finding-summary">
+  Finding {{ file_index }}.{{ finding_index }}: {{ finding.title | e }}
+  <span class="severity">
+    <span class="report-severity-pill report-severity-pill--{{ sev }}" aria-hidden="true"></span>
+    ({{ finding.severity | e }})
+  </span>
+</summary>
 <div class="report-finding-body">
 {% if finding.vulnerable_code %}
 <h5>Vulnerable code</h5>
-<pre><code>{{ finding.vulnerable_code }}</code></pre>
+<pre><code>{{ finding.vulnerable_code | e }}</code></pre>
 {% endif %}
 <h5>Explanation</h5>
-<p>{{ finding.explanation }}</p>
-{% if finding.impact %}<h5>Impact</h5><p>{{ finding.impact }}</p>{% endif %}
-{% if finding.entry_point %}<h5>Entry point</h5><p>{{ finding.entry_point }}</p>{% endif %}
+<p>{{ finding.explanation | e }}</p>
+{% if finding.impact %}<h5>Impact</h5><p>{{ finding.impact | e }}</p>{% endif %}
+{% if finding.entry_point %}<h5>Entry point</h5><p>{{ finding.entry_point | e }}</p>{% endif %}
 {% if finding.execution_path_diagram %}
 <h5>Execution path</h5>
-<pre><code>{{ finding.execution_path_diagram }}</code></pre>
+<pre><code>{{ finding.execution_path_diagram | e }}</code></pre>
 {% endif %}
-{% if finding.http_methods %}<h5>HTTP methods</h5><p>{{ finding.http_methods | join(', ') }}</p>{% endif %}
-{% if finding.manipulable_parameters %}<h5>Parameters</h5><p>{{ finding.manipulable_parameters | join(', ') }}</p>{% endif %}
+{% if finding.http_methods %}<h5>HTTP methods</h5><p>{{ finding.http_methods | map('e') | join(', ') }}</p>{% endif %}
+{% if finding.manipulable_parameters %}<h5>Parameters</h5><p>{{ finding.manipulable_parameters | map('e') | join(', ') }}</p>{% endif %}
 {% if finding.exploitation_steps %}
 <h5>Exploitation steps</h5>
-<ul>{% for step in finding.exploitation_steps %}<li>{{ step }}</li>{% endfor %}</ul>
+<ul>{% for step in finding.exploitation_steps %}<li>{{ step | e }}</li>{% endfor %}</ul>
 {% endif %}
 {% if finding.example_payloads %}
 <h5>Example payloads</h5>
-<ul>{% for payload in finding.example_payloads %}<li><code>{{ payload }}</code></li>{% endfor %}</ul>
+<ul>{% for payload in finding.example_payloads %}<li><code>{{ payload | e }}</code></li>{% endfor %}</ul>
 {% endif %}
 {% if finding.http_raw_requests %}
 <h5>HTTP raw requests (Burp / ZAP)</h5>
 {% for raw in finding.http_raw_requests %}
-<pre class="http-raw"><code>{{ raw }}</code></pre>
+<pre class="http-raw"><code>{{ raw | e }}</code></pre>
 {% endfor %}
 {% endif %}
-{% if finding.exploitation_conditions %}<h5>Conditions</h5><p>{{ finding.exploitation_conditions }}</p>{% endif %}
-{% if finding.remediation %}<h5>Remediation</h5><p>{{ finding.remediation }}</p>{% endif %}
+{% if finding.exploitation_conditions %}<h5>Conditions</h5><p>{{ finding.exploitation_conditions | e }}</p>{% endif %}
+{% if finding.remediation %}<h5>Remediation</h5><p>{{ finding.remediation | e }}</p>{% endif %}
 {% if finding.secure_code_example %}
 <h5>Secure example</h5>
-<pre><code>{{ finding.secure_code_example }}</code></pre>
+<pre><code>{{ finding.secure_code_example | e }}</code></pre>
 {% endif %}
 </div>
 </details>

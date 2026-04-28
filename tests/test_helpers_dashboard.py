@@ -128,6 +128,44 @@ class TestHelpersDashboard(unittest.TestCase):
         self.assertEqual(fmt, "json")
         self.assertTrue(rel.endswith("/json/sql_injection.json"))
 
+    def test_preferred_detail_raises_when_output_base_dir_missing(self):
+        from types import SimpleNamespace
+
+        report = SimpleNamespace(
+            current_model="embed_model",
+            report_dirs={},
+        )
+        with self.assertRaises(ValueError):
+            preferred_detail_relative_path_and_format(report, "sql_injection")
+
+    def test_preferred_detail_falls_back_from_current_report_path_when_output_base_missing(self):
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        from oasis.export.filenames import artifact_filename
+
+        with tempfile.TemporaryDirectory() as tmp:
+            sec = Path(tmp) / "security_reports"
+            model_dir = sec / "proj" / "20260101_120000" / "embed_model"
+            json_dir = model_dir / "json"
+            json_dir.mkdir(parents=True)
+            stem = "sql_injection"
+            detail = json_dir / artifact_filename(stem, "json")
+            detail.write_text("{}", encoding="utf-8")
+            current = json_dir / "_executive_summary.json"
+            current.write_text("{}", encoding="utf-8")
+
+            report = SimpleNamespace(current_model="embed_model", report_dirs={})
+            rel, fmt = preferred_detail_relative_path_and_format(
+                report,
+                stem,
+                security_root=sec,
+                current_report_path=current,
+            )
+            self.assertEqual(fmt, "json")
+            self.assertTrue(rel.endswith("/json/sql_injection.json"))
+
     def test_rewrite_preview_links_relative_pdf_to_reports(self):
         import tempfile
         from pathlib import Path

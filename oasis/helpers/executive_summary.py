@@ -186,6 +186,8 @@ def executive_similarity_highlights_rows(
 def enrich_similarity_highlight_row_for_executive_html(
     row: Dict[str, Any],
     report: Any,
+    *,
+    preview_context: Optional[Dict[str, Any]] = None,
 ) -> ExecutiveSimilarityHighlightRow:
     """Add tier tooltip and dashboard detail link to one executive highlight row."""
     merged = _row_with_resolved_tier_metadata(dict(row))
@@ -193,7 +195,12 @@ def enrich_similarity_highlight_row_for_executive_html(
     detail_href = ""
     if stem:
         try:
-            rel_path, _fmt = preferred_detail_relative_path_and_format(report, stem)
+            rel_path, _fmt = preferred_detail_relative_path_and_format(
+                report,
+                stem,
+                security_root=(preview_context or {}).get("_security_root"),
+                current_report_path=(preview_context or {}).get("_current_report_path"),
+            )
             detail_href = dashboard_reports_href(rel_path)
         except (FileNotFoundError, KeyError, ValueError) as exc:
             logger.warning(
@@ -385,6 +392,8 @@ def _build_progress_summary(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
 def build_executive_summary_html_view_model(
     payload: Dict[str, Any],
     report: Any,
+    *,
+    preview_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Shape canonical executive-summary JSON plus HTML-only fields for Jinja."""
     vulnerability_summary_items = _sorted_summary_items(payload.get("vulnerability_summary"))
@@ -396,7 +405,11 @@ def build_executive_summary_html_view_model(
     tier_definitions = _normalize_tier_definitions(payload)
 
     similarity_rows: List[ExecutiveSimilarityHighlightRow] = [
-        enrich_similarity_highlight_row_for_executive_html(row, report)
+        enrich_similarity_highlight_row_for_executive_html(
+            row,
+            report,
+            preview_context=preview_context,
+        )
         for row in highlights_in
     ]
     progress_summary = _build_progress_summary(payload)

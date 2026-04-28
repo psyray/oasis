@@ -246,6 +246,7 @@ DashboardApp.renderListViewWithTemplate = function() {
             (sum, r) => sum + (r.stats?.total_findings ?? r.stats?.total ?? 0),
             0
         );
+        const criticalRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.critical_risk || 0), 0);
         const highRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.high_risk || 0), 0);
         const mediumRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.medium_risk || 0), 0);
         const lowRisk = reportsForVuln.reduce((sum, r) => sum + (r.stats?.low_risk || 0), 0);
@@ -320,6 +321,7 @@ DashboardApp.renderListViewWithTemplate = function() {
             .replace('${modelsHTML}', modelsHTML)
             .replace('${datesHTML}', datesHTML)
             .replace('${totalFindings}', totalFindings)
+            .replace('${criticalRisk}', criticalRisk)
             .replace('${highRisk}', highRisk)
             .replace('${mediumRisk}', mediumRisk)
             .replace('${lowRisk}', lowRisk)

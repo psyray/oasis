@@ -30,10 +30,10 @@
         <li><a class="report-toc-btn" href="#exec-models"><span class="report-toc-icon" aria-hidden="true">🤖</span><span class="report-toc-label">Models used</span></a></li>
         <li><a class="report-toc-btn" href="#exec-vuln-summary"><span class="report-toc-icon" aria-hidden="true">🛡️</span><span class="report-toc-label">Vulnerability summary</span></a></li>
         <li><a class="report-toc-btn" href="#exec-similarity-tiers"><span class="report-toc-icon" aria-hidden="true">📊</span><span class="report-toc-label">Tier counts</span></a></li>
+        <li><a class="report-toc-btn" href="#assistant"><span class="report-toc-icon" aria-hidden="true">💬</span><span class="report-toc-label">Assistant</span></a></li>
       </ul>
     </nav>
-
-    {{ macros.render_return_to_toc() }}
+    <div class="executive-preview-before-overview" data-oasis-exec-before-overview="1"></div>
 
     {{ macros.render_executive_kpi_grid(payload.overview) }}
 

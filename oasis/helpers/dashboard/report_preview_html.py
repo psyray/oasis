@@ -102,3 +102,20 @@ def rewrite_report_preview_anchor_hrefs(html: str, markdown_file: Path, security
             link["href"] = new_href
 
     return str(soup)
+
+
+def strip_report_header_for_web_preview(html: str) -> str:
+    """
+    Remove export-only report header blocks from dashboard preview HTML.
+
+    Dashboard modals already provide context chrome; keeping ``.report-header`` there
+    duplicates titles and metadata that should remain visible only in exported HTML/PDF.
+    """
+    if not (html or "").strip():
+        return html
+    if ".report-header" not in html:
+        return html
+    soup = BeautifulSoup(html, "html.parser")
+    for header in soup.select(".report-header"):
+        header.decompose()
+    return str(soup)

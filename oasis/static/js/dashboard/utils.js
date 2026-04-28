@@ -258,7 +258,7 @@ if (typeof DashboardApp !== 'undefined') {
             date,
             format,
             date_visible: date_visible !== undefined ? date_visible : true,
-            stats: stats || { high_risk: 0, medium_risk: 0, low_risk: 0, total_findings: 0, files_analyzed: 0 },
+            stats: stats || { critical_risk: 0, high_risk: 0, medium_risk: 0, low_risk: 0, total_findings: 0, files_analyzed: 0 },
             language,
             alternative_formats: alternative_formats || {},
             timestamp_dir: timestamp_dir || "",

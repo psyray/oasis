@@ -58,6 +58,37 @@ DashboardApp.buildFilterParams = function(options = {}) {
     return params;
 };
 
+/**
+ * Return URL with active dashboard filters appended as query parameters.
+ *
+ * ``baseUrl`` can be either a relative URL or absolute path.
+ */
+DashboardApp.urlWithActiveFilters = function(baseUrl, options = {}) {
+    const rawUrl = String(baseUrl || '').trim();
+    if (!rawUrl) {
+        return rawUrl;
+    }
+    const params = DashboardApp.buildFilterParams(options);
+    if (!params.toString()) {
+        return rawUrl;
+    }
+    const hashIndex = rawUrl.indexOf('#');
+    const urlWithoutHash = hashIndex >= 0 ? rawUrl.slice(0, hashIndex) : rawUrl;
+    const hashFragment = hashIndex >= 0 ? rawUrl.slice(hashIndex) : '';
+
+    const queryIndex = urlWithoutHash.indexOf('?');
+    const pathPart = queryIndex >= 0 ? urlWithoutHash.slice(0, queryIndex) : urlWithoutHash;
+    const existingQuery = queryIndex >= 0 ? urlWithoutHash.slice(queryIndex + 1) : '';
+
+    const mergedParams = new URLSearchParams(existingQuery);
+    params.forEach((value, key) => {
+        mergedParams.append(key, value);
+    });
+
+    const mergedQuery = mergedParams.toString();
+    return `${pathPart}${mergedQuery ? `?${mergedQuery}` : ''}${hashFragment}`;
+};
+
 DashboardApp.fetchReports = function() {
     DashboardApp.debug("Fetching reports...");
     DashboardApp.showLoading('reports-container');
@@ -550,7 +581,8 @@ DashboardApp.fetchExecutivePreviewMeta = function (reportPath) {
     if (!rel) {
         return Promise.reject(new Error('missing report path'));
     }
-    const url = `/api/executive-preview-meta?path=${encodeURIComponent(rel)}`;
+    const baseUrl = `/api/executive-preview-meta?path=${encodeURIComponent(rel)}`;
+    const url = DashboardApp.urlWithActiveFilters(baseUrl);
     return fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } }).then(
         async function (response) {
             const data = await response.json().catch(function () {
@@ -727,7 +759,8 @@ DashboardApp.fetchReportJsonPayload = function (reportPath) {
     if (!rel) {
         return Promise.reject(new Error('missing report path'));
     }
-    const url = `/api/report-json/${encodeURIComponent(rel)}`;
+    const baseUrl = `/api/report-json/${encodeURIComponent(rel)}`;
+    const url = DashboardApp.urlWithActiveFilters(baseUrl);
     return fetch(url, { credentials: 'same-origin' }).then(async function (response) {
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {

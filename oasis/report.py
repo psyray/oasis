@@ -177,7 +177,20 @@ class Report:
 
         # Configure the Jinja2 environment
         template_dir = Path(__file__).parent / 'templates'
-        self.template_env = Environment(loader=FileSystemLoader(searchpath=str(template_dir)))
+        self.template_env = Environment(
+            loader=FileSystemLoader(searchpath=str(template_dir)),
+            autoescape=lambda template_name: bool(
+                template_name
+                and (
+                    template_name.endswith(".html")
+                    or template_name.endswith(".htm")
+                    or template_name.endswith(".xml")
+                    or template_name.endswith(".html.j2")
+                    or template_name.endswith(".htm.j2")
+                    or template_name.endswith(".xml.j2")
+                )
+            ),
+        )
         register_report_template_filters(self.template_env)
 
     def set_progress_notifier(self, notifier) -> None:
@@ -432,7 +445,11 @@ class Report:
         payload: Dict[str, Any],
         preview_context: Optional[Dict[str, Any]] = None,
     ) -> str:
-        safe_payload = build_executive_summary_html_view_model(payload, self)
+        safe_payload = build_executive_summary_html_view_model(
+            payload,
+            self,
+            preview_context=preview_context,
+        )
         template = self.template_env.get_template("reports/executive_summary_from_json.html.j2")
         return template.render(payload=safe_payload, preview=preview_context or {})
 
