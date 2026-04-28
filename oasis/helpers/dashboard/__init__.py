@@ -13,6 +13,7 @@ from .audit_metrics import (
     AUDIT_METRICS_SECTION_HEADING_PATTERN,
     AUDIT_METRICS_TABLE_HEADER_LABELS,
     audit_metric_key_from_label,
+    audit_metrics_from_audit_payload,
     audit_metrics_from_markdown_content,
     iter_audit_metrics_table_rows,
     normalize_audit_metric_label,

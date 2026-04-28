@@ -1,3 +1,25 @@
+## Unreleased
+
+## 🚀 [0.6.0] - 2026-04-28
+
+### Breaking changes
+
+- **Report storage layout**: New scans default to **project-scoped** folders (`security_reports/<project_slug>/…`) with optional **`--project-name` / `-pn`** for the slug; this supersedes the older **flat** `security_reports/<input_basename>_…` layout for new output. The dashboard still reads legacy trees where documented.
+- **Canonical JSON `analysis_root`**: New reports store the scanned project root **relative to the `security_reports/` directory**; integrations that assumed **absolute** paths must adapt (legacy absolute values remain supported via resolution heuristics in **`oasis.helpers.analysis_root_path`**).
+
+### ✨ Added
+
+- 📊 **Audit canonical JSON**: `audit_report.json` (`report_type: "audit"`) when `json` is in output formats; Pydantic `AuditReportDocument`; Markdown/HTML generated from the same document so the **Audit Metrics Summary** stays compatible with `audit_metrics_from_markdown_content` / dashboard parsing.
+- 🖥️ **Dashboard**: `/api/reports` reads audit metrics from sibling JSON when available (fallback Markdown); report modal uses `/api/report-html` for `json/audit_report.json` when opening `md/audit_report.md` (canonical JSON preview UX).
+- 📁 **Project-aware reports**: optional **project alias** for organization and improved **project-based** report storage and metadata alongside existing project workflow.
+- 📁 **Dashboard**: filter reports by **project** (`/api/reports?project=…`, stats include `projects` counts).
+- ⚠️ **Dashboard / previews**: reports expose **`codebase_accessible`** and **`assistant_context_warning`** when the scanned tree cannot be resolved or read next to **`security_reports`**; warning banners in list chips, HTML preview (vulnerability / executive / audit), and assistant panel.
+
+### ⚡ Changed
+
+- 🧭 **Audit wiring**: single **artifact stem** (`audit_report`) and **`md` → `json` sibling** rules shared by indexing (`json_sibling_for_format_artifact`) and the dashboard (`audit-report-paths.js`); audit HTML preview uses **Jinja `audit_decimal`** for scores/thresholds instead of inline format strings.
+- 📎 **Canonical JSON `analysis_root`**: new reports store the scanned project root **relative to the `security_reports/` directory**; legacy **absolute** paths remain supported via resolution heuristics. Helpers live in **`oasis.helpers.analysis_root_path`** (shared by assistant RAG cache root and **`scan_root`** candidate resolution).
+
 ## 🚀 [0.5.1] - 2026-04-22
 
 ### ✨ Added

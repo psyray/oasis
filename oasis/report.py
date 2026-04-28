@@ -19,7 +19,7 @@ from .config import REPORT, LANGUAGES
 from .export import artifact_filename
 from .export.vulnerability import write_vulnerability_artifacts
 from .export.markdown_outputs import write_rendered_markdown_formats
-from .export.writers import write_markdown_lines, write_utf8_text
+from .export.writers import write_json_document, write_markdown_lines, write_utf8_text
 from .schemas.analysis import (
     ChunkDeepAnalysis,
     FileReportEntry,
@@ -27,7 +27,19 @@ from .schemas.analysis import (
     build_dashboard_stats,
     chunk_analysis_to_markdown,
 )
+from .schemas.audit_report import (
+    AuditMetrics,
+    AuditReportDocument,
+    AuditVulnerabilitySection,
+)
 from .tools import extract_clean_path, logger, sanitize_name, generate_timestamp
+from .helpers.analysis_root_path import encode_analysis_root_for_storage
+from .helpers.report_project import (
+    log_input_path_project_naming_warnings,
+    project_label_for_report_storage,
+    project_slug_for_report_storage,
+    validate_project_alias_for_cli,
+)
 
 # Package metadata (process constant; avoid lazy imports in hot paths)
 from . import __version__ as oasis_version
@@ -38,6 +50,7 @@ from .helpers.dashboard import (
     executive_summary_similarity_tier_id,
     preferred_detail_relative_path_and_format,
 )
+from .helpers.report_jinja_filters import register_report_template_filters
 from .helpers.progress import (
     SCAN_PROGRESS_EXTENDED_KEYS,
     SCAN_PROGRESS_NON_PARTIAL_STATUSES,
@@ -143,11 +156,15 @@ class Report:
         self._executive_summary_sidecar_write_failed = False
         self.executive_summary_scan_model: str = ""
         self.executive_summary_embedding_model: str = ""
+        self.project: Optional[str] = None
+        self.project_slug: Optional[str] = None
+        self._initialize_project_metadata(input_path)
 
 
         # Configure the Jinja2 environment
         template_dir = Path(__file__).parent / 'templates'
         self.template_env = Environment(loader=FileSystemLoader(searchpath=str(template_dir)))
+        register_report_template_filters(self.template_env)
 
     def set_progress_notifier(self, notifier) -> None:
         """Register an optional callback receiving real-time scan progress payloads."""
@@ -194,13 +211,20 @@ class Report:
         """
         directory.mkdir(parents=True, exist_ok=True)
     
-    def create_report_directories(self, input_path: str | Path, sub_dir: str = None, models: List[str] = None) -> Dict[str, Path]:
+    def create_report_directories(
+        self,
+        input_path: str | Path,
+        sub_dir: str = None,
+        models: List[str] = None,
+        project_name: str | None = None,
+    ) -> Dict[str, Path]:
         """
         Create format-specific directories for reports
         
         Args:
             input_path: Path to the input file or directory
             sub_dir: Optional subdirectory name
+            project_name: Optional explicit project alias overriding the -i derived name
             
         Returns:
             Dictionary of format-specific directory paths
@@ -208,8 +232,16 @@ class Report:
         if isinstance(input_path, str):
             input_path = Path(input_path)
 
+        clean = extract_clean_path(input_path)
+        clean_path = clean if isinstance(clean, Path) else Path(clean)
+        log_input_path_project_naming_warnings(logger, clean_path)
+
         self.output_base_dir = input_path.resolve().parent / REPORT['OUTPUT_DIR']
-        self.output_dir = self.get_output_directory(input_path, self.output_base_dir)
+        self.output_dir = self.get_output_directory(
+            input_path,
+            self.output_base_dir,
+            project_name=project_name,
+        )
         self.ensure_directory(self.output_base_dir)
 
         base_dir = self.output_dir
@@ -315,13 +347,28 @@ class Report:
             )
         return entries
 
+    def _stored_analysis_root_value(self, root: Optional[Path]) -> Optional[str]:
+        """Persist scan root relative to ``security_reports`` when ``output_base_dir`` is set."""
+        if root is None:
+            return None
+        resolved = Path(root).resolve()
+        base = getattr(self, "output_base_dir", None)
+        if base is None:
+            return str(resolved)
+        try:
+            return encode_analysis_root_for_storage(resolved, Path(base))
+        except (ValueError, OSError):
+            return str(resolved)
+
     def _build_vulnerability_document(
         self, vulnerability: Dict, results: List[Dict], model_name: str
     ) -> VulnerabilityReportDocument:
         vuln_name = vulnerability["name"]
         file_entries = self._results_to_file_entries(results)
         stats = self._compute_document_stats(file_entries)
-        root = Path(self.input_path).resolve() if self.input_path else None
+        root = (
+            Path(self.input_path).resolve() if getattr(self, "input_path", None) else None
+        )
         return VulnerabilityReportDocument(
             title=f"{vuln_name} Security Analysis",
             generated_at=generate_timestamp(),
@@ -331,8 +378,9 @@ class Report:
             vulnerability=dict(vulnerability),
             files=file_entries,
             stats=stats,
-            analysis_root=str(root) if root else None,
+            analysis_root=self._stored_analysis_root_value(root),
             embed_model=self.embed_model,
+            project=self.project,
         )
 
     @staticmethod
@@ -340,15 +388,36 @@ class Report:
         """Single source of truth for dashboard statistics aggregation."""
         return build_dashboard_stats(file_entries)
 
-    def _render_vulnerability_inner_html(self, doc: VulnerabilityReportDocument) -> str:
+    def _render_vulnerability_inner_html(
+        self,
+        doc: VulnerabilityReportDocument,
+        preview_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
         template = self.template_env.get_template("reports/vulnerability_from_json.html.j2")
-        return template.render(document=doc.model_dump(mode="json"))
+        return template.render(document=doc.model_dump(mode="json"), preview=preview_context or {})
 
     def _render_vulnerability_markdown_export(self, doc: VulnerabilityReportDocument) -> str:
         template = self.template_env.get_template("reports/vulnerability_export.md.j2")
         return template.render(document=doc.model_dump(mode="json"))
 
-    def _render_executive_summary_inner_html(self, payload: Dict[str, Any]) -> str:
+    def _render_audit_inner_html(
+        self,
+        doc: AuditReportDocument,
+        preview_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        template = self.template_env.get_template("reports/audit_from_json.html.j2")
+        payload = doc.model_dump(mode="json")
+        payload["explain_analysis_html"] = markdown.markdown(
+            str(payload.get("explain_analysis") or ""),
+            extensions=["tables", "fenced_code", "codehilite"],
+        )
+        return template.render(document=payload, preview=preview_context or {})
+
+    def _render_executive_summary_inner_html(
+        self,
+        payload: Dict[str, Any],
+        preview_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
         vuln_summary = payload.get("vulnerability_summary")
         tier_counts = payload.get("similarity_tier_counts")
         safe_payload = {
@@ -367,23 +436,35 @@ class Report:
                 if isinstance(tier_counts, dict)
                 else []
             ),
+            "project": payload.get("project"),
+            "analysis_root": payload.get("analysis_root"),
         }
         template = self.template_env.get_template("reports/executive_summary_from_json.html.j2")
-        return template.render(payload=safe_payload)
+        return template.render(payload=safe_payload, preview=preview_context or {})
 
-    def render_report_html_from_json_payload(self, payload: Dict) -> str:
+    def render_report_html_from_json_payload(
+        self,
+        payload: Dict,
+        *,
+        preview_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """
         Render report HTML directly from canonical JSON payload.
         """
+        pc = preview_context or {}
         report_type = payload.get("report_type")
         if report_type == "vulnerability":
             doc = VulnerabilityReportDocument.model_validate(payload)
             # Keep JSON payload and template rendering aligned on one stats helper.
             doc.stats = self._compute_document_stats(doc.files)
-            inner_html = self._render_vulnerability_inner_html(doc)
+            inner_html = self._render_vulnerability_inner_html(doc, pc)
             return self.render_template(inner_html)
         if report_type == "executive_summary":
-            return self.render_template(self._render_executive_summary_inner_html(payload))
+            return self.render_template(self._render_executive_summary_inner_html(payload, pc))
+        if report_type == "audit":
+            doc = AuditReportDocument.model_validate(payload)
+            inner_html = self._render_audit_inner_html(doc, pc)
+            return self.render_template(inner_html)
         raise ValueError(f"Unsupported canonical report type: {report_type}")
 
     def generate_vulnerability_report(
@@ -468,30 +549,66 @@ class Report:
         Returns:
             Dictionary of report file paths
         """
-        # Set output file paths and filter by output format in one step
         output_files = self.filter_output_files("audit_report")
-        summary_metrics = self._audit_metrics_summary(analyzer_results)
-        report = self._build_audit_report_header(embedding_manager)
-        self._extend_audit_metrics_summary(report, summary_metrics)
-        self._extend_audit_vulnerability_statistics(report, analyzer_results)
-        self._extend_audit_analysis_results(report, analyzer_results)
+        doc = self._build_audit_document(analyzer_results, embedding_manager)
+        report = self._audit_report_markdown_lines_from_document(doc)
 
-        # Generate and save report
+        if "json" in output_files:
+            write_json_document(output_files["json"], doc)
+
         self._generate_and_save_report(output_files, report, report_type='Audit')
 
         return output_files
 
-    @staticmethod
-    def _build_audit_report_header(embedding_manager) -> List[str]:
+    def _build_audit_document(
+        self, analyzer_results: Dict[str, Dict], embedding_manager
+    ) -> AuditReportDocument:
+        summary = self._audit_metrics_summary(analyzer_results)
         embeddings_info = embedding_manager.get_embeddings_info()
-        return [
+        vuln_stats = list(analyzer_results.get("vulnerability_statistics") or [])
+        analyses: Dict[str, AuditVulnerabilitySection] = {
+            name: AuditVulnerabilitySection.model_validate(raw)
+            for name, raw in analyzer_results.items()
+            if name != "vulnerability_statistics" and isinstance(raw, dict)
+        }
+        lang_raw = getattr(self, "language_code", None)
+        language = (
+            str(lang_raw).strip().lower().split("-", 1)[0].split("_", 1)[0] or "en"
+            if isinstance(lang_raw, str) and lang_raw.strip()
+            else "en"
+        )
+        scan_root = (
+            Path(self.input_path).resolve() if getattr(self, "input_path", None) else None
+        )
+        return AuditReportDocument(
+            generated_at=generate_timestamp(),
+            language=language,
+            project=getattr(self, "project", None),
+            oasis_version=oasis_version,
+            embedding_model=str(embedding_manager.embedding_model),
+            total_files_analyzed=int(embeddings_info.get("total_files", 0)),
+            explain_analysis=REPORT["EXPLAIN_ANALYSIS"],
+            audit_metrics=AuditMetrics.model_validate(summary) if summary else None,
+            vulnerability_statistics=vuln_stats,
+            analyses=analyses,
+            analysis_root=self._stored_analysis_root_value(scan_root),
+        )
+
+    def _audit_report_markdown_lines_from_document(self, doc: AuditReportDocument) -> List[str]:
+        report: List[str] = [
             "# Embeddings Distribution Analysis Report",
-            f"\nDate: {generate_timestamp()}",
-            f"\nEmbedding Model: {embedding_manager.embedding_model}",
-            f"\nTotal Files Analyzed: {embeddings_info['total_files']}",
-            REPORT["EXPLAIN_ANALYSIS"],
+            f"\nDate: {doc.generated_at}",
+            f"\nEmbedding Model: {doc.embedding_model}",
+            f"\nTotal Files Analyzed: {doc.total_files_analyzed}",
+            doc.explain_analysis,
             '<div class="page-break"></div>',
         ]
+        am = doc.audit_metrics.model_dump(exclude_none=False) if doc.audit_metrics else {}
+        self._extend_audit_metrics_summary(report, am)
+        wrapper: Dict[str, Any] = {"vulnerability_statistics": list(doc.vulnerability_statistics)}
+        self._extend_audit_vulnerability_statistics(report, wrapper)
+        self._extend_audit_analysis_sections(report, doc.analyses)
+        return report
 
     @staticmethod
     def _extend_audit_metrics_summary(report: List[str], summary_metrics: Dict[str, Any]) -> None:
@@ -575,20 +692,18 @@ class Report:
                 f"| {stat['name']} | {stat['total']} | {stat['high']} | {stat['medium']} | {stat['low']} |"
             )
 
-    def _extend_audit_analysis_results(self, report: List[str], analyzer_results: Dict[str, Dict]) -> None:
+    def _extend_audit_analysis_sections(
+        self, report: List[str], analyses: Dict[str, AuditVulnerabilitySection]
+    ) -> None:
         report.append("\n## Analysis Results\n")
-        section_index = 0
-        for vuln_name, data in analyzer_results.items():
-            if vuln_name == "vulnerability_statistics":
-                continue
+        for section_index, (vuln_name, section) in enumerate(analyses.items()):
             if section_index > 0:
                 report.append("\n<div class=\"page-break\"></div>\n")
-            self._extend_audit_vulnerability_result_section(report, vuln_name, data)
-            section_index += 1
+            self._extend_audit_vulnerability_result_section(report, vuln_name, section)
 
     @staticmethod
     def _extend_audit_vulnerability_result_section(
-        report: List[str], vuln_name: str, data: Dict[str, Any]
+        report: List[str], vuln_name: str, section: AuditVulnerabilitySection
     ) -> None:
         report.extend(
             [
@@ -598,12 +713,10 @@ class Report:
                 "|-----------|----------------|------------|",
             ]
         )
-        for analysis in data["threshold_analysis"]:
-            threshold = analysis["threshold"]
-            matching_items = analysis["matching_items"]
-            percentage = analysis["percentage"]
-            report.append(f"| {threshold:.1f} | {matching_items} | {percentage:.1f}% |")
-
+        report.extend(
+            f"| {row.threshold:.1f} | {row.matching_items} | {row.percentage:.1f}% |"
+            for row in section.threshold_analysis
+        )
         report.extend(
             [
                 "\n#### Top Matches",
@@ -611,19 +724,18 @@ class Report:
                 "|-------|------|",
             ]
         )
-        for result in data["results"][:10]:
-            score = result["similarity_score"]
-            item_id = result["item_id"]
-            report.append(f"| {score:.3f} | {item_id} |")
-
-        stats = data["statistics"]
+        report.extend(
+            f"| {result.similarity_score:.3f} | {result.item_id} |"
+            for result in section.results[:10]
+        )
+        stats = section.statistics
         report.extend(
             [
                 "\n#### Statistics",
-                f"- **Average similarity**: {stats['avg_score']:.3f}",
-                f"- **Median similarity**: {stats['median_score']:.3f}",
-                f"- **Maximum similarity**: {stats['max_score']:.3f}",
-                f"- **Minimum similarity**: {stats['min_score']:.3f}",
+                f"- **Average similarity**: {stats.avg_score:.3f}",
+                f"- **Median similarity**: {stats.median_score:.3f}",
+                f"- **Maximum similarity**: {stats.max_score:.3f}",
+                f"- **Minimum similarity**: {stats.min_score:.3f}",
             ]
         )
 
@@ -797,6 +909,9 @@ class Report:
         }
         deep_model = str(deep_model_name or "").strip()
         primary_model = deep_model or str(model_name or "").strip()
+        exec_scan_root = (
+            Path(self.input_path).resolve() if getattr(self, "input_path", None) else None
+        )
         return {
             "report_type": "executive_summary",
             "schema_version": 1,
@@ -809,7 +924,89 @@ class Report:
             "oasis_version": oasis_version,
             "vulnerability_summary": vuln_summary,
             "similarity_tier_counts": tier_counts,
+            "project": getattr(self, "project", None),
+            "analysis_root": self._stored_analysis_root_value(exec_scan_root),
         }
+
+    def _persist_executive_summary_canonical_json(
+        self,
+        *,
+        canonical_json_path: Path,
+        all_results: Dict[str, List[Dict]],
+        model_name: str,
+        deep_model_name: str,
+        scan_model_name: str,
+        embedding_model_name: str,
+        similarity_groups: Dict[str, List[Dict[str, Any]]],
+        progress: Optional[Dict[str, Any]],
+    ) -> None:
+        try:
+            self.ensure_directory(canonical_json_path.parent)
+            exec_doc = self._build_executive_summary_json_document(
+                all_results,
+                model_name,
+                deep_model_name,
+                scan_model_name,
+                embedding_model_name,
+                similarity_groups,
+            )
+            if progress:
+                exec_doc["progress"] = dict(self._last_progress_payload or {})
+            write_utf8_text(
+                canonical_json_path,
+                json.dumps(exec_doc, indent=2, ensure_ascii=False),
+            )
+        except Exception:
+            logger.warning("Failed to write canonical executive summary JSON", exc_info=True)
+
+    def _persist_executive_summary_progress_sidecar(
+        self,
+        *,
+        canonical_json_path: Path,
+        progress: Dict[str, Any],
+        model_name: str,
+        deep_model_name: str,
+        scan_model_name: str,
+        embedding_model_name: str,
+    ) -> None:
+        try:
+            progress_path = executive_summary_progress_sidecar_path(canonical_json_path)
+            # Compatibility: keep legacy `model` as primary deep-model field for existing
+            # consumers; newer readers can use explicit `deep_model`/`small_model`/`embedding_model`.
+            prog_root = (
+                Path(self.input_path).resolve()
+                if getattr(self, "input_path", None)
+                else None
+            )
+            doc = {
+                "report_type": "executive_summary",
+                "model": model_name,
+                "deep_model": deep_model_name,
+                "small_model": scan_model_name,
+                "embedding_model": embedding_model_name,
+                "progress": dict(self._last_progress_payload),
+                "generated_at": progress_timestamp_iso(),
+                "oasis_version": oasis_version,
+                "project": getattr(self, "project", None),
+                "analysis_root": self._stored_analysis_root_value(prog_root),
+            }
+            write_utf8_text(
+                progress_path,
+                json.dumps(doc, indent=2, ensure_ascii=False),
+            )
+        except Exception:
+            if not self._executive_summary_sidecar_write_failed:
+                self._executive_summary_sidecar_write_failed = True
+                logger.warning(
+                    "Failed to write executive summary progress sidecar JSON "
+                    "(subsequent failures will be logged at debug level only)",
+                    exc_info=True,
+                )
+            else:
+                logger.debug(
+                    "Failed to write executive summary progress sidecar JSON",
+                    exc_info=True,
+                )
 
     def generate_executive_summary(
         self,
@@ -817,16 +1014,7 @@ class Report:
         model_name: str,
         progress: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Path]:
-        """
-        Generate executive summary report
-        
-        Args:
-            all_results: Dictionary of all vulnerability results
-            model_name: Name of model used
-            
-        Returns:
-            Dictionary of report file paths
-        """
+        """Generate executive summary markdown, canonical JSON, and optional progress sidecar."""
         output_files = self.filter_output_files("_executive_summary")
         self._last_summary_results = dict(all_results or {})
         self._last_summary_model_name = str(model_name or "")
@@ -860,57 +1048,26 @@ class Report:
 
         canonical_json_path = self._executive_summary_canonical_json_path(output_files)
         if canonical_json_path is not None:
-            try:
-                self.ensure_directory(canonical_json_path.parent)
-                exec_doc = self._build_executive_summary_json_document(
-                    all_results,
-                    model_name,
-                    deep_model_name,
-                    scan_model_name,
-                    embedding_model_name,
-                    similarity_groups,
-                )
-                if progress:
-                    exec_doc["progress"] = dict(self._last_progress_payload or {})
-                write_utf8_text(
-                    canonical_json_path,
-                    json.dumps(exec_doc, indent=2, ensure_ascii=False),
-                )
-            except Exception:
-                logger.warning("Failed to write canonical executive summary JSON", exc_info=True)
+            self._persist_executive_summary_canonical_json(
+                canonical_json_path=canonical_json_path,
+                all_results=all_results,
+                model_name=model_name,
+                deep_model_name=deep_model_name,
+                scan_model_name=scan_model_name,
+                embedding_model_name=embedding_model_name,
+                similarity_groups=similarity_groups,
+                progress=progress,
+            )
 
         if progress and canonical_json_path:
-            try:
-                progress_path = executive_summary_progress_sidecar_path(canonical_json_path)
-                # Compatibility: keep legacy `model` as primary deep-model field for existing
-                # consumers; newer readers can use explicit `deep_model`/`small_model`/`embedding_model`.
-                doc = {
-                    "report_type": "executive_summary",
-                    "model": model_name,
-                    "deep_model": deep_model_name,
-                    "small_model": scan_model_name,
-                    "embedding_model": embedding_model_name,
-                    "progress": dict(self._last_progress_payload),
-                    "generated_at": progress_timestamp_iso(),
-                    "oasis_version": oasis_version,
-                }
-                write_utf8_text(
-                    progress_path,
-                    json.dumps(doc, indent=2, ensure_ascii=False),
-                )
-            except Exception:
-                if not self._executive_summary_sidecar_write_failed:
-                    self._executive_summary_sidecar_write_failed = True
-                    logger.warning(
-                        "Failed to write executive summary progress sidecar JSON "
-                        "(subsequent failures will be logged at debug level only)",
-                        exc_info=True,
-                    )
-                else:
-                    logger.debug(
-                        "Failed to write executive summary progress sidecar JSON",
-                        exc_info=True,
-                    )
+            self._persist_executive_summary_progress_sidecar(
+                canonical_json_path=canonical_json_path,
+                progress=progress,
+                model_name=model_name,
+                deep_model_name=deep_model_name,
+                scan_model_name=scan_model_name,
+                embedding_model_name=embedding_model_name,
+            )
 
         notifier = getattr(self, "progress_notifier", None)
         if progress and callable(notifier):
@@ -1181,28 +1338,42 @@ class Report:
             if fmt in self.report_dirs[model_name]
         }
 
-    def get_output_directory(self, input_path: str | Path, base_reports_dir: Path) -> Path:
+    def get_output_directory(
+        self,
+        input_path: str | Path,
+        base_reports_dir: Path,
+        project_name: str | None = None,
+    ) -> Path:
         """
-        Generate a unique output directory name based on input path and timestamp
-        
-        Args:
-            input_path: Input path (string or Path) that may contain arguments
-            base_reports_dir: Base directory for reports
-            
-        Returns:
-            Unique output directory path
+        Build ``security_reports/<project_slug>/<YYYYMMDD_HHMMSS>/`` with inner layout unchanged.
+
+        ``output_dir_name`` is ``<project_slug>_<timestamp>`` for ``run_id`` and error logs
+        (globally unique across project folders).
         """
-        # Make sure we have a clean path
-        clean_path = extract_clean_path(input_path)
-            
-        # Get basename for naming the output directory
-        input_name = clean_path.name if clean_path.is_file() else clean_path.stem
-        
-        # Add timestamp for uniqueness
+        self._initialize_project_metadata(input_path, project_name=project_name)
         timestamp = generate_timestamp(for_file=True)
-        self.output_dir_name = f"{input_name}_{timestamp}"
-        
-        return base_reports_dir / self.output_dir_name
+        self.output_dir_name = f"{self.project_slug}_{timestamp}"
+        return base_reports_dir / self.project_slug / timestamp
+
+    def _initialize_project_metadata(
+        self,
+        input_path: str | Path,
+        project_name: str | None = None,
+    ) -> None:
+        """Derive stable project label and slug from input or explicit alias.
+
+        Non-empty ``project_name`` must satisfy the same contract as ``--project-name``
+        (:func:`~oasis.helpers.report_project.validate_project_alias_for_cli`); invalid
+        values raise ``ValueError``.
+        """
+        normalized_project_name = str(project_name).strip() if project_name is not None else ""
+        if normalized_project_name:
+            self.project = validate_project_alias_for_cli(normalized_project_name)
+        else:
+            clean = extract_clean_path(input_path)
+            clean_path = clean if isinstance(clean, Path) else Path(clean)
+            self.project = project_label_for_report_storage(clean_path)
+        self.project_slug = project_slug_for_report_storage(self.project)
 
 
 def publish_incremental_summary(

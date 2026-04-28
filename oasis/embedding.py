@@ -60,6 +60,7 @@ class EmbeddingManager:
         self.input_path = args.input_path
         self.clear_cache = args.clear_cache_embeddings
         self.cache_days = args.cache_days or DEFAULT_ARGS['CACHE_DAYS']
+        self.project_name = getattr(args, "project_name", None)
         self.embedding_model = self._resolve_primary_embed_model(getattr(args, "embed_model", None))
 
         self.embedding_analysis_type = args.embeddings_analyze_type or DEFAULT_ARGS['EMBEDDING_ANALYSIS_TYPE']
@@ -116,7 +117,7 @@ class EmbeddingManager:
             args: Arguments
         """
         # Create cache directory
-        cache_dir = create_cache_dir(self.input_path)
+        cache_dir = create_cache_dir(self.input_path, project_name=self.project_name)
         path_id = hashlib.sha1(str(self.input_path).encode("utf-8")).hexdigest()[:16]
         self.cache_file = cache_dir / f"{path_id}_{sanitize_name(self.embedding_model)}.cache"
         logger.debug(f"Cache file: {self.cache_file}")

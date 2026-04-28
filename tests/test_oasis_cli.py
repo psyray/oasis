@@ -127,6 +127,23 @@ class TestOasisCliParsing(unittest.TestCase):
         with self.assertRaises(EmbedModelValueError):
             OasisScanner._parse_embed_models_csv(" , , ")
 
+    def test_project_name_cli_type_accepts_valid_alias(self):
+        self.assertEqual(OasisScanner._project_name_cli_type("proj_1-main"), "proj_1-main")
+
+    def test_project_name_cli_type_rejects_invalid_characters(self):
+        with self.assertRaises(argparse.ArgumentTypeError):
+            OasisScanner._project_name_cli_type("proj name!")
+
+    def test_parser_accepts_project_name_option(self):
+        scanner = OasisScanner()
+        parser = scanner.setup_argument_parser()
+        td = tempfile.mkdtemp()
+        try:
+            ns = self._parse_cli_args(parser, td, "--project-name", "my_proj-1")
+            self.assertEqual(ns.project_name, "my_proj-1")
+        finally:
+            shutil.rmtree(td)
+
     def test_embed_model_cli_type_accepts_csv_in_audit_mode(self):
         scanner = OasisScanner()
         parser = scanner.setup_argument_parser()
@@ -250,6 +267,7 @@ class TestOasisAuditMode(unittest.TestCase):
         scanner.args = SimpleNamespace(
             embed_model=["embed-a", "embed-b"],
             input_path="/tmp/project",
+            project_name="my_proj",
         )
         scanner.ollama_manager = MagicMock()
         scanner.report = MagicMock()
@@ -274,7 +292,7 @@ class TestOasisAuditMode(unittest.TestCase):
 
         self.assertTrue(result)
         scanner.report.create_report_directories.assert_called_once_with(
-            "/tmp/project", models=["embed-a", "embed-b"]
+            "/tmp/project", models=["embed-a", "embed-b"], project_name="my_proj"
         )
         base_manager.prepare_input_files.assert_called_once()
         manager_a.process_input_files.assert_called_once_with(

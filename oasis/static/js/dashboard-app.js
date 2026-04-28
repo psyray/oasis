@@ -13,6 +13,8 @@ const DashboardApp = {
         formats: [],
         languages: [],
         vulnerabilities: [],
+        severities: [],
+        projects: [],
         dateRange: null
     },
     filtersPopulated: false,
@@ -188,6 +190,7 @@ const DashboardApp = {
             const modules = [
                 'bootstrap.js',
                 'utils.js',
+                'audit-report-paths.js',
                 'filters.js',
                 'views.js',
                 'api.js',
@@ -249,11 +252,17 @@ const DashboardApp = {
                 if (typeof this.loadLanguageFiltersFromStorage === 'function') {
                     this.loadLanguageFiltersFromStorage();
                 }
+                if (typeof this.loadProjectFiltersFromStorage === 'function') {
+                    this.loadProjectFiltersFromStorage();
+                }
+                if (typeof this.loadSeverityFiltersFromStorage === 'function') {
+                    this.loadSeverityFiltersFromStorage();
+                }
 
                 // Initialize the dashboard only after templates are loaded
                 this.initializeFilters();
                 // Match previous startup: stats omit vulnerability in the query so filter options stay complete.
-                this.refreshDashboard({ statsIncludeVulnerability: false });
+                this.refreshDashboard({ statsIncludeVulnerability: false, statsIncludeSeverity: false });
                 if (typeof this.ensureRealtimeProgress === 'function') {
                     this.ensureRealtimeProgress();
                 } else {
@@ -294,6 +303,8 @@ const DashboardApp = {
                     formats: [],
                     languages: [],
                     vulnerabilities: [],
+                    severities: [],
+                    projects: [],
                     dateRange: null
                 };
                 if (typeof self.clearVulnerabilityFilterStorage === 'function') {
@@ -301,6 +312,12 @@ const DashboardApp = {
                 }
                 if (typeof self.clearLanguageFilterStorage === 'function') {
                     self.clearLanguageFilterStorage();
+                }
+                if (typeof self.clearProjectFilterStorage === 'function') {
+                    self.clearProjectFilterStorage();
+                }
+                if (typeof self.clearSeverityFilterStorage === 'function') {
+                    self.clearSeverityFilterStorage();
                 }
                 
                 // Reset checkboxes

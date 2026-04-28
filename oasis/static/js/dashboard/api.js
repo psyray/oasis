@@ -1,8 +1,22 @@
 // API functions for fetching data
+
+/** Appends active severity tiers to ``URLSearchParams`` (same encoding as ``buildFilterParams``). */
+DashboardApp.appendActiveSeverityToSearchParams = function(params, options = {}) {
+    const { includeSeverity = true } = options;
+    if (
+        includeSeverity &&
+        DashboardApp.activeFilters.severities &&
+        DashboardApp.activeFilters.severities.length > 0
+    ) {
+        params.append('severity', DashboardApp.activeFilters.severities.join(','));
+    }
+};
+
 DashboardApp.buildFilterParams = function(options = {}) {
     // Create and return URLSearchParams object with active filters
     const {
-        includeVulnerability = true
+        includeVulnerability = true,
+        includeSeverity = true,
     } = options;
     const params = new URLSearchParams();
     
@@ -25,7 +39,13 @@ DashboardApp.buildFilterParams = function(options = {}) {
     ) {
         params.append('vulnerability', DashboardApp.activeFilters.vulnerabilities.join(','));
     }
-    
+
+    if (DashboardApp.activeFilters.projects && DashboardApp.activeFilters.projects.length > 0) {
+        params.append('project', DashboardApp.activeFilters.projects.join(','));
+    }
+
+    DashboardApp.appendActiveSeverityToSearchParams(params, { includeSeverity });
+
     if (DashboardApp.activeFilters.dateRange) {
         if (DashboardApp.activeFilters.dateRange.start) {
             params.append('start_date', DashboardApp.activeFilters.dateRange.start);
@@ -393,7 +413,10 @@ DashboardApp.ensureRealtimeProgress = function() {
 };
 
 DashboardApp.refreshDashboard = function(options = {}) {
-    const { statsIncludeVulnerability = true } = options;
+    const {
+        statsIncludeVulnerability = true,
+        statsIncludeSeverity = true,
+    } = options;
     DashboardApp.debug("Refreshing dashboard...");
     
     // Show loading indicators
@@ -403,7 +426,10 @@ DashboardApp.refreshDashboard = function(options = {}) {
     const fullParams = new URLSearchParams(DashboardApp.buildFilterParams());
     fullParams.append('force', '1');
     const statsParams = new URLSearchParams(
-        DashboardApp.buildFilterParams({ includeVulnerability: statsIncludeVulnerability })
+        DashboardApp.buildFilterParams({
+            includeVulnerability: statsIncludeVulnerability,
+            includeSeverity: statsIncludeSeverity,
+        })
     );
     statsParams.append('force', '1');
     const reportsParams = new URLSearchParams(fullParams);
