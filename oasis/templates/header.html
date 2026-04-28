@@ -17,11 +17,11 @@
             <span class="theme-toggle-label visually-hidden">Dark</span>
         </button>
         {% if session.get('logged_in') %}
-        <a href="{{ url_for('get_stats') }}" class="header-link" title="Reload">
+        <a href="{{ url_for('get_stats') }}" class="header-link header-link-reload" title="Reload">
             <span class="header-link-icon" aria-hidden="true">🔄</span>
             <span class="header-link-label visually-hidden">Reload</span>
         </a>
-        <a href="{{ url_for('logout') }}" class="header-link" title="Logout">
+        <a href="{{ url_for('logout') }}" class="header-link header-link-logout" title="Logout">
             <span class="header-link-icon" aria-hidden="true">🔑</span>
             <span class="header-link-label visually-hidden">Logout</span>
         </a>

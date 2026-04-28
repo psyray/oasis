@@ -345,6 +345,55 @@ DashboardApp._destroyStatsSeverityChart = function () {
         }
         DashboardApp._statsSeverityChart = null;
     }
+    if (DashboardApp._statsSeverityThemeSyncRaf) {
+        window.cancelAnimationFrame(DashboardApp._statsSeverityThemeSyncRaf);
+        DashboardApp._statsSeverityThemeSyncRaf = null;
+    }
+    if (DashboardApp._statsSeverityThemeSyncHandler) {
+        document.removeEventListener(DashboardApp.THEME_CHANGE_EVENT, DashboardApp._statsSeverityThemeSyncHandler);
+        DashboardApp._statsSeverityThemeSyncHandler = null;
+    }
+    DashboardApp._statsSeverityThemeSyncBound = false;
+};
+
+DashboardApp._applyStatsSeverityChartTheme = function (chart) {
+    if (!chart || !chart.options || !chart.options.scales) {
+        return;
+    }
+    const activeTheme = DashboardApp.getCurrentTheme();
+    if (chart._oasisAppliedTheme === activeTheme) {
+        return;
+    }
+    const palette = DashboardApp.getDashboardChartThemeColors(activeTheme);
+    const xAxis = chart.options.scales.x || {};
+    const yAxis = chart.options.scales.y || {};
+    xAxis.ticks = xAxis.ticks || {};
+    xAxis.grid = xAxis.grid || {};
+    yAxis.ticks = yAxis.ticks || {};
+    xAxis.ticks.color = palette.text;
+    xAxis.grid.color = palette.grid;
+    yAxis.ticks.color = palette.text;
+    chart.options.scales.x = xAxis;
+    chart.options.scales.y = yAxis;
+    chart._oasisAppliedTheme = activeTheme;
+    chart.update('none');
+};
+
+DashboardApp._ensureStatsSeverityChartThemeSync = function () {
+    if (DashboardApp._statsSeverityThemeSyncBound) {
+        return;
+    }
+    DashboardApp._statsSeverityThemeSyncHandler = function () {
+        if (DashboardApp._statsSeverityThemeSyncRaf) {
+            return;
+        }
+        DashboardApp._statsSeverityThemeSyncRaf = window.requestAnimationFrame(function () {
+            DashboardApp._statsSeverityThemeSyncRaf = null;
+            DashboardApp._applyStatsSeverityChartTheme(DashboardApp._statsSeverityChart);
+        });
+    };
+    DashboardApp._statsSeverityThemeSyncBound = true;
+    document.addEventListener(DashboardApp.THEME_CHANGE_EVENT, DashboardApp._statsSeverityThemeSyncHandler);
 };
 
 /** Horizontal bar chart for severity counts (requires Chart.js on ``window``). */
@@ -363,9 +412,7 @@ DashboardApp._initStatsSeverityChart = function () {
     if (!ctx) {
         return;
     }
-    const isDarkTheme = document.documentElement.getAttribute('data-theme') === 'dark';
-    const axisLabelColor = isDarkTheme ? '#c4d2de' : '#5a6a75';
-    const gridColor = isDarkTheme ? 'rgba(196, 210, 222, 0.24)' : 'rgba(90, 106, 117, 0.2)';
+    const palette = DashboardApp.getDashboardChartThemeColors();
     DashboardApp._statsSeverityChart = new Chart(ctx, {
         type: 'bar',
         data: {
@@ -401,22 +448,23 @@ DashboardApp._initStatsSeverityChart = function () {
                     beginAtZero: true,
                     ticks: {
                         precision: 0,
-                        color: axisLabelColor,
+                        color: palette.text,
                     },
                     grid: {
                         display: true,
-                        color: gridColor,
+                        color: palette.grid,
                     },
                 },
                 y: {
                     ticks: {
-                        color: axisLabelColor,
+                        color: palette.text,
                     },
                     grid: { display: false },
                 },
             },
         },
     });
+    DashboardApp._ensureStatsSeverityChartThemeSync();
 };
 
 DashboardApp.renderStats = function() {
@@ -552,7 +600,7 @@ DashboardApp.renderStats = function() {
         `
         : '';
     
-    statsContainer.innerHTML = `
+    const statsHtml = `
         <div class="dashboard-cards">
             <div class="card">
                 <div class="card-title">📊 Reports</div>
@@ -585,6 +633,7 @@ DashboardApp.renderStats = function() {
             ${progressCard}
         </div>
     `;
+    DashboardApp._appendSanitizedHtml(statsContainer, statsHtml);
     DashboardApp._initStatsSeverityChart();
 };
 

@@ -162,35 +162,6 @@ body {
         font-size: 1rem;
     }
 
-    /*
-     * Legacy header markup (<a class="header-link">🔄 Reload</a> without label spans):
-     * hide inline text and show a single emoji via ::before. Structured markup uses
-     * .header-link-icon / .header-link-label instead (:has() excludes those links).
-     */
-    .header-actions > a.header-link:not(:has(.header-link-icon))[href='/api/stats'],
-    .header-actions > a.header-link:not(:has(.header-link-icon))[href='/logout'] {
-        font-size: 0 !important;
-        line-height: 1 !important;
-        letter-spacing: 0 !important;
-        color: transparent;
-    }
-
-    .header-actions > a.header-link:not(:has(.header-link-icon))[href='/api/stats']::before,
-    .header-actions > a.header-link:not(:has(.header-link-icon))[href='/logout']::before {
-        font-size: 1rem;
-        line-height: 1;
-        color: var(--theme-header-link-text);
-        display: inline-block;
-    }
-
-    .header-actions > a.header-link:not(:has(.header-link-icon))[href='/api/stats']::before {
-        content: '🔄';
-    }
-
-    .header-actions > a.header-link:not(:has(.header-link-icon))[href='/logout']::before {
-        content: '🔑';
-    }
-
 }
 
 .logo-container {
