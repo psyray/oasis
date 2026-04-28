@@ -1112,6 +1112,11 @@ class TestExecutiveAndAssistantMetaRoutes(unittest.TestCase):
             blocked_payload = json.loads(blocked.get_data(as_text=True))
             self.assertIn("active filter scope", blocked_payload.get("error", ""))
 
+            blocked_none = client.get("/api/report-json/20260101_120000/m1/json/high.json?severity=critical")
+            self.assertEqual(blocked_none.status_code, 409)
+            blocked_none_payload = json.loads(blocked_none.get_data(as_text=True))
+            self.assertIn("active filter scope", blocked_none_payload.get("error", ""))
+
             allowed = client.get("/api/report-json/20260101_120000/m1/json/high.json?severity=high")
             self.assertEqual(allowed.status_code, 200)
             allowed_payload = json.loads(allowed.get_data(as_text=True))

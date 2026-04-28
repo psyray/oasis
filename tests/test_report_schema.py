@@ -658,6 +658,7 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(payload["overview"]["vulnerability_types_count"], 0)
         self.assertEqual(payload["overview"]["embedding_comparisons_total"], 0)
         self.assertEqual(payload["overview"]["unique_source_files"], 0)
+        self.assertEqual(payload["guidance_id"], "default.v1")
         self.assertIn("guidance_markdown", payload)
         self.assertEqual(len(payload["tier_definitions"]), 3)
         self.assertEqual(payload["similarity_highlights"], [])
@@ -1186,10 +1187,42 @@ class TestReportSchema(unittest.TestCase):
             ],
             "stats": {"total_findings": 2},
         }
-        filtered = WebServer._filter_vulnerability_payload_by_severity_tiers(payload, ("high", "info"))
+        filtered = WebServer._filter_vulnerability_payload_by_severity_tiers(
+            payload,
+            ("high", "info"),
+            rewrite_stats_totals=True,
+        )
         self.assertEqual(filtered["stats"]["high_risk"], 1)
         self.assertEqual(filtered["stats"]["total_findings"], 2)
         self.assertEqual(filtered["stats_unfiltered"]["total_findings"], 2)
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_filter_vulnerability_payload_by_severity_tiers_preserves_stats_without_rewrite(self):
+        payload = {
+            "report_type": "vulnerability",
+            "files": [
+                {
+                    "file_path": "x.py",
+                    "chunk_analyses": [
+                        {
+                            "findings": [
+                                {"severity": "High"},
+                                {"severity": "Low"},
+                            ]
+                        }
+                    ],
+                }
+            ],
+            "stats": {
+                "high_risk": 10,
+                "low_risk": 8,
+                "total_findings": 18,
+            },
+        }
+        filtered = WebServer._filter_vulnerability_payload_by_severity_tiers(payload, ("high",))
+        self.assertEqual(filtered["stats"]["high_risk"], 10)
+        self.assertEqual(filtered["stats"]["total_findings"], 18)
+        self.assertNotIn("stats_unfiltered", filtered)
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_allowed_paths_for_filtered_reports_collects_primary_and_alternatives(self):
@@ -1215,6 +1248,10 @@ class TestReportSchema(unittest.TestCase):
                 "run_a/model_a/json/b.json",
             },
         )
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_allowed_paths_for_filtered_reports_empty_input_returns_empty_set(self):
+        self.assertEqual(WebServer._allowed_paths_for_filtered_reports([]), set())
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_web_update_stats_for_report_aggregates_model_vuln_language_date_and_risk(self):

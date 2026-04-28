@@ -52,6 +52,8 @@ from .helpers.dashboard import (
 )
 from .helpers.executive_summary import (
     build_executive_summary_html_view_model,
+    EXECUTIVE_DEFAULT_GUIDANCE_ID,
+    EXECUTIVE_DEFAULT_GUIDANCE_MARKDOWN,
     executive_similarity_highlights_rows,
     executive_tier_definitions_payload,
 )
@@ -943,7 +945,8 @@ class Report:
                 "embedding_comparisons_total": comparisons_total,
                 "unique_source_files": _executive_unique_source_files_count(all_results),
             },
-            "guidance_markdown": REPORT["EXPLAIN_EXECUTIVE_SUMMARY"].strip(),
+            "guidance_id": EXECUTIVE_DEFAULT_GUIDANCE_ID,
+            "guidance_markdown": EXECUTIVE_DEFAULT_GUIDANCE_MARKDOWN,
             "tier_definitions": executive_tier_definitions_payload(),
             "similarity_highlights": executive_similarity_highlights_rows(similarity_groups),
         }

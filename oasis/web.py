@@ -1480,8 +1480,6 @@ class WebServer:
                 return True
             filtered_reports = list(self.filter_reports(**filter_kwargs))
             allowed_paths = self._allowed_paths_for_filtered_reports(filtered_reports)
-            if allowed_paths is None:
-                return True
             try:
                 rel_path = WebServer._normalize_dashboard_relative_report_path(
                     resolved_path.relative_to(security_root).as_posix()
@@ -1565,7 +1563,11 @@ class WebServer:
                 if not isinstance(payload, dict):
                     return jsonify({'error': 'Invalid JSON report payload'}), 422
                 severity_tiers = parse_severity_filter_param(request.args.get('severity', ''))
-                payload = self._filter_vulnerability_payload_by_severity_tiers(payload, severity_tiers)
+                payload = self._filter_vulnerability_payload_by_severity_tiers(
+                    payload,
+                    severity_tiers,
+                    rewrite_stats_totals=True,
+                )
                 return jsonify(payload)
             except Exception:
                 return self._report_preview_error_response("Error while generating JSON report preview")
@@ -1623,7 +1625,7 @@ class WebServer:
                     return jsonify(meta)
                 filtered_reports = list(self.filter_reports(**filter_kwargs))
                 allowed_paths = self._allowed_paths_for_filtered_reports(filtered_reports)
-                if allowed_paths is None:
+                if not allowed_paths:
                     return jsonify({'severity_counts': {}, 'vulnerability_reports': []})
 
                 model_rel_prefix = WebServer._normalize_dashboard_relative_report_path(
@@ -2112,7 +2114,11 @@ class WebServer:
                 if not isinstance(payload, dict):
                     return jsonify({'error': 'Invalid JSON report payload'}), 422
                 severity_tiers = parse_severity_filter_param(request.args.get('severity', ''))
-                payload = self._filter_vulnerability_payload_by_severity_tiers(payload, severity_tiers)
+                payload = self._filter_vulnerability_payload_by_severity_tiers(
+                    payload,
+                    severity_tiers,
+                    rewrite_stats_totals=True,
+                )
 
                 ar_raw = payload.get("analysis_root")
                 ar_text = ar_raw.strip() if isinstance(ar_raw, str) else None
@@ -3135,9 +3141,9 @@ class WebServer:
     @staticmethod
     def _allowed_paths_for_filtered_reports(
         filtered_reports: Iterable[Dict[str, Any]] | None,
-    ) -> set[str] | None:
+    ) -> set[str]:
         if not filtered_reports:
-            return None
+            return set()
         allowed_paths: set[str] = set()
         for report in filtered_reports:
             report_path = WebServer._normalize_dashboard_relative_report_path(report.get("path"))
@@ -3172,7 +3178,10 @@ class WebServer:
 
     @staticmethod
     def _filter_vulnerability_payload_by_severity_tiers(
-        payload: Dict[str, Any], tiers: Tuple[str, ...]
+        payload: Dict[str, Any],
+        tiers: Tuple[str, ...],
+        *,
+        rewrite_stats_totals: bool = False,
     ) -> Dict[str, Any]:
         """Filter canonical vulnerability payload findings to selected severity tiers."""
         if not tiers:
@@ -3230,17 +3239,18 @@ class WebServer:
         stats = data.get("stats")
         original_stats = dict(stats) if isinstance(stats, dict) else {}
         stats_copy = dict(stats) if isinstance(stats, dict) else {}
-        stats_copy["critical_risk"] = sev_counts["critical"]
-        stats_copy["high_risk"] = sev_counts["high"]
-        stats_copy["medium_risk"] = sev_counts["medium"]
-        stats_copy["low_risk"] = sev_counts["low"]
-        # Keep totals aligned with kept findings even when non-canonical severities are present.
-        stats_copy["total_findings"] = total_findings_count
-        stats_copy["files_analyzed"] = len(filtered_files)
-        # Compatibility note: ``potential_findings`` remains chunk-granular (historical behavior).
-        stats_copy["potential_findings"] = potential_chunk_count
+        if rewrite_stats_totals:
+            stats_copy["critical_risk"] = sev_counts["critical"]
+            stats_copy["high_risk"] = sev_counts["high"]
+            stats_copy["medium_risk"] = sev_counts["medium"]
+            stats_copy["low_risk"] = sev_counts["low"]
+            # Keep totals aligned with kept findings even when non-canonical severities are present.
+            stats_copy["total_findings"] = total_findings_count
+            stats_copy["files_analyzed"] = len(filtered_files)
+            # Compatibility note: ``potential_findings`` remains chunk-granular (historical behavior).
+            stats_copy["potential_findings"] = potential_chunk_count
         data["stats"] = stats_copy
-        if original_stats:
+        if rewrite_stats_totals and original_stats:
             data["stats_unfiltered"] = original_stats
         return data
 

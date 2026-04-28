@@ -59,6 +59,8 @@ _EXECUTIVE_GUIDANCE_HASH_TO_ID: Dict[str, str] = {
     for variant in _EXECUTIVE_GUIDANCE_VARIANTS
 }
 _DEFAULT_EXECUTIVE_GUIDANCE_ID = _EXECUTIVE_GUIDANCE_VARIANTS[0]["id"]
+EXECUTIVE_DEFAULT_GUIDANCE_MARKDOWN = _EXECUTIVE_GUIDANCE_BY_ID[_DEFAULT_EXECUTIVE_GUIDANCE_ID]
+EXECUTIVE_DEFAULT_GUIDANCE_ID = _DEFAULT_EXECUTIVE_GUIDANCE_ID
 
 
 # Similarity score + tier metadata helpers (shared by canonical JSON and HTML enrichment).
@@ -108,11 +110,14 @@ def trusted_guidance_markdown_for_executive_html(payload: Dict[str, Any]) -> str
     Trust policy:
     - require ``guidance_id`` mapped to a known variant,
     - require ``guidance_markdown`` to match that variant text and digest,
+    - treat bundled default guidance as trusted when ``guidance_id`` is missing,
     - fallback to default bundled guidance for unknown/mismatched payloads.
     """
     raw = payload.get("guidance_markdown")
     if isinstance(raw, str) and raw.strip():
         normalized = raw.strip()
+        if normalized == EXECUTIVE_DEFAULT_GUIDANCE_MARKDOWN:
+            return normalized
         guidance_id = str(payload.get("guidance_id") or "").strip()
         trusted = _EXECUTIVE_GUIDANCE_BY_ID.get(guidance_id)
         if trusted is None:
@@ -121,7 +126,7 @@ def trusted_guidance_markdown_for_executive_html(payload: Dict[str, Any]) -> str
                 logger.warning(msg, "unknown", guidance_id)
             else:
                 logger.debug(msg, "missing", None)
-            return _EXECUTIVE_GUIDANCE_BY_ID[_DEFAULT_EXECUTIVE_GUIDANCE_ID]
+            return EXECUTIVE_DEFAULT_GUIDANCE_MARKDOWN
         computed_guidance_id = _guidance_variant_id_from_markdown(normalized)
         expected_digest = hashlib.sha256(trusted.encode("utf-8")).hexdigest()
         digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
@@ -136,7 +141,7 @@ def trusted_guidance_markdown_for_executive_html(payload: Dict[str, Any]) -> str
             expected_digest[:12],
             digest[:12],
         )
-    return _EXECUTIVE_GUIDANCE_BY_ID[_DEFAULT_EXECUTIVE_GUIDANCE_ID]
+    return EXECUTIVE_DEFAULT_GUIDANCE_MARKDOWN
 
 
 def executive_tier_definitions_payload() -> List[Dict[str, str]]:
@@ -247,10 +252,9 @@ def _executive_summary_lead_text() -> str:
     return str(lead).strip() if isinstance(lead, str) else ""
 
 
-def _derive_overview_defaults(
+def _normalize_overview_input(
     payload: Dict[str, Any],
     vulnerability_summary_items: List[Tuple[Any, Any]],
-    highlights_in: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     overview_raw = payload.get("overview")
     overview_in = dict(overview_raw) if isinstance(overview_raw, dict) else {}
@@ -271,10 +275,17 @@ def _derive_overview_defaults(
             key_name="unique_source_files",
         ),
     }
-    if overview.get("unique_source_files") is None and highlights_in:
+    return overview
+
+
+def _backfill_overview_from_highlights(
+    overview: Dict[str, Any],
+    highlights: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if overview.get("unique_source_files") is None and highlights:
         unique_paths = {
             str(fp)
-            for row in highlights_in
+            for row in highlights
             if isinstance(row, dict) and (fp := row.get("file_path"))
         }
         if unique_paths:
@@ -282,11 +293,27 @@ def _derive_overview_defaults(
     return overview
 
 
-def _normalize_similarity_highlights(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+def build_similarity_rows_for_executive_html(
+    payload: Dict[str, Any],
+    report: Any,
+    *,
+    preview_context: Optional[Dict[str, Any]] = None,
+) -> List[ExecutiveSimilarityHighlightRow]:
     raw = payload.get("similarity_highlights")
     if not isinstance(raw, list):
         return []
-    return [_row_with_resolved_tier_metadata(row) for row in raw if isinstance(row, dict)]
+    rows: List[ExecutiveSimilarityHighlightRow] = []
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        rows.append(
+            enrich_similarity_highlight_row_for_executive_html(
+                _row_with_resolved_tier_metadata(row),
+                report,
+                preview_context=preview_context,
+            )
+        )
+    return rows
 
 
 def _normalize_tier_definitions(payload: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -399,19 +426,15 @@ def build_executive_summary_html_view_model(
     vulnerability_summary_items = _sorted_summary_items(payload.get("vulnerability_summary"))
     similarity_tier_items = _sorted_summary_items(payload.get("similarity_tier_counts"))
     guidance_html = _render_guidance_html(payload)
-    highlights_in = _normalize_similarity_highlights(payload)
-    overview = _derive_overview_defaults(payload, vulnerability_summary_items, highlights_in)
+    similarity_rows = build_similarity_rows_for_executive_html(
+        payload,
+        report,
+        preview_context=preview_context,
+    )
+    overview = _normalize_overview_input(payload, vulnerability_summary_items)
+    overview = _backfill_overview_from_highlights(overview, similarity_rows)
 
     tier_definitions = _normalize_tier_definitions(payload)
-
-    similarity_rows: List[ExecutiveSimilarityHighlightRow] = [
-        enrich_similarity_highlight_row_for_executive_html(
-            row,
-            report,
-            preview_context=preview_context,
-        )
-        for row in highlights_in
-    ]
     progress_summary = _build_progress_summary(payload)
 
     safe_payload: Dict[str, Any] = {
