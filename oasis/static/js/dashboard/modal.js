@@ -230,8 +230,10 @@ DashboardApp.handleReportModalContentClick = function(event) {
     if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
         return;
     }
-    const href = String(hrefRaw).trim();
-    if (/^https?:\/\//i.test(href) || href.startsWith('mailto:') || href.startsWith('#')) {
+    const href = typeof hrefRaw === 'string' ? hrefRaw.trim() : '';
+    const isExternalHref =
+        /^https?:\/\//i.test(href) || href.indexOf('mailto:') === 0 || href.indexOf('#') === 0;
+    if (isExternalHref) {
         return;
     }
     let rel = null;
@@ -403,6 +405,16 @@ DashboardApp.openReport = function(path, format, options) {
         return;
     }
 
+    const finalizeWithModalError = function (error) {
+        const errorMessage = DashboardApp._errorMessage(error);
+        DashboardApp._appendTextMessage(
+            modalContent,
+            'error-message',
+            `Error loading report content: ${errorMessage}`
+        );
+        DashboardApp._finalizeReportModalView(opts.restoreScrollTop);
+    };
+
     if (format === 'json') {
         // Prefer canonical JSON rendered via server-side Jinja HTML.
         const markdownPath = path
@@ -459,13 +471,7 @@ DashboardApp.openReport = function(path, format, options) {
                     })
                     .catch((markdownError) => {
                         console.error('Error fetching markdown fallback for JSON path:', markdownError);
-                        const errorMessage = DashboardApp._errorMessage(markdownError);
-                        DashboardApp._appendTextMessage(
-                            modalContent,
-                            'error-message',
-                            `Error loading report content: ${errorMessage}`
-                        );
-                        DashboardApp._finalizeReportModalView(opts.restoreScrollTop);
+                        finalizeWithModalError(markdownError);
                     });
             });
     } else if (format === 'md') {

@@ -34,9 +34,9 @@ DashboardApp._validateStatusTone = function (status) {
 };
 
 DashboardApp._validateShortenPath = function (value, keep) {
-    const s = String(value == null ? '' : value);
+    const s = value == null ? '' : String(value);
     const k = typeof keep === 'number' && keep > 0 ? keep : 3;
-    const parts = s.split('/');
+    const parts = s ? s.split('/') : [];
     if (parts.length <= k + 1) {
         return s;
     }
@@ -246,10 +246,9 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
         container.classList.remove('oasis-assistant-validate-panel--' + t);
     });
     container.classList.add('oasis-assistant-validate-panel--' + tone);
-    const confidencePct =
-        typeof result.confidence === 'number'
-            ? Math.max(0, Math.min(100, Math.round(result.confidence * 100)))
-            : null;
+    const confidencePct = typeof result.confidence === 'number'
+        ? Math.max(0, Math.min(100, Math.round(result.confidence * 100)))
+        : null;
     const statusText = String(result.status || '—').replace(/_/g, ' ');
     const familyText = String(result.family || '—');
     const vulnName =
@@ -318,8 +317,13 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
         result.narrative_markdown && String(result.narrative_markdown).trim()
             ? String(result.narrative_markdown).trim()
             : '';
-    const synthesisModelText =
-        typeof result.synthesis_model === 'string' ? String(result.synthesis_model).trim() : '';
+    const synthesisModelText = typeof result.synthesis_model === 'string'
+        ? String(result.synthesis_model).trim()
+        : '';
+    const synthesisErrorText =
+        result.synthesis_error && String(result.synthesis_error).trim()
+            ? String(result.synthesis_error).trim()
+            : '';
     if (llmMd) {
         const llmHead = document.createElement('div');
         llmHead.className = 'oasis-assistant-validate-llm-head';
@@ -353,12 +357,13 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
                 copiedCode: label('assistantCopiedCode', 'Copied'),
             });
         }
-    } else if (result.synthesis_error && String(result.synthesis_error).trim()) {
+    }
+    if (!llmMd && synthesisErrorText) {
         const synErr = document.createElement('p');
         synErr.className = 'oasis-assistant-validate-synthesis-error';
         synErr.textContent =
             label('validateSynthesisErrorPrefix', 'Narrative synthesis: ') +
-            String(result.synthesis_error).trim();
+            synthesisErrorText;
         container.appendChild(synErr);
     }
 
