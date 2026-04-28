@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from oasis.helpers.analysis_root_path import (
     codebase_access_state,
@@ -82,6 +83,32 @@ class TestAnalysisRootPath(unittest.TestCase):
                 resolve_analysis_root_from_storage(evil_rel, sec),
                 "resolved path must stay under the layout parent",
             )
+
+    def test_encode_analysis_root_fallback_when_relpath_raises(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td).resolve() / "proj"
+            proj.mkdir()
+            sec = Path(td).resolve() / "sec"
+            sec.mkdir()
+            with patch(
+                "oasis.helpers.analysis_root_path.os.path.relpath",
+                side_effect=ValueError,
+            ):
+                out = encode_analysis_root_for_storage(proj, sec)
+            self.assertEqual(out, proj.resolve().as_posix())
+
+    def test_encode_analysis_root_normalizes_posix_separators(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td).resolve() / "proj"
+            proj.mkdir()
+            sec = Path(td).resolve() / "sec"
+            sec.mkdir()
+            with patch(
+                "oasis.helpers.analysis_root_path.os.path.relpath",
+                return_value=".." + os.sep + "proj",
+            ):
+                out = encode_analysis_root_for_storage(proj, sec)
+            self.assertNotIn("\\", out)
 
 
 if __name__ == "__main__":

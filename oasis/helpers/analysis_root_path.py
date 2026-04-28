@@ -11,9 +11,13 @@ reconstructing the project root from this field plus the dashboard's current
 
 from __future__ import annotations
 
+import logging
 import os
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 # User-facing strings (reuse in README, dashboard constants, templates).
 CODEBASE_UNAVAILABLE_SHORT = (
@@ -32,10 +36,19 @@ def encode_analysis_root_for_storage(
     scan_root: Path | str,
     security_reports_root: Path | str,
 ) -> str:
-    """Relative path string from ``security_reports`` to the scanned project root."""
+    """Relative path string from ``security_reports`` to the scanned project root.
+
+    Uses POSIX ``/`` separators so stored JSON matches normalization elsewhere.
+    On ``relpath`` failure (e.g. distinct drive roots on Windows), falls back to the
+    resolved absolute scan root as a POSIX path.
+    """
     root = Path(scan_root).resolve()
     base = Path(security_reports_root).resolve()
-    return os.path.relpath(root, base)
+    try:
+        rel = os.path.relpath(root, base)
+    except ValueError:
+        return root.resolve().as_posix()
+    return rel.replace("\\", "/")
 
 
 def _normalized_path_segments(path: Path) -> tuple[str, ...]:
@@ -69,6 +82,15 @@ def _resolve_stale_absolute_by_suffix(
     and try suffixes of the stored absolute path from longest to shortest segment
     tail until an existing directory is found. Example: stored
     ``/old/machine/myapp`` may match ``…/workspace/myapp`` after relocation.
+
+    To reduce accidental mismatches when many folders share trailing segments:
+
+    * only multi-segment suffixes (at least two path segments) are tried in the
+      main scan; single-segment tails are handled via the direct child of the
+      layout parent (``anchor / last_segment``);
+    * among candidates, the **longest** matching suffix wins (most specific path);
+    * if several distinct directories tie at that depth, a warning is logged and
+      the first deterministic choice is kept.
     """
     stripped = raw.strip()
     if not stripped:
@@ -80,11 +102,49 @@ def _resolve_stale_absolute_by_suffix(
     seg = _normalized_path_segments(pure)
     if not seg:
         return None
-    for k in range(len(seg), 0, -1):
+
+    MIN_SUFFIX_SEGMENTS = 2
+    matches: list[tuple[int, Path]] = []
+
+    for k in range(len(seg), MIN_SUFFIX_SEGMENTS - 1, -1):
         candidate = (anchor / Path(*seg[-k:])).resolve(strict=False)
-        if candidate.exists() and candidate.is_dir():
-            return candidate
-    return None
+        with suppress(OSError):
+            if candidate.exists() and candidate.is_dir():
+                matches.append((k, candidate))
+
+    tail_direct = (anchor / seg[-1]).resolve(strict=False)
+    with suppress(OSError):
+        if tail_direct.exists() and tail_direct.is_dir():
+            matches.append((1, tail_direct))
+
+    if not matches:
+        return None
+
+    max_k = max(k for k, _ in matches)
+    tier = [(k, p) for k, p in matches if k == max_k]
+    seen_resolved: set[str] = set()
+    uniq_at_max: list[Path] = []
+    for _, p in tier:
+        try:
+            key = str(p.resolve(strict=False))
+        except OSError:
+            key = str(p)
+        if key not in seen_resolved:
+            seen_resolved.add(key)
+            uniq_at_max.append(p)
+
+    chosen = uniq_at_max[0]
+    if len(uniq_at_max) > 1:
+        logger.warning(
+            "Ambiguous stale analysis_root relocation for %r under layout parent %r "
+            "(suffix depth %s). Candidates: %s. Using %s.",
+            stripped,
+            anchor,
+            max_k,
+            ", ".join(sorted(str(p) for p in uniq_at_max)),
+            chosen,
+        )
+    return chosen
 
 
 def resolve_analysis_root_from_storage(

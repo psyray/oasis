@@ -217,13 +217,15 @@ DashboardApp.populateFilters = function() {
     DashboardApp.saveFilterListToStorage('projects', DashboardApp.activeFilters.projects);
 
     availableProjects.forEach((proj) => {
+        const h = DashboardApp._escapeHtml;
+        const esc = h(proj);
         const count = DashboardApp.stats.projects[proj];
         const isChecked = DashboardApp.activeFilters.projects.includes(proj) ? 'checked' : '';
         projectFiltersHtml += `
-            <div class="filter-option" data-type="project" data-value="${proj}">
+            <div class="filter-option" data-type="project" data-value="${esc}">
                 <label>
-                    <input type="checkbox" class="filter-checkbox" data-type="project" data-value="${proj}" ${isChecked}>
-                    ${proj} <span class="filter-count">(${count})</span>
+                    <input type="checkbox" class="filter-checkbox" data-type="project" data-value="${esc}" ${isChecked}>
+                    ${esc} <span class="filter-count">(${count})</span>
                 </label>
             </div>
         `;

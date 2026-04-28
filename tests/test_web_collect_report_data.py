@@ -12,7 +12,16 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from oasis.report import Report  # noqa: E402
-from oasis.web import WebServer  # noqa: E402
+from oasis.web import WebServer, normalize_dashboard_project_key  # noqa: E402
+
+
+class TestNormalizeDashboardProjectKey(unittest.TestCase):
+    def test_strips_and_lowercases(self):
+        self.assertEqual(normalize_dashboard_project_key(" MyApp "), "myapp")
+
+    def test_empty_when_missing(self):
+        self.assertEqual(normalize_dashboard_project_key(None), "")
+        self.assertEqual(normalize_dashboard_project_key(""), "")
 
 
 class TestWebServerCollectReportData(unittest.TestCase):

@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
@@ -163,6 +164,13 @@ from .tools import parse_iso_date, parse_report_date
 
 logger = logging.getLogger(__name__)
 
+_CODEBASE_ACCESS_STATE_CACHE_MAX = 512
+
+
+def normalize_dashboard_project_key(value: Any) -> str:
+    """Normalize project label for dashboard filters and aggregated statistics keys."""
+    return str(value or "").strip().lower()
+
 
 @dataclass(frozen=True)
 class AssistantChatPrepError:
@@ -297,9 +305,9 @@ class WebServer:
         self._canonical_json_fields_cache: Dict[
             Path, Tuple[Optional[str], Optional[str]]
         ] = {}
-        self._codebase_access_state_cache: Dict[
+        self._codebase_access_state_cache: OrderedDict[
             Tuple[Optional[str], Path], Tuple[Optional[Path], bool]
-        ] = {}
+        ] = OrderedDict()
         if not isinstance(report, Report):
             raise ValueError("Report must be an instance of Report")
         
@@ -2726,14 +2734,18 @@ class WebServer:
         else:
             key_raw = None
         key = (key_raw, sec_resolved)
-        hit = self._codebase_access_state_cache.get(key)
-        if hit is not None:
-            return hit
+        cache = self._codebase_access_state_cache
+        if key in cache:
+            cache.move_to_end(key)
+            return cache[key]
         out = codebase_access_state(
             stored_raw=key_raw,
             security_reports_root=sec_resolved,
         )
-        self._codebase_access_state_cache[key] = out
+        cache[key] = out
+        cache.move_to_end(key)
+        while len(cache) > _CODEBASE_ACCESS_STATE_CACHE_MAX:
+            cache.popitem(last=False)
         return out
 
     def _canonical_json_fields_from_path(
@@ -2909,7 +2921,7 @@ class WebServer:
             filtered = [
                 r
                 for r in filtered
-                if str(r.get("project") or "").strip().lower() in project_filters
+                if normalize_dashboard_project_key(r.get("project")) in project_filters
             ]
 
         for report in filtered:
@@ -3010,8 +3022,11 @@ class WebServer:
         language = (report.get("language") or "en").lower()
         stats["languages"][language] = stats["languages"].get(language, 0) + 1
 
-        if project := report.get("project"):
-            stats["projects"][project] = stats["projects"].get(project, 0) + 1
+        normalized_project = normalize_dashboard_project_key(report.get("project"))
+        if normalized_project:
+            stats["projects"][normalized_project] = (
+                stats["projects"].get(normalized_project, 0) + 1
+            )
 
         if report_date := report.get("date"):
             date_only = report_date.split()[0]
