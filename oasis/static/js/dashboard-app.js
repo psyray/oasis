@@ -97,6 +97,9 @@ const DashboardApp = {
         this.loadModules()
             .then(() => {
                 this.debug("All modules loaded successfully");
+                if (typeof this.initThemeControls === 'function') {
+                    this.initThemeControls();
+                }
                 if (typeof marked === 'undefined') {
                     console.warn('[OASIS Dashboard] marked.js failed to load from CDN; markdown previews may be degraded.');
                 }

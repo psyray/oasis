@@ -1,4 +1,15 @@
 :root {
+    --theme-surface: #f5f2e9;
+    --theme-surface-elevated: #ffffff;
+    --theme-surface-muted: #f5f5f5;
+    --theme-text: #0e1f2b;
+    --theme-text-muted: #7f8c8d;
+    --theme-border: #ddd;
+    --theme-overlay: rgba(0, 0, 0, 0.7);
+    --theme-header-bg: #0e1f2b;
+    --theme-header-bg-strong: #1a3a5f;
+    --theme-header-link-text: #ffffff;
+    --muted-text: #5c6570;
     --dark-blue: #0e1f2b;
     --dark-blue-2: #1a3a5f;
     --sand: #e6e0cc;
@@ -11,19 +22,42 @@
     --white: #fff;
 }
 
+[data-theme='dark'] {
+    --theme-surface: #0f1722;
+    --theme-surface-elevated: #152133;
+    --theme-surface-muted: #1a2a3d;
+    --theme-text: #e6edf5;
+    --theme-text-muted: #c6d3e0;
+    --theme-border: #2e4158;
+    --theme-overlay: rgba(0, 0, 0, 0.82);
+    --theme-header-bg: #0c1520;
+    --theme-header-bg-strong: #111f2f;
+    --theme-header-link-text: #ffffff;
+    --dark-blue: #e6edf5;
+    --dark-blue-2: #d5e1ef;
+    --sand: #22344a;
+    --light-sand: #0f1722;
+    --light-gray: #1a2a3d;
+    --border-color: #2e4158;
+    --white: #152133;
+    --medium-gray: #c6d3e0;
+    --muted-text: #c6d3e0;
+}
+
 body {
     font-family: Arial, sans-serif;
     margin: 0;
     padding: 0;
-    background-color: var(--light-sand);
-    color: var(--dark-blue);
+    background-color: var(--theme-surface);
+    color: var(--theme-text);
     display: flex;
     flex-direction: column;
     min-height: 100vh;
 }
 
 .header {
-    background-color: var(--dark-blue);
+    background-color: var(--theme-header-bg);
+    color: #fff;
     padding: 15px 20px;
     display: flex;
     align-items: center;
@@ -38,7 +72,7 @@ body {
 }
 
 .header-link {
-    color: var(--white);
+    color: var(--theme-header-link-text);
     text-decoration: none;
     font-weight: bold;
     font-size: 1.1rem;
@@ -49,6 +83,22 @@ body {
 
 .header-link:hover {
     background-color: rgba(255, 255, 255, 0.1);
+}
+
+.header-theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.header-theme-toggle:hover {
+    border-color: rgba(255, 255, 255, 0.42);
+}
+
+.theme-toggle-label {
+    line-height: 1;
 }
 
 .logo-container {
@@ -100,7 +150,7 @@ body {
 
 .sidebar {
     width: 300px;
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
     border-right: 1px solid var(--border-color);
     padding: 20px;
     box-shadow: 2px 0 5px rgba(0,0,0,0.05);
@@ -167,7 +217,7 @@ body {
 }
 
 .card {
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
     border-radius: 8px;
     box-shadow: 0 2px 5px rgba(0,0,0,0.1);
     padding: 20px;
@@ -389,7 +439,7 @@ body {
 }
 
 .reports-table tbody tr {
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
 }
 
 .reports-table tbody tr:nth-child(even) {
@@ -433,6 +483,7 @@ body {
     width: 100%;
     height: 168px;
     margin-top: 8px;
+    color: var(--medium-gray);
 }
 
 .stats-severity-badges {
@@ -590,7 +641,7 @@ body.report-modal-scroll-locked .footer {
 .tree-section {
     border: 1px solid var(--border-color);
     border-radius: 5px;
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
     overflow: hidden;
 }
 
@@ -865,7 +916,7 @@ body.report-modal-scroll-locked .footer {
     display: flex;
     flex-direction: column;
     position: relative;
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
     border-radius: 8px;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
     padding: 0px;
@@ -883,11 +934,11 @@ body.report-modal-scroll-locked .footer {
 }
 
 .report-card-header, .modal-header {
-    color: var(--white);
+    color: #fff;
     padding: 10px;
     border-radius: 5px 5px 0 0;
     padding: 12px 15px;
-    background-color: var(--dark-blue-2);
+    background-color: var(--theme-header-bg-strong);
     border-bottom: 2px solid var(--turquoise);
 }
 
@@ -977,6 +1028,16 @@ body.report-modal-scroll-locked .footer {
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
+[data-theme='dark'] .date-tag.clickable {
+    background-color: #35506a;
+    color: white;
+}
+
+[data-theme='dark'] .date-tag.clickable:hover {
+    background-color: #4a6b8c;
+    color: white;
+}
+
 /* Improvement of statistics */
 .report-stats {
     display: flex;
@@ -1061,6 +1122,16 @@ body.report-modal-scroll-locked .footer {
 .btn-format:hover {
     background-color: var(--dark-blue);
     transform: translateY(-2px);
+}
+
+[data-theme='dark'] .btn-format {
+    background-color: #35506a;
+    color: white;
+}
+
+[data-theme='dark'] .btn-format:hover {
+    background-color: #4a6b8c;
+    color: white;
 }
 
 /* Style for date filter */
@@ -1594,8 +1665,8 @@ body.report-modal-scroll-locked .footer {
 }
 
 #report-modal-content th {
-    background-color: var(--dark-blue);
-    color: white;
+    background-color: var(--theme-header-bg-strong);
+    color: #fff;
     padding: 10px;
     text-align: left;
 }
@@ -1649,7 +1720,7 @@ body.report-modal-scroll-locked .footer {
     height: calc(100vh - 200px);
     border: 1px solid var(--border-color);
     border-radius: 5px;
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
 }
 
 .dates-list::-webkit-scrollbar {
@@ -1746,7 +1817,7 @@ body.report-modal-scroll-locked .footer {
         padding-top: 60px; /* Space for the header */
         transition: left 0.3s ease;
         z-index: 90;
-        background-color: white;
+        background-color: var(--theme-surface-elevated);
         box-shadow: 2px 0 10px rgba(0,0,0,0.1);
         overflow-y: auto;
     }
@@ -1785,7 +1856,7 @@ body.report-modal-scroll-locked .footer {
     height: 80vh;
 }
 .login-container {
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.1);
     padding: 30px;
@@ -1840,10 +1911,12 @@ h1 {
 .login-body input[type="password"] {
     width: 100%;
     padding: 10px;
-    border: 1px solid #ddd;
+    border: 1px solid var(--theme-border);
     border-radius: 4px;
     font-size: 16px;
     box-sizing: border-box;
+    background: var(--theme-surface-muted);
+    color: var(--theme-text);
 }
 .login-body button {
     background-color: var(--turquoise);
@@ -1946,7 +2019,7 @@ h1 {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    background-color: white;
+    background-color: var(--theme-surface-elevated);
     width: 80%;
     height: 80%;
     border-radius: 8px;
@@ -2029,8 +2102,8 @@ h1 {
     font-size: 1.5rem;
     font-weight: 700;
     line-height: 1;
-    color: #000;
-    text-shadow: 0 1px 0 #fff;
+    color: var(--theme-text);
+    text-shadow: none;
     opacity: .5;
     background: none;
     border: none;
@@ -2063,14 +2136,14 @@ h1 {
 }
 
 .report-html-content pre {
-    background-color: #f5f5f5;
+    background-color: var(--theme-surface-muted);
     padding: 10px;
     border-radius: 5px;
     overflow-x: auto;
 }
 
 .report-html-content code {
-    background-color: #f5f5f5;
+    background-color: var(--theme-surface-muted);
     padding: 2px 4px;
     border-radius: 3px;
 }
@@ -2092,7 +2165,7 @@ h1 {
     z-index: 1000;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.7);
+    background-color: var(--theme-overlay);
     transform: none;
     box-shadow: none;
     /* Do not scroll the overlay — only .modal-body scrolls — avoids chaining scroll to the page */
@@ -2112,7 +2185,7 @@ h1 {
 
 .modal-dialog {
     position: relative;
-    background: white;
+    background: var(--theme-surface-elevated);
     border-radius: 5px;
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
     width: min(96vw, clamp(560px, 85vw, 1520px));
@@ -2133,7 +2206,7 @@ h1 {
     min-height: 0;
     height: auto;
     max-height: 100%;
-    background: #fff;
+    background: var(--theme-surface-elevated);
     border-radius: 5px;
 }
 
@@ -2142,7 +2215,7 @@ h1 {
     justify-content: space-between;
     align-items: center;
     padding: 15px;
-    border-bottom: 1px solid #e5e5e5;
+    border-bottom: 1px solid var(--theme-border);
     flex-shrink: 0;
 }
 
@@ -2167,10 +2240,10 @@ body.report-modal-scroll-locked {
 
 .modal-footer {
     padding: 15px;
-    border-top: 1px solid #e5e5e5;
+    border-top: 1px solid var(--theme-border);
     text-align: right;
     flex-shrink: 0;
-    background: #fff;
+    background: var(--theme-surface-elevated);
 }
 
 .close {
@@ -2639,7 +2712,7 @@ body.modal-open {
     white-space: normal;
 }
 pre.http-raw {
-    background: #f8f8f8;
+    background: var(--theme-surface-muted);
     padding: 0.35rem;
     overflow-x: auto;
 }

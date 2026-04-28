@@ -5,10 +5,20 @@
         </div>
         <h1 class="title">{% block header_title %}OASIS{% endblock %}</h1>
     </div>
-    {% if session.get('logged_in') %}
     <div class="header-actions">
+        <button
+            id="theme-toggle"
+            type="button"
+            class="header-link header-theme-toggle"
+            aria-label="Toggle dark mode"
+            title="Toggle dark mode"
+        >
+            <span class="theme-toggle-icon" aria-hidden="true">🌙</span>
+            <span class="theme-toggle-label">Dark</span>
+        </button>
+        {% if session.get('logged_in') %}
         <a href="{{ url_for('get_stats') }}" class="header-link">🔄 Reload</a>
         <a href="{{ url_for('logout') }}" class="header-link">🔑 Logout</a>
+        {% endif %}
     </div>
-    {% endif %}
 </header> 

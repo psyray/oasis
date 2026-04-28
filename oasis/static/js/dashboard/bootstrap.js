@@ -8,6 +8,95 @@ DashboardApp.FORMAT_DOWNLOAD_LABELS = {
     pdf: '📄'
 };
 
+DashboardApp.THEME_STORAGE_KEY = 'oasis-ui-theme';
+DashboardApp.THEME_LIGHT = 'light';
+DashboardApp.THEME_DARK = 'dark';
+
+DashboardApp.resolvePreferredTheme = function () {
+    if (window.OasisTheme && typeof window.OasisTheme.detectTheme === 'function') {
+        const detected = window.OasisTheme.detectTheme();
+        return detected === DashboardApp.THEME_DARK
+            ? DashboardApp.THEME_DARK
+            : DashboardApp.THEME_LIGHT;
+    }
+    return DashboardApp.THEME_LIGHT;
+};
+
+DashboardApp.persistTheme = function (theme) {
+    if (window.OasisTheme && typeof window.OasisTheme.applyTheme === 'function') {
+        // Canonical persistence is handled by window.OasisTheme.toggleTheme().
+        return;
+    }
+    try {
+        if (window.localStorage) {
+            window.localStorage.setItem(DashboardApp.THEME_STORAGE_KEY, theme);
+        }
+    } catch (_error) {
+        // Ignore storage failures and still apply in-memory theme.
+    }
+};
+
+DashboardApp.applyTheme = function (theme) {
+    if (window.OasisTheme && typeof window.OasisTheme.applyTheme === 'function') {
+        const applied = window.OasisTheme.applyTheme(theme);
+        if (typeof window.OasisTheme.syncThemeButton === 'function') {
+            window.OasisTheme.syncThemeButton(applied);
+        }
+        return applied;
+    }
+    const chosen = theme === DashboardApp.THEME_DARK
+        ? DashboardApp.THEME_DARK
+        : DashboardApp.THEME_LIGHT;
+    const root = document.documentElement;
+    root.setAttribute('data-theme', chosen);
+    root.style.colorScheme = chosen;
+    const toggle = document.getElementById('theme-toggle');
+    if (toggle) {
+        const icon = toggle.querySelector('.theme-toggle-icon');
+        const label = toggle.querySelector('.theme-toggle-label');
+        const nextTheme = chosen === DashboardApp.THEME_DARK
+            ? DashboardApp.THEME_LIGHT
+            : DashboardApp.THEME_DARK;
+        if (icon) {
+            icon.textContent = chosen === DashboardApp.THEME_DARK ? '☀️' : '🌙';
+        }
+        if (label) {
+            label.textContent = chosen === DashboardApp.THEME_DARK ? 'Light' : 'Dark';
+        }
+        toggle.setAttribute('aria-pressed', chosen === DashboardApp.THEME_DARK ? 'true' : 'false');
+        toggle.setAttribute('aria-label', `Switch to ${nextTheme} mode`);
+        toggle.setAttribute('title', `Switch to ${nextTheme} mode`);
+    }
+    return chosen;
+};
+
+DashboardApp.toggleTheme = function () {
+    if (window.OasisTheme && typeof window.OasisTheme.toggleTheme === 'function') {
+        return window.OasisTheme.toggleTheme();
+    }
+    const current = document.documentElement.getAttribute('data-theme') === DashboardApp.THEME_DARK
+        ? DashboardApp.THEME_DARK
+        : DashboardApp.THEME_LIGHT;
+    const next = current === DashboardApp.THEME_DARK
+        ? DashboardApp.THEME_LIGHT
+        : DashboardApp.THEME_DARK;
+    DashboardApp.persistTheme(next);
+    DashboardApp.applyTheme(next);
+    return next;
+};
+
+DashboardApp.initThemeControls = function () {
+    const initial = DashboardApp.resolvePreferredTheme();
+    DashboardApp.applyTheme(initial);
+    const toggle = document.getElementById('theme-toggle');
+    if (toggle && !toggle.dataset.themeBound) {
+        toggle.addEventListener('click', function () {
+            DashboardApp.toggleTheme();
+        });
+        toggle.dataset.themeBound = '1';
+    }
+};
+
 DashboardApp._escapeHtml = function(text) {
     if (text === null || text === undefined) {
         return '';

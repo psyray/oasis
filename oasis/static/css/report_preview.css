@@ -331,6 +331,7 @@
     border-radius: 8px;
     background: var(--white);
     position: relative;
+    color: var(--muted-text, #5c6570);
 }
 #report-modal-content .executive-preview .executive-preview-charts canvas {
     max-height: 240px;
@@ -409,4 +410,20 @@
     padding-top: 0.75rem;
     width: 100%;
     box-sizing: border-box;
+}
+
+[data-theme='dark'] #report-modal-content .html-content-container .report-codebase-warning {
+    border-color: #7f2f48;
+    background: #2a1a22;
+    color: #f3ccd9;
+}
+
+[data-theme='dark'] #report-modal-content .html-content-container .report-filter-guard {
+    border-color: #2f5666;
+    background: #162533;
+    color: var(--theme-text);
+}
+
+[data-theme='dark'] #report-modal-content .html-content-container pre.http-raw {
+    background: var(--theme-surface-muted);
 }

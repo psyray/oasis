@@ -13,6 +13,7 @@
 - 📁 **Project-aware reports**: optional **project alias** for organization and improved **project-based** report storage and metadata alongside existing project workflow.
 - 📁 **Dashboard**: filter reports by **project** (`/api/reports?project=…`, stats include `projects` counts).
 - ⚠️ **Dashboard / previews**: reports expose **`codebase_accessible`** and **`assistant_context_warning`** when the scanned tree cannot be resolved or read next to **`security_reports`**; warning banners in list chips, HTML preview (vulnerability / executive / audit), and assistant panel.
+- 🌗 **WebUI theming**: added a global light/dark mode toggle in the header (dashboard, report modal, and login), with first-load system preference detection and persisted manual override.
 
 ### 🐛 Fixed
 
