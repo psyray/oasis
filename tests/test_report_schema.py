@@ -806,6 +806,7 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(stats.get("formats"), {})
         self.assertEqual(stats["risk_summary"]["total_findings"], 0)
         self.assertEqual(stats["risk_summary"]["critical"], 0)
+        self.assertEqual(stats.get("severities", {}).get("critical"), 0)
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_executive_summary_notifier_receives_progress_payload(self):
@@ -1699,6 +1700,44 @@ Not a table line anymore.
         filtered = server.filter_reports(model_filter=["model a", "model b"])
         models = {row["model"] for row in filtered}
         self.assertEqual(models, {"Model A", "Model B"})
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_filter_reports_supports_severity_filter(self):
+        server = WebServer.__new__(WebServer)
+        server.report_data = [
+            {
+                "vulnerability_type": "SQL Injection",
+                "model": "M1",
+                "format": "json",
+                "date": "2026-04-17 10:00:00",
+                "language": "en",
+                "stats": {"high_risk": 1, "critical_risk": 0, "medium_risk": 0, "low_risk": 0},
+            },
+            {
+                "vulnerability_type": "XSS",
+                "model": "M1",
+                "format": "json",
+                "date": "2026-04-17 10:00:00",
+                "language": "en",
+                "stats": {"high_risk": 0, "critical_risk": 0, "medium_risk": 2, "low_risk": 0},
+            },
+            {
+                "vulnerability_type": "Executive Summary",
+                "model": "M1",
+                "format": "json",
+                "date": "2026-04-17 10:00:00",
+                "language": "en",
+                "stats": {},
+            },
+        ]
+        server.collect_report_data = lambda: None
+
+        filtered = server.filter_reports(severity_filter="high")
+        types = {row["vulnerability_type"] for row in filtered}
+        self.assertEqual(types, {"SQL Injection", "Executive Summary"})
+
+        filtered_med = server.filter_reports(severity_filter="medium")
+        self.assertEqual({row["vulnerability_type"] for row in filtered_med}, {"XSS", "Executive Summary"})
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_filter_reports_project_is_exact_match_not_substring(self):

@@ -16,6 +16,11 @@ from oasis.helpers.dashboard import (
     rewrite_report_preview_anchor_hrefs,
 )
 from oasis.helpers.dashboard.json_sibling import json_sibling_for_format_artifact
+from oasis.helpers.dashboard.severity_filter import (
+    merge_severity_histogram_for_report,
+    parse_severity_filter_param,
+    report_passes_dashboard_severity_filter,
+)
 
 
 class TestHelpersDashboard(unittest.TestCase):
@@ -53,6 +58,35 @@ class TestHelpersDashboard(unittest.TestCase):
             json_sibling_for_format_artifact(md),
             Path("sec/p/run1/embed_model/json/sqli.json"),
         )
+
+    def test_parse_severity_filter_param_dedupes_and_orders(self):
+        self.assertEqual(parse_severity_filter_param(""), ())
+        self.assertEqual(parse_severity_filter_param("high, medium"), ("high", "medium"))
+        self.assertEqual(parse_severity_filter_param("high,high,unknown"), ("high",))
+
+    def test_report_passes_dashboard_severity_filter(self):
+        json_high = {
+            "format": "json",
+            "vulnerability_type": "SQL Injection",
+            "stats": {"high_risk": 1, "critical_risk": 0, "medium_risk": 0, "low_risk": 0},
+        }
+        self.assertTrue(report_passes_dashboard_severity_filter(json_high, ("high",)))
+        self.assertFalse(report_passes_dashboard_severity_filter(json_high, ("medium",)))
+        exec_row = {"format": "json", "vulnerability_type": "Executive Summary", "stats": {}}
+        self.assertTrue(report_passes_dashboard_severity_filter(exec_row, ("medium",)))
+
+    def test_merge_severity_histogram_for_report(self):
+        hist = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        merge_severity_histogram_for_report(
+            hist,
+            {
+                "format": "json",
+                "vulnerability_type": "XSS",
+                "stats": {"high_risk": 0, "medium_risk": 2, "low_risk": 0, "critical_risk": 0},
+            },
+        )
+        self.assertEqual(hist["medium"], 1)
+        self.assertEqual(hist["high"], 0)
 
     def test_preferred_detail_prefers_existing_json_over_pdf(self):
         import tempfile

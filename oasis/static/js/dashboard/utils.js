@@ -330,6 +330,24 @@ if (typeof DashboardApp !== 'undefined') {
             formattedName = name;
         }
     }
+
+    if (type === 'severity') {
+        const tier = String(name || '').toLowerCase();
+        const labels = {
+            critical: 'Critical',
+            high: 'High',
+            medium: 'Medium',
+            low: 'Low',
+        };
+        const label = labels[tier] || String(name || 'Unknown');
+        if (emoji) {
+            const em = { critical: '🔴', high: '🟠', medium: '🟡', low: '🔵' };
+            formattedName = `${em[tier] || '⚪'} ${label}`;
+        } else {
+            formattedName = label;
+        }
+        return formattedName;
+    }
     
     // For vulnerability types and models
     return formattedName

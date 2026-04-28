@@ -154,6 +154,12 @@ from .helpers.assistant.think.think_parse import (
 )
 from .helpers.assistant.prompt.context_budget import assistant_total_system_budget_chars
 from .helpers.assistant.scan.scan_aggregate import model_directory_from_security_report_file
+from .helpers.dashboard.severity_filter import (
+    empty_severity_histogram,
+    merge_severity_histogram_for_report,
+    parse_severity_filter_param,
+    report_passes_dashboard_severity_filter,
+)
 from .helpers.executive.dashboard_preview import augment_executive_markdown_preview_html
 from .helpers.executive.modal_chart_meta import rollup_severity_counts_from_model_dir
 from .helpers.executive.assistant_scope import (
@@ -1401,6 +1407,7 @@ class WebServer:
             model_filter = request.args.get('model', '')
             format_filter = request.args.get('format', '')
             vuln_filter = request.args.get('vulnerability', '')
+            severity_filter = request.args.get('severity', '')
             language_filter = request.args.get('language', '')
             project_filter = request.args.get('project', '')
             start_date = request.args.get('start_date', None)
@@ -1414,6 +1421,7 @@ class WebServer:
                 model_filter=model_filter,
                 format_filter=format_filter,
                 vuln_filter=vuln_filter,
+                severity_filter=severity_filter,
                 language_filter=language_filter,
                 project_filter=project_filter,
                 start_date=start_date,
@@ -1430,6 +1438,7 @@ class WebServer:
                 model_filter=request.args.get('model', ''),
                 format_filter=request.args.get('format', ''),
                 vuln_filter=request.args.get('vulnerability', ''),
+                severity_filter=request.args.get('severity', ''),
                 language_filter=request.args.get('language', ''),
                 project_filter=request.args.get('project', ''),
                 start_date=request.args.get('start_date', None),
@@ -1445,6 +1454,7 @@ class WebServer:
                 model_filter=request.args.get('model', ''),
                 format_filter='',
                 vuln_filter='Executive Summary',
+                severity_filter=request.args.get('severity', ''),
                 language_filter=request.args.get('language', ''),
                 project_filter=request.args.get('project', ''),
                 start_date=request.args.get('start_date', None),
@@ -2121,10 +2131,12 @@ class WebServer:
                 if single_model:
                     model_filter = [single_model]
             vulnerability_filter = (request.args.get('vulnerability') or '').strip()
+            severity_filter = request.args.get('severity', '')
             # Filter reports based on parameters
             filtered_data = self.filter_reports(
                 model_filter=model_filter,
                 vuln_filter=vulnerability_filter,
+                severity_filter=severity_filter,
                 mandatory_filters=['model', 'vulnerability'],
             )
 
@@ -2858,7 +2870,7 @@ class WebServer:
         report_format = report.get("format")
         return report_format == "json" or (report_format == "md" and not has_json)
 
-    def filter_reports(self, model_filter='', format_filter='', vuln_filter='', language_filter='', project_filter='', start_date=None, end_date=None, md_dates_only=True, mandatory_filters=None):
+    def filter_reports(self, model_filter='', format_filter='', vuln_filter='', severity_filter='', language_filter='', project_filter='', start_date=None, end_date=None, md_dates_only=True, mandatory_filters=None):
         """Filter reports based on criteria"""
         if not self.report_data:
             self.collect_report_data()
@@ -2924,6 +2936,12 @@ class WebServer:
                 if normalize_dashboard_project_key(r.get("project")) in project_filters
             ]
 
+        severity_tiers = parse_severity_filter_param(severity_filter)
+        if severity_tiers:
+            filtered = [
+                r for r in filtered if report_passes_dashboard_severity_filter(r, severity_tiers)
+            ]
+
         for report in filtered:
             report["date_visible"] = self._is_date_visible_for_report(report) if md_dates_only else True
 
@@ -2954,6 +2972,7 @@ class WebServer:
             "formats": {},
             "dates": {},
             "projects": {},
+            "severities": empty_severity_histogram(),
             "risk_summary": {
                 "total_findings": 0,
                 "critical": 0,
@@ -2967,6 +2986,7 @@ class WebServer:
         for report in reports_to_analyze:
             if report["format"] == "json":
                 self._update_stats_for_report(stats, report)
+                merge_severity_histogram_for_report(stats["severities"], report)
 
             # count all available formats
             fmt = report["format"]

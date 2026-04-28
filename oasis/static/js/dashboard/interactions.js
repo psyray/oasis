@@ -35,6 +35,7 @@ DashboardApp.filterByModel = function(model) {
         formats: [],
         languages: [],
         vulnerabilities: [],
+        severities: [],
         projects: [],
         dateRange: null
     };
@@ -300,6 +301,7 @@ DashboardApp.updateDatesForModels = function(card, modelNames, vulnType) {
         });
     }
     params.append('vulnerability', vulnType);
+    DashboardApp.appendActiveSeverityToSearchParams(params);
     fetch(`/api/dates?${params.toString()}`)
         .then(response => {
             if (!response.ok) {
@@ -364,8 +366,10 @@ DashboardApp.updateDatesForVulnerability = function(vulnElement, vulnType) {
         DashboardApp._appendLoadingSpinner(datesContainer);
     }
     
-    // Fetch dates for the selected vulnerability
-    fetch(`/api/dates?vulnerability=${encodeURIComponent(vulnType)}`)
+    const params = new URLSearchParams();
+    params.append('vulnerability', vulnType);
+    DashboardApp.appendActiveSeverityToSearchParams(params);
+    fetch(`/api/dates?${params.toString()}`)
         .then(response => {
             if (!response.ok) {
                 throw new Error('Network response was not ok');
