@@ -5,6 +5,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Optional
+from unittest import mock
 
 from oasis.agent.assistant_invoke import (
     coerce_investigation_budget,
@@ -30,6 +33,13 @@ from oasis.helpers.assistant.think.investigation_synth import (
     enrich_investigation_with_llm_narrative,
 )
 from oasis.helpers.assistant.verdict.verdict import VerdictInputs, compute_verdict
+from oasis.helpers.assistant.web.result_presentation import (
+    apply_presentation_filter_to_result,
+)
+from oasis.helpers.assistant.web.sink_resolution import (
+    coerce_positive_int_line,
+    resolve_sink_from_finding_indices,
+)
 from oasis.helpers.vuln.validation_patterns import PATTERNS_VERSION
 from oasis.helpers.vuln.taxonomy import (
     ALL_VULN_NAMES,
@@ -515,6 +525,72 @@ class TestInvestigationSynth(unittest.TestCase):
         self.assertEqual(out.narrative_markdown, "")
         self.assertIsNone(out.synthesis_model)
 
+    def test_enrich_invalid_temperature_falls_back_and_warns(self) -> None:
+        class _FakeOllama:
+            def __init__(self) -> None:
+                self.options = None
+
+            def chat(self, model, messages, options=None, **kwargs):
+                self.options = options
+                return {"message": {"content": "ok"}}
+
+        base = AssistantInvestigationResult(
+            vulnerability_name="XSS",
+            family="flow",
+            status="likely_exploitable",
+            confidence=0.5,
+            summary="deterministic",
+        )
+        synth_logger_name = "oasis.helpers.assistant.think.investigation_synth"
+        fake = _FakeOllama()
+        with self.assertLogs(synth_logger_name, level="WARNING") as captured:
+            out = enrich_investigation_with_llm_narrative(
+                base,
+                ollama_manager=fake,  # type: ignore[arg-type]
+                chat_model="fake-model",
+                temperature="not-a-float",  # type: ignore[arg-type]
+            )
+        self.assertEqual(fake.options, {"temperature": 0.2})
+        self.assertIsInstance(fake.options["temperature"], float)
+        self.assertTrue(
+            any("invalid assistant synthesis temperature" in msg.lower() for msg in captured.output),
+            f"Expected invalid temperature warning, got: {captured.output!r}",
+        )
+        self.assertEqual(out.synthesis_model, "fake-model")
+
+    def test_enrich_clamps_out_of_range_temperature_and_warns(self) -> None:
+        class _FakeOllama:
+            def __init__(self) -> None:
+                self.options = None
+
+            def chat(self, model, messages, options=None, **kwargs):
+                self.options = options
+                return {"message": {"content": "ok"}}
+
+        base = AssistantInvestigationResult(
+            vulnerability_name="XSS",
+            family="flow",
+            status="likely_exploitable",
+            confidence=0.5,
+            summary="deterministic",
+        )
+        synth_logger_name = "oasis.helpers.assistant.think.investigation_synth"
+        for raw_temp, expected in ((9, 1.0), (-0.5, 0.0)):
+            with self.subTest(temperature=raw_temp):
+                fake = _FakeOllama()
+                with self.assertLogs(synth_logger_name, level="WARNING") as captured:
+                    enrich_investigation_with_llm_narrative(
+                        base,
+                        ollama_manager=fake,  # type: ignore[arg-type]
+                        chat_model="fake-model",
+                        temperature=raw_temp,  # type: ignore[arg-type]
+                    )
+                self.assertEqual(fake.options, {"temperature": expected})
+                self.assertTrue(
+                    any("clamping" in msg.lower() for msg in captured.output),
+                    f"Expected clamp warning, got: {captured.output!r}",
+                )
+
 
 class TestAssistantTaintAssignmentParsing(unittest.TestCase):
     def test_generic_fallback_rejects_logical_and_lhs(self) -> None:
@@ -617,6 +693,408 @@ class TestAssistantTaintVariableOnSinkLine(unittest.TestCase):
         self.assertFalse(
             assistant_taint._variable_referenced_on_sink_line("@foo", "@foo_bar.nil?")
         )
+
+
+class TestSinkResolution(unittest.TestCase):
+    """Sink resolution from finding indices (executive aggregate + direct vuln)."""
+
+    @staticmethod
+    def _vuln_payload(file_path: str, snippet_line: int = 113) -> dict:
+        return {
+            "report_type": "vulnerability",
+            "files": [
+                {
+                    "file_path": file_path,
+                    "chunk_analyses": [
+                        {
+                            "start_line": 100,
+                            "findings": [
+                                {"snippet_start_line": snippet_line},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+
+    def test_coerce_positive_int_line_accepts_int_and_integral_float(self) -> None:
+        self.assertEqual(coerce_positive_int_line(113), 113)
+        self.assertEqual(coerce_positive_int_line(113.0), 113)
+        for invalid in (0, -3, 1.5, float("nan"), "113", True, None):
+            with self.subTest(value=invalid):
+                self.assertIsNone(coerce_positive_int_line(invalid))
+
+    def test_resolve_from_primary_when_files_present(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            target = _write(root, "test_files/vulnerable.sh", "#!/bin/sh\necho hi\n")
+            payload = self._vuln_payload("test_files/vulnerable.sh", snippet_line=107)
+            sink_file, sink_line = resolve_sink_from_finding_indices(
+                payload, None, fi=0, ci=0, gi=0, scan_root=root
+            )
+            self.assertEqual(sink_file, target.resolve())
+            self.assertEqual(sink_line, 107)
+
+    def test_resolve_prefers_scope_when_primary_has_no_files(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            target = _write(root, "src/Vulnerable.cs", "// stub\n")
+            primary = {"report_type": "executive_summary"}
+            scope = self._vuln_payload("src/Vulnerable.cs", snippet_line=42)
+            sink_file, sink_line = resolve_sink_from_finding_indices(
+                primary, scope, fi=0, ci=0, gi=0, scan_root=root
+            )
+            self.assertEqual(sink_file, target.resolve())
+            self.assertEqual(sink_line, 42)
+
+    def test_resolve_returns_none_when_neither_payload_has_files(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            sink_file, sink_line = resolve_sink_from_finding_indices(
+                {"report_type": "executive_summary"},
+                {"report_type": "vulnerability"},
+                fi=0,
+                ci=0,
+                gi=0,
+                scan_root=root,
+            )
+            self.assertIsNone(sink_file)
+            self.assertIsNone(sink_line)
+
+    def test_resolve_accepts_float_integral_snippet_line(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write(root, "a.py", "x = 1\n")
+            payload = self._vuln_payload("a.py", snippet_line=12)
+            payload["files"][0]["chunk_analyses"][0]["findings"][0]["snippet_start_line"] = 12.0
+            _, sink_line = resolve_sink_from_finding_indices(
+                payload, None, fi=0, ci=0, gi=0, scan_root=root
+            )
+            self.assertEqual(sink_line, 12)
+
+    def test_resolve_drops_non_integral_float(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write(root, "a.py", "x = 1\n")
+            payload = self._vuln_payload("a.py", snippet_line=10)
+            payload["files"][0]["chunk_analyses"][0]["findings"][0]["snippet_start_line"] = 10.5
+            payload["files"][0]["chunk_analyses"][0]["start_line"] = 10.5
+            _, sink_line = resolve_sink_from_finding_indices(
+                payload, None, fi=0, ci=0, gi=0, scan_root=root
+            )
+            self.assertIsNone(sink_line)
+
+    def test_resolve_rejects_path_outside_scan_root(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            payload = self._vuln_payload("../escape.txt", snippet_line=1)
+            sink_file, _ = resolve_sink_from_finding_indices(
+                payload, None, fi=0, ci=0, gi=0, scan_root=root
+            )
+            self.assertIsNone(sink_file)
+
+
+class TestPresentationFilter(unittest.TestCase):
+    """Post-verdict filtering of entry_points anchored on scope.sink_file."""
+
+    @staticmethod
+    def _make_result(
+        family: str,
+        entry_points: list,
+        execution_paths: list,
+        sink_rel: Optional[str] = None,
+    ) -> AssistantInvestigationResult:
+        scope = (
+            InvestigationScope(
+                scan_root="/tmp/proj",
+                sink_file=sink_rel,
+                sink_line=1 if sink_rel else None,
+                vulnerability_name="vuln",
+                family=family,  # type: ignore[arg-type]
+            )
+            if sink_rel
+            else None
+        )
+        return AssistantInvestigationResult(
+            vulnerability_name="vuln",
+            family=family,  # type: ignore[arg-type]
+            status="insufficient_signal",
+            confidence=0.3,
+            summary="x",
+            scope=scope,
+            entry_points=entry_points,
+            execution_paths=execution_paths,
+        )
+
+    def test_flow_keeps_only_eps_linked_to_execution_paths(self) -> None:
+        cit_a = Citation(file_path="vulnerable.py", start_line=113, end_line=113)
+        cit_b = Citation(file_path="other.py", start_line=10, end_line=10)
+        ep_a = EntryPointHit(framework="flask", label="flask_route", route="/transfer", citation=cit_a)
+        ep_b = EntryPointHit(framework="flask", label="flask_route", route="/x", citation=cit_b)
+        path = ExecutionPath(entry_point=ep_b, hops=[], reached_sink=True)
+        result = self._make_result("flow", [ep_a, ep_b], [path], sink_rel="other.py")
+        filtered = apply_presentation_filter_to_result(result)
+        routes = [ep.route for ep in filtered.entry_points]
+        self.assertEqual(routes, ["/x"])
+
+    def test_flow_falls_back_to_sink_file_match_when_no_path_links(self) -> None:
+        cit_a = Citation(file_path="vulnerable.py", start_line=113, end_line=113)
+        cit_b = Citation(file_path="test_files/vulnerable.sh", start_line=107, end_line=107)
+        ep_py = EntryPointHit(framework="flask", label="flask_route", route="/transfer", citation=cit_a)
+        ep_sh = EntryPointHit(framework="shell", label="shell_handler", route="exec", citation=cit_b)
+        result = self._make_result("flow", [ep_py, ep_sh], [], sink_rel="test_files/vulnerable.sh")
+        filtered = apply_presentation_filter_to_result(result)
+        self.assertEqual([ep.route for ep in filtered.entry_points], ["exec"])
+
+    def test_flow_returns_empty_when_neither_path_nor_sink_file_match(self) -> None:
+        cit = Citation(file_path="vulnerable.py", start_line=113, end_line=113)
+        ep = EntryPointHit(framework="flask", label="flask_route", route="/transfer", citation=cit)
+        result = self._make_result("flow", [ep], [], sink_rel="test_files/vulnerable.sh")
+        filtered = apply_presentation_filter_to_result(result)
+        self.assertEqual(filtered.entry_points, [])
+        self.assertEqual(filtered.status, "insufficient_signal")
+        self.assertAlmostEqual(filtered.confidence, 0.3, places=2)
+
+    def test_access_keeps_only_eps_in_sink_file(self) -> None:
+        cit_py = Citation(file_path="vulnerable.py", start_line=113, end_line=113)
+        cit_cs = Citation(file_path="src/Vulnerable.cs", start_line=12, end_line=12)
+        ep_py = EntryPointHit(framework="flask", label="flask_route", route="/transfer", citation=cit_py)
+        ep_cs = EntryPointHit(framework="aspnet", label="aspnet_route", route="/api/x", citation=cit_cs)
+        result = self._make_result("access", [ep_py, ep_cs], [], sink_rel="src/Vulnerable.cs")
+        filtered = apply_presentation_filter_to_result(result)
+        self.assertEqual([ep.route for ep in filtered.entry_points], ["/api/x"])
+
+    def test_access_returns_empty_when_no_ep_in_sink_file(self) -> None:
+        cit = Citation(file_path="vulnerable.py", start_line=113, end_line=113)
+        ep = EntryPointHit(framework="flask", label="flask_route", route="/transfer", citation=cit)
+        result = self._make_result("access", [ep], [], sink_rel="src/Vulnerable.cs")
+        filtered = apply_presentation_filter_to_result(result)
+        self.assertEqual(filtered.entry_points, [])
+
+    def test_config_family_passes_through(self) -> None:
+        cit = Citation(file_path="vulnerable.py", start_line=15, end_line=15)
+        ep = EntryPointHit(framework="flask", label="flask_route", route="/x", citation=cit)
+        result = self._make_result("config", [ep], [], sink_rel="src/Vulnerable.java")
+        filtered = apply_presentation_filter_to_result(result)
+        self.assertEqual(filtered.entry_points, result.entry_points)
+
+    def test_no_scope_passes_through_unchanged(self) -> None:
+        cit = Citation(file_path="vulnerable.py", start_line=113, end_line=113)
+        ep = EntryPointHit(framework="flask", label="flask_route", route="/x", citation=cit)
+        result = self._make_result("flow", [ep], [], sink_rel=None)
+        filtered = apply_presentation_filter_to_result(result)
+        self.assertIs(filtered, result)
+
+    def test_filter_rebuilds_citations_to_match_filtered_eps(self) -> None:
+        cit_noise = Citation(file_path="vulnerable.py", start_line=113, end_line=113)
+        cit_real = Citation(file_path="src/Vulnerable.cs", start_line=12, end_line=12)
+        ep_noise = EntryPointHit(framework="flask", label="r", route="/x", citation=cit_noise)
+        ep_real = EntryPointHit(framework="aspnet", label="r", route="/y", citation=cit_real)
+        result = AssistantInvestigationResult(
+            vulnerability_name="vuln",
+            family="access",
+            status="confirmed_exploitable",
+            confidence=0.85,
+            summary="x",
+            scope=InvestigationScope(
+                scan_root="/tmp/proj",
+                sink_file="src/Vulnerable.cs",
+                sink_line=12,
+                vulnerability_name="vuln",
+                family="access",
+            ),
+            entry_points=[ep_noise, ep_real],
+            citations=[cit_noise, cit_real],
+        )
+        filtered = apply_presentation_filter_to_result(result)
+        cit_paths = {c.file_path for c in filtered.citations}
+        self.assertNotIn("vulnerable.py", cit_paths)
+        self.assertIn("src/Vulnerable.cs", cit_paths)
+
+    def test_flow_filter_tolerates_missing_or_partial_citations(self) -> None:
+        class _FakeScope:
+            sink_file = "src/Vulnerable.cs"
+
+        class _FakeResult:
+            def __init__(self) -> None:
+                self.scope = _FakeScope()
+                self.family = "flow"
+                self.entry_points = [
+                    mock.Mock(framework="flask", label="r", route="/a", citation=None),
+                    mock.Mock(
+                        framework="aspnet",
+                        label="r",
+                        route="/b",
+                        citation=mock.Mock(file_path="src/Vulnerable.cs"),
+                    ),
+                ]
+                self.execution_paths = [
+                    mock.Mock(entry_point=mock.Mock(framework="f", label="x", route="/x", citation=None), hops=[])
+                ]
+                self.taint_flows = [mock.Mock(source_citation=None, sink_citation=None)]
+                self.mitigations = [mock.Mock(citation=None)]
+                self.authz_checks = [mock.Mock(citation=None)]
+                self.control_checks = [mock.Mock(citations=[None])]
+                self.config_findings = [mock.Mock(citation=None)]
+                self.citations = []
+
+            def model_copy(self, update):
+                for key, value in update.items():
+                    setattr(self, key, value)
+                return self
+
+        result = _FakeResult()
+        filtered = apply_presentation_filter_to_result(result)  # type: ignore[arg-type]
+        self.assertIs(filtered, result)
+        self.assertEqual([ep.route for ep in filtered.entry_points], ["/b"])
+        self.assertEqual(len(filtered.citations), 1)
+        self.assertEqual(getattr(filtered.citations[0], "file_path", None), "src/Vulnerable.cs")
+
+    def test_flow_matches_entry_points_by_content_key(self) -> None:
+        citation = Citation(file_path="src/Vulnerable.cs", start_line=12, end_line=12)
+        result = AssistantInvestigationResult(
+            vulnerability_name="Broken Access Control",
+            family="flow",
+            status="insufficient_signal",
+            confidence=0.5,
+            summary="x",
+            scope=InvestigationScope(
+                scan_root="/tmp/proj",
+                sink_file="src/Vulnerable.cs",
+                sink_line=12,
+                vulnerability_name="Broken Access Control",
+                family="flow",
+            ),
+            entry_points=[
+                EntryPointHit(framework="flask", label="x", route="/x", citation=citation),
+                EntryPointHit(framework="flask", label="other", route="/x", citation=citation),
+            ],
+            execution_paths=[
+                ExecutionPath(
+                    entry_point=EntryPointHit(
+                        framework="flask",
+                        label="x",
+                        route="/x",
+                        citation=citation,
+                    ),
+                    hops=[],
+                )
+            ],
+        )
+        filtered = apply_presentation_filter_to_result(result)
+        self.assertEqual(len(filtered.entry_points), 1)
+        self.assertEqual(filtered.entry_points[0].label, "x")
+
+
+class TestScopeFocusInLLMPayload(unittest.TestCase):
+    """``compact_investigation_for_llm`` exposes scope_focus first."""
+
+    def test_scope_focus_present_when_scope_set(self) -> None:
+        scope = InvestigationScope(
+            scan_root="/tmp/proj",
+            sink_file="src/Vulnerable.cs",
+            sink_line=42,
+            vulnerability_name="Authentication Issues",
+            family="access",
+        )
+        result = AssistantInvestigationResult(
+            vulnerability_name="Authentication Issues",
+            family="access",
+            status="confirmed_exploitable",
+            confidence=0.85,
+            summary="x",
+            scope=scope,
+        )
+        payload = compact_investigation_for_llm(result)
+        keys = list(payload.keys())
+        self.assertEqual(keys[0], "scope_focus")
+        focus = payload["scope_focus"]
+        self.assertEqual(focus["sink_file"], "src/Vulnerable.cs")
+        self.assertEqual(focus["sink_line"], 42)
+        self.assertEqual(focus["family"], "access")
+        self.assertEqual(focus["verdict_status"], "confirmed_exploitable")
+
+    def test_scope_focus_minimal_when_scope_missing(self) -> None:
+        result = AssistantInvestigationResult(
+            vulnerability_name="XSS",
+            family="flow",
+            status="insufficient_signal",
+            confidence=0.3,
+            summary="x",
+        )
+        payload = compact_investigation_for_llm(result)
+        focus = payload["scope_focus"]
+        self.assertNotIn("sink_file", focus)
+        self.assertEqual(focus["vulnerability_name"], "XSS")
+
+    def test_scope_focus_computed_value_wins_over_model_dump_collision(self) -> None:
+        scope = InvestigationScope(
+            scan_root="/tmp/proj",
+            sink_file="src/real.py",
+            sink_line=42,
+            vulnerability_name="XSS",
+            family="flow",
+        )
+        result = AssistantInvestigationResult(
+            vulnerability_name="XSS",
+            family="flow",
+            status="likely_exploitable",
+            confidence=0.7,
+            summary="x",
+            scope=scope,
+        )
+        with mock.patch.object(
+            AssistantInvestigationResult,
+            "model_dump",
+            autospec=True,
+            return_value={
+                "scope_focus": {"sink_file": "src/fake.py", "sink_line": 999},
+                "entry_points": [],
+            },
+        ):
+            payload = compact_investigation_for_llm(result)
+        focus = payload["scope_focus"]
+        self.assertEqual(focus["sink_file"], "src/real.py")
+        self.assertEqual(focus["sink_line"], 42)
+        self.assertEqual(focus["verdict_status"], "likely_exploitable")
+
+    def test_scope_focus_collision_emits_warning_and_local_value_wins(self) -> None:
+        """Schema drift on the dumped 'scope_focus' key must surface a WARNING
+        log message; the locally computed value must still win in the payload."""
+        scope = InvestigationScope(
+            scan_root="/tmp/proj",
+            sink_file="src/real.py",
+            sink_line=42,
+            vulnerability_name="XSS",
+            family="flow",
+        )
+        result = AssistantInvestigationResult(
+            vulnerability_name="XSS",
+            family="flow",
+            status="likely_exploitable",
+            confidence=0.7,
+            summary="x",
+            scope=scope,
+        )
+        synth_logger_name = "oasis.helpers.assistant.think.investigation_synth"
+        with mock.patch.object(
+            AssistantInvestigationResult,
+            "model_dump",
+            autospec=True,
+            return_value={
+                "scope_focus": {"sink_file": "src/fake.py", "sink_line": 999},
+                "entry_points": [],
+            },
+        ):
+            with self.assertLogs(synth_logger_name, level="WARNING") as captured:
+                payload = compact_investigation_for_llm(result)
+        self.assertTrue(
+            any("schema drift" in msg.lower() for msg in captured.output),
+            f"Expected a schema drift warning, got: {captured.output!r}",
+        )
+        focus = payload["scope_focus"]
+        self.assertEqual(focus["sink_file"], "src/real.py")
+        self.assertEqual(focus["sink_line"], 42)
 
 
 if __name__ == "__main__":

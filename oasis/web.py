@@ -134,6 +134,13 @@ from .helpers.assistant.web.web_prepare import (
     prepare_aggregate_branch_paths,
     resolve_assistant_chat_model,
 )
+from .helpers.assistant.web.sink_resolution import (
+    coerce_positive_int_line,
+    resolve_sink_from_finding_indices,
+)
+from .helpers.assistant.web.result_presentation import (
+    apply_presentation_filter_to_result,
+)
 from .helpers.assistant.web.persistence import (
     delete_all_chat_sessions,
     delete_chat_session,
@@ -1721,7 +1728,9 @@ class WebServer:
                 coerce_investigation_budget,
                 invoke_assistant_validation,
             )
-            from oasis.helpers.vuln.taxonomy import ALL_VULN_NAMES
+            from oasis.helpers.executive.assistant_scope import (
+                resolve_aggregate_finding_scope_payload,
+            )
             from oasis.schemas.analysis import InvestigationScope
 
             try:
@@ -1783,34 +1792,39 @@ class WebServer:
                 return jsonify({'error': 'scan_root does not exist'}), 404
 
             fi, ci, gi = coerce_finding_indices(data)
-            scope_merge = data.get('finding_scope_report_path')
+            scope_merge_raw = data.get('finding_scope_report_path')
             finding_scope_merge = (
-                scope_merge.strip()
-                if isinstance(scope_merge, str) and scope_merge.strip()
+                scope_merge_raw.strip()
+                if isinstance(scope_merge_raw, str) and scope_merge_raw.strip()
                 else ''
             )
-            sink_file: Optional[Path] = None
-            sink_line: Optional[int] = None
-            try:
-                if fi is not None and isinstance(primary_payload.get('files'), list):
-                    file_entry = primary_payload['files'][fi] if fi < len(primary_payload['files']) else None
-                    if isinstance(file_entry, dict):
-                        fp = file_entry.get('file_path')
-                        if isinstance(fp, str) and fp.strip():
-                            candidate = (scan_root / fp).resolve(strict=False)
-                            if is_path_within_root(candidate, scan_root) and candidate.is_file():
-                                sink_file = candidate
-                        chunks = file_entry.get('chunk_analyses') or []
-                        if ci is not None and ci < len(chunks) and isinstance(chunks[ci], dict):
-                            chunk = chunks[ci]
-                            findings = chunk.get('findings') or []
-                            if gi is not None and gi < len(findings) and isinstance(findings[gi], dict):
-                                line_val = findings[gi].get('snippet_start_line') or chunk.get('start_line')
-                                if isinstance(line_val, int) and line_val > 0:
-                                    sink_line = line_val
-            except Exception:
-                sink_file = None
-                sink_line = None
+
+            # When the request points to the executive summary (no ``files`` array
+            # of its own), ``finding_scope_report_path`` resolves to the matching
+            # vulnerability JSON so finding indices can map to a real sink.
+            scope_payload: Optional[Dict[str, Any]] = None
+            if finding_scope_merge:
+                md_obj = model_directory_from_security_report_file(
+                    security_root, resolved_report
+                )
+                if md_obj is not None:
+                    scope_payload, scope_err = resolve_aggregate_finding_scope_payload(
+                        finding_scope_merge,
+                        security_root=security_root,
+                        executive_report_path=resolved_report,
+                        model_dir=md_obj,
+                    )
+                    if scope_err is not None:
+                        return jsonify({'error': scope_err}), 400
+
+            sink_file, sink_line = resolve_sink_from_finding_indices(
+                primary_payload,
+                scope_payload,
+                fi=fi,
+                ci=ci,
+                gi=gi,
+                scan_root=scan_root,
+            )
 
             # Client-provided sink_file / sink_line hints take precedence when
             # they resolve inside scan_root; useful when indices refer to a
@@ -1823,9 +1837,9 @@ class WebServer:
                 candidate = candidate.resolve(strict=False)
                 if is_path_within_root(candidate, scan_root) and candidate.is_file():
                     sink_file = candidate
-            client_sink_line_raw = data.get('sink_line')
-            if isinstance(client_sink_line_raw, int) and client_sink_line_raw > 0:
-                sink_line = client_sink_line_raw
+            client_sink_line = coerce_positive_int_line(data.get('sink_line'))
+            if client_sink_line is not None:
+                sink_line = client_sink_line
 
             budget_seconds = coerce_investigation_budget(data.get('budget_seconds'))
 
@@ -1859,6 +1873,11 @@ class WebServer:
                 )
             except Exception:
                 pass
+
+            # Presentation-time filter: keep entry_points anchored on scope.sink_file
+            # for FLOW/ACCESS so narration and "Related to" panel match the finding.
+            # The deterministic verdict was already computed on the full evidence.
+            result = apply_presentation_filter_to_result(result)
 
             synthesize_raw = data.get('synthesize_narrative')
             synthesize_narrative = True if synthesize_raw is None else bool(synthesize_raw)

@@ -25,6 +25,8 @@ Apply the code organization and delivery style repeatedly used in OASIS commits.
    - `oasis/static/js/dashboard/*`: web dashboard behavior (JSON modal preview, `force=1` on reload for stats/reports/progress, `applyProgressPayload` / `progressState`)
 3. Keep interfaces compatible unless migration is explicit.
 4. Update docs (`README.md`) when user-facing flags or behavior change.
+   - Keep `README.md` `Features` as summary-only bullets.
+   - Put detailed behavior/usage in the existing relevant section; create a new section when a new feature has no fitting section.
 5. Prefer defensive handling around cache/model/network boundaries.
 6. For reporting changes, treat canonical JSON schema as the source of truth and keep Jinja templates synchronized.
 7. Before considering the task done: verify **no duplicated logic** remains (same rule in two places, mirrored constants, near-copy functions). Refactor into a single canonical implementation and import it everywhere it is needed.
@@ -85,6 +87,20 @@ Details live in `.cursor/rules/oasis-python-architecture.mdc` (constants in `oas
 - **Do not repeat code.** Treat copy-paste and “almost the same” branches as defects: merge into one function, module, or schema and reuse. **KISS** means the smallest *correct* change, not duplicating logic to save a refactor step. **DRY** is mandatory, not aspirational. **SOLID** is incompatible with parallel implementations of the same rule in different files.
 - Before shipping, ask: “If this behavior changes tomorrow, is there exactly **one** place to edit?” If not, centralize first (Python: `oasis/helpers/` or `oasis/schemas/` as appropriate; JS dashboard: shared modules under `oasis/static/js/dashboard/`).
 - Duplicating strings, field names, validation rules, or API shapes across modules is still duplication—use shared constants, Pydantic models, or helpers.
+
+### Finding-validation pipeline (`POST /api/assistant/investigate`)
+
+When changing how the assistant validates findings, follow the contract locked in the canonical plan (`.cursor/plans/validation-vulnerability-validation.plan.md`):
+
+- **Sink resolution lives in one helper**: **`oasis/helpers/assistant/web/sink_resolution.py`** (`resolve_sink_from_finding_indices` + `coerce_positive_int_line`). It handles **primary** payloads (vulnerability JSON with a `files` array) **and** scope payloads from **`finding_scope_report_path`** (executive aggregate flow), plus integral-float `sink_line` clients. **Do not** re-implement this lookup inline in `web.py` or other callers.
+- **Executive aggregate flow**: `assistant_investigate` must run `finding_scope_report_path` through **`oasis.helpers.executive.assistant_scope.resolve_aggregate_finding_scope_payload`** before mapping indices, mirroring what `assistant_chat` already does for the chat panel — same pure helper, same security guardrails (model-dir match, traversal protection).
+- **Verdict honesty**: `compute_verdict` runs on the **full deterministic evidence** (`oasis/helpers/assistant/verdict/verdict.py`). **Never** mutate `status`, `confidence`, `summary`, or `family` based on presentation tweaks; if evidence is thin, `insufficient_signal` is the correct outcome.
+- **Presentation-time EP filter**: After `compute_verdict`, call **`apply_presentation_filter_to_result`** (`oasis/helpers/assistant/web/result_presentation.py`) to prune `entry_points` and rebuild `citations`:
+  - `flow`: keep EPs linked by an `execution_paths.entry_point` if any, else EPs whose citation file matches `scope.sink_file`, else empty.
+  - `access`: keep only EPs whose citation file matches `scope.sink_file`; **never** filter `control_checks` / `authz_hits`.
+  - `config`: untouched (no EPs).
+- **LLM synthesis anchoring**: `compact_investigation_for_llm` (`oasis/helpers/assistant/think/investigation_synth.py`) places a **`scope_focus`** block (vuln name, family, sink_file/line, verdict status/confidence) at the head of the dump; the system prompt explicitly references it and forbids fabricating paths or chains. When changing this contract, keep prompt + payload in sync.
+- **Tests**: helper unit tests in **`tests/test_assistant_validation.py`** (`TestSinkResolution`, `TestPresentationFilter`, `TestScopeFocusInLLMPayload`) and route end-to-end in **`tests/test_web_assistant_api.py`** (`TestAssistantInvestigateRoute`). Same change set when behavior shifts; verdict-label assertions must stay deterministic.
 
 ### Other guardrails
 
