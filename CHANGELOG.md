@@ -4,6 +4,8 @@
 - 🛡️ **Finding validation reliability**: `POST /api/assistant/investigate` now resolves `finding_scope_report_path` (executive aggregate) before mapping `(file_index, chunk_index, finding_index)` to a sink, so executive-summary requests anchor on the targeted vulnerability JSON instead of returning `Sink (no sink file resolved)`. `sink_line` accepts integral floats from JSON clients (e.g. `113.0`) without silent loss.
 - 🛡️ **Assistant narration anchoring**: validation results now expose a `scope_focus` block (sink file, sink line, family, verdict status) at the head of the LLM synthesis payload, and the system prompt forbids fabricating chains the JSON does not support — Flask routes from `vulnerable.py` no longer pollute narration of findings located in `vulnerable.sh`, `Vulnerable.cs`, etc.
 - 🛡️ **`entry_points` post-verdict filter**: for `flow` family, `entry_points` are pruned to those linked by an `execution_paths.entry_point` or, failing that, citing `scope.sink_file`. For `access` family, only EPs in `scope.sink_file` are kept (controls / authz_hits remain the primary evidence). The deterministic verdict (`status`, `confidence`, `summary`) is unchanged — filtering is presentation-only and `config` family is untouched.
+- 🤖 **Ollama model preflight**: `ensure_model_available` now runs for both **scan** and **deep** models (with deduplication when both names match), so missing model pulls fail fast at analyzer initialization instead of breaking later in the run.
+- 🖼️ **Dashboard header accessibility/mobile**: the dashboard header layout and controls are improved for smaller screens and keyboard/navigation accessibility, reducing clipping and interaction friction in responsive mode.
 
 ### ⚡ Changed
 - 🧱 New helpers `oasis.helpers.assistant.web.sink_resolution.resolve_sink_from_finding_indices` (primary + scope payload + numeric line coercion) and `oasis.helpers.assistant.web.result_presentation.apply_presentation_filter_to_result` (post-verdict EP/citation filter) consolidate logic that previously lived inline in `web.py` (no duplicated paths between handler and helpers).
@@ -31,7 +33,6 @@
 ### 🐛 Fixed
 
 - 🖼️ **Dashboard HTML preview**: Executive Summary **canonical JSON** (`json/_executive_summary.json`) uses the same compact report-modal spine as other previews: **`executive-preview`** wrapper, **table of contents**, section anchors, and **return-to-TOC** links so **Chart.js** severity rollup and styling match the markdown-augmented path.
-- 🤖 **Ollama**: `ensure_model_available` runs for both **scan** and **deep** models (not only the scan model), with deduplication when names refer to the same local tag; failed pull or missing model surfaces as a **RuntimeError** at analyzer init instead of failing later without a download attempt.
 
 ### ⚡ Changed
 
