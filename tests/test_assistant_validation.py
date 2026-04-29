@@ -950,46 +950,40 @@ class TestPresentationFilter(unittest.TestCase):
         self.assertEqual(len(filtered.citations), 1)
         self.assertEqual(getattr(filtered.citations[0], "file_path", None), "src/Vulnerable.cs")
 
-    def test_flow_distinguishes_absent_vs_none_entry_point_fields(self) -> None:
-        class _FakeScope:
-            sink_file = "src/Vulnerable.cs"
-
-        class _FakeResult:
-            def __init__(self) -> None:
-                citation = SimpleNamespace(file_path="src/Vulnerable.cs", start_line=12, end_line=12)
-                self.scope = _FakeScope()
-                self.family = "flow"
-                self.entry_points = [
-                    SimpleNamespace(framework="flask", route="/x", citation=citation),
-                    SimpleNamespace(framework="flask", label=None, route="/x", citation=citation),
-                ]
-                self.execution_paths = [
-                    SimpleNamespace(
-                        entry_point=SimpleNamespace(
-                            framework="flask",
-                            label=None,
-                            route="/x",
-                            citation=citation,
-                        ),
-                        hops=[],
-                    )
-                ]
-                self.taint_flows = []
-                self.mitigations = []
-                self.authz_checks = []
-                self.control_checks = []
-                self.config_findings = []
-                self.citations = []
-
-            def model_copy(self, update):
-                for key, value in update.items():
-                    setattr(self, key, value)
-                return self
-
-        result = _FakeResult()
-        filtered = apply_presentation_filter_to_result(result)  # type: ignore[arg-type]
+    def test_flow_matches_entry_points_by_content_key(self) -> None:
+        citation = Citation(file_path="src/Vulnerable.cs", start_line=12, end_line=12)
+        result = AssistantInvestigationResult(
+            vulnerability_name="Broken Access Control",
+            family="flow",
+            status="insufficient_signal",
+            confidence=0.5,
+            summary="x",
+            scope=InvestigationScope(
+                scan_root="/tmp/proj",
+                sink_file="src/Vulnerable.cs",
+                sink_line=12,
+                vulnerability_name="Broken Access Control",
+                family="flow",
+            ),
+            entry_points=[
+                EntryPointHit(framework="flask", label="x", route="/x", citation=citation),
+                EntryPointHit(framework="flask", label="other", route="/x", citation=citation),
+            ],
+            execution_paths=[
+                ExecutionPath(
+                    entry_point=EntryPointHit(
+                        framework="flask",
+                        label="x",
+                        route="/x",
+                        citation=citation,
+                    ),
+                    hops=[],
+                )
+            ],
+        )
+        filtered = apply_presentation_filter_to_result(result)
         self.assertEqual(len(filtered.entry_points), 1)
-        self.assertTrue(hasattr(filtered.entry_points[0], "label"))
+        self.assertEqual(filtered.entry_points[0].label, "x")
 
 
 class TestScopeFocusInLLMPayload(unittest.TestCase):
