@@ -1337,6 +1337,188 @@ class TestExecutiveAndAssistantMetaRoutes(unittest.TestCase):
             self.assertEqual(data.get("message"), "ok-md")
 
 
+class TestAssistantInvestigateRoute(unittest.TestCase):
+    """End-to-end tests for ``POST /api/assistant/investigate``.
+
+    Validates the bug-fix from the canonical plan: the endpoint must
+    resolve ``finding_scope_report_path`` (executive aggregate flow), apply
+    the post-verdict presentation filter on entry_points (FLOW + ACCESS),
+    and never invent paths in the LLM narrative payload.
+    """
+
+    @staticmethod
+    def _no_auth(f):
+        return f
+
+    def _make_server(self, base: Path):
+        inp = base / "scan_root"
+        inp.mkdir()
+        report = Report(str(inp), ["json"])
+        server = WebServer(report, web_password="x", web_assistant_rag=False)
+        mock_om = MagicMock()
+        mock_om.chat.return_value = {"message": {"content": "narrative-md"}}
+        mock_om.list_chat_model_names.return_value = ["m1"]
+        server._get_assistant_ollama_manager = lambda: mock_om
+        return server, inp
+
+    @staticmethod
+    def _exec_payload(model: str = "m1") -> dict:
+        return {
+            "report_type": "executive_summary",
+            "schema_version": 1,
+            "model_name": model,
+            "title": "Executive",
+        }
+
+    @staticmethod
+    def _vuln_payload(rel_file: str, snippet_line: int, vuln: str = "Remote File Inclusion", model: str = "m1") -> dict:
+        return {
+            "report_type": "vulnerability",
+            "schema_version": 4,
+            "title": vuln,
+            "generated_at": "2026-01-01",
+            "model_name": model,
+            "vulnerability_name": vuln,
+            "files": [
+                {
+                    "file_path": rel_file,
+                    "chunk_analyses": [
+                        {
+                            "start_line": snippet_line,
+                            "end_line": snippet_line + 5,
+                            "findings": [
+                                {
+                                    "title": "f",
+                                    "severity": "High",
+                                    "snippet_start_line": snippet_line,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "stats": {"total_findings": 1},
+        }
+
+    def test_investigate_resolves_sink_via_finding_scope_report_path(self):
+        """Executive ``report_path`` + scope path → scope.sink_file is populated."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, scan_root = self._make_server(base)
+            (scan_root / "vulnerable.sh").write_text("#!/bin/sh\n" * 130, encoding="utf-8")
+
+            sec = base / "security_reports"
+            run_json = sec / "20260101_010101" / "m1" / "json"
+            run_json.mkdir(parents=True)
+            (run_json / "_executive_summary.json").write_text(
+                json.dumps(self._exec_payload()), encoding="utf-8"
+            )
+            (run_json / "remote_file_inclusion.json").write_text(
+                json.dumps(self._vuln_payload("vulnerable.sh", 107)), encoding="utf-8"
+            )
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            resp = client.post(
+                "/api/assistant/investigate",
+                data=json.dumps(
+                    {
+                        "report_path": "20260101_010101/m1/json/_executive_summary.json",
+                        "finding_scope_report_path": "20260101_010101/m1/json/remote_file_inclusion.json",
+                        "file_index": 0,
+                        "chunk_index": 0,
+                        "finding_index": 0,
+                        "vulnerability_name": "Remote File Inclusion",
+                        "synthesize_narrative": False,
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+            data = json.loads(resp.get_data(as_text=True))
+            scope = data.get("scope")
+            self.assertIsInstance(scope, dict)
+            self.assertEqual(scope.get("sink_file"), "vulnerable.sh")
+            self.assertEqual(scope.get("sink_line"), 107)
+            self.assertEqual(scope.get("vulnerability_name"), "Remote File Inclusion")
+
+    def test_investigate_rejects_invalid_finding_scope_report_path(self):
+        """A ``..`` traversal in finding_scope_report_path → 400."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            run_json = sec / "20260101_010101" / "m1" / "json"
+            run_json.mkdir(parents=True)
+            (run_json / "_executive_summary.json").write_text(
+                json.dumps(self._exec_payload()), encoding="utf-8"
+            )
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            resp = client.post(
+                "/api/assistant/investigate",
+                data=json.dumps(
+                    {
+                        "report_path": "20260101_010101/m1/json/_executive_summary.json",
+                        "finding_scope_report_path": "../../escape.json",
+                        "file_index": 0,
+                        "chunk_index": 0,
+                        "finding_index": 0,
+                        "vulnerability_name": "Remote File Inclusion",
+                        "synthesize_narrative": False,
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 400)
+            payload = json.loads(resp.get_data(as_text=True))
+            self.assertIn("error", payload)
+            self.assertIsInstance(payload["error"], str)
+            self.assertTrue(payload["error"].strip())
+            self.assertIn("finding_scope_report_path", payload["error"])
+
+    def test_investigate_accepts_float_sink_line_hint(self):
+        """``sink_line`` provided as integral float (113.0) is accepted."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, scan_root = self._make_server(base)
+            (scan_root / "app.py").write_text("a\n" * 200, encoding="utf-8")
+            sec = base / "security_reports"
+            run_json = sec / "20260101_010101" / "m1" / "json"
+            run_json.mkdir(parents=True)
+            (run_json / "vuln.json").write_text(
+                json.dumps(self._vuln_payload("app.py", 50)), encoding="utf-8"
+            )
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            resp = client.post(
+                "/api/assistant/investigate",
+                data=json.dumps(
+                    {
+                        "report_path": "20260101_010101/m1/json/vuln.json",
+                        "file_index": 0,
+                        "chunk_index": 0,
+                        "finding_index": 0,
+                        "sink_file": "app.py",
+                        "sink_line": 113.0,
+                        "vulnerability_name": "Remote File Inclusion",
+                        "synthesize_narrative": False,
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+            data = json.loads(resp.get_data(as_text=True))
+            self.assertEqual(data["scope"]["sink_line"], 113)
+
+
 class TestResolveAssistantOllamaUrl(unittest.TestCase):
     def test_non_empty_web_url_wins_after_strip(self):
         server = WebServer.__new__(WebServer)

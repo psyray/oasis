@@ -42,6 +42,7 @@
 | Section | Topics |
 |---------|--------|
 | [Features](#readme-features) | Highlights, dashboard, canonical reports |
+| [Finding Validation Principle](#readme-finding-validation-principle) | Deterministic verdict, scope anchoring, narrative guardrails |
 | [Getting started](#readme-getting-started) | Prerequisites, pipx install, Docker (quick), maintenance |
 | [Hardware Requirements](#readme-hardware) | CPUs, GPU, scaling |
 | [Advanced Usage Examples](#readme-advanced-usage-examples) | Example CLI invocations |
@@ -66,7 +67,7 @@
 ## 🌟 Features
 
 - 🤖 **Dashboard assistant**: In the report modal, the AI assistant triages **single-vulnerability JSON** reports or **executive / scan-wide** mode (aggregated JSON under the run) with optional **RAG** over the local embedding cache, a **chat model** selector (Ollama tags), **Markdown** replies, persisted **chat sessions** keyed by the canonical report path, and configurable Ollama/RAG flags (`--web-ollama-url`, `--web-embed-model`, `--web-assistant-rag`)
-- 🛡️ **Finding validation agent**: a **Validate this finding** button in the assistant panel runs a deterministic, code-driven investigation on the project sources. It classifies the vulnerability into a family (**flow**, **access**, or **config**), discovers framework **entry points** (Flask/Django/FastAPI/Express/Spring/Rails/gRPC/CLI/message handlers), traces **call paths** to the sink, detects **taint flows** (source → sink), evaluates **nullifying mitigations** (parameterized SQL, path normalizers, sanitizers, ORMs, etc.) and **required controls** (auth/CSRF/session/JWT/CORS), runs **config / secret / crypto / log-leak** audits, and returns an **exploitability verdict** (`confirmed_exploitable`, `likely_exploitable`, `needs_review`, or `not_exploitable`) with confidence and full citations. Orchestrated by **LangGraph** when installed, with a pure-Python fallback. Exposed as `POST /api/assistant/investigate` and bounded by a configurable `budget_seconds` per request. When Ollama is reachable and a **chat model** is selected (or the report provides `model_name`), the response may include an additional **`narrative_markdown`** field: an LLM-written explanation that must not contradict the deterministic verdict (`synthesize_narrative` in the JSON body defaults to true).
+- 🛡️ **Finding validation agent**: The assistant can run a deterministic, code-driven investigation for one selected finding via `POST /api/assistant/investigate`, then return a citation-backed exploitability verdict with confidence. Optional LLM narrative can be added on top, but it is constrained to stay consistent with the deterministic result. See [Finding Validation Principle](#readme-finding-validation-principle) for full behavior and guardrails.
 - 🔍 **Multi-Model Analysis**: Leverage multiple Ollama models for comprehensive security scanning
 - 🔄 **Two-Phase Scanning**: Use lightweight models for initial scanning and powerful models for deep analysis
 - 🧠 **LangGraph Orchestration**: Single pipeline (discover → scan → expand → deep → verify → report, optional PoC assist) with bounded context-expand retries
@@ -557,6 +558,27 @@ oasis -i ./critical-service -sm qwen2.5-coder:7b -m bugtraceai-apex-q4 -t 0.6 -s
 - Date-based filtering supports multiple `model` query params (`/api/dates?model=...&model=...&vulnerability=...`) and falls back to API fetch if local in-memory report data is stale.
 - **Severity filter**: narrows vulnerability listings and aligns stats (**tier bands**); when filters are applied, modal **JSON/HTML/content** previews return only reports that match the current filter set (**guard error** otherwise).
 - Sidebar / stats JSON uses **`severity_finding_totals`** (per-tier finding counts) from **`/api/stats`**.
+
+<a id="readme-finding-validation-principle"></a>
+
+#### Finding Validation Principle
+
+The finding-validation flow is designed so the **verdict stays deterministic**, while optional LLM prose remains a constrained presentation layer.
+
+1. **Deterministic verdict first (source of truth)**  
+   `POST /api/assistant/investigate` runs a code-driven investigation and produces the exploitability outcome (`status`, `confidence`, `summary`) from deterministic analysis and citations.
+
+2. **Sink anchoring via resolved `scope`**  
+   The investigation is anchored on the selected sink by resolving `(file_index, chunk_index, finding_index)` against the matching vulnerability report. The response `scope` echoes the resolved `sink_file` and `sink_line`, and downstream reasoning is expected to stay attached to that anchor.
+
+3. **Executive flow path resolution (`finding_scope_report_path`)**  
+   In executive / aggregated flows, the request uses `finding_scope_report_path` to resolve the exact vulnerability report that owns the selected finding before sink anchoring is applied.
+
+4. **Post-verdict entry-point filtering is presentation-only**  
+   After the deterministic verdict is computed, `entry_points` are filtered for presentation when the finding family is **flow** or **access**, reducing unrelated noise in the "Related to" panel and optional narrative. This filtering does **not** change verdict semantics (`status`, `confidence`, `summary`), and `config` findings keep their original entry-point payload.
+
+5. **Optional LLM narrative with no-invention guardrails**  
+   When synthesis is enabled (`synthesize_narrative`, default `true`) and a chat model is available, the API may return `narrative_markdown`. That narrative is secondary, must not contradict the deterministic verdict, is focused with the same sink anchor (`scope_focus`), and must not invent files, paths, call chains, or evidence absent from the deterministic JSON.
 
 <p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
 
