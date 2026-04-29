@@ -49,6 +49,28 @@ Rules (strict):
 """
 
 
+def _normalize_temperature(value: Any, *, fallback: float = 0.2) -> float:
+    """Normalize synthesis temperature once with a defensive fallback."""
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid assistant synthesis temperature=%r; falling back to %s",
+            value,
+            fallback,
+        )
+        normalized = fallback
+
+    clamped = max(0.0, min(1.0, normalized))
+    if clamped != normalized:
+        logger.warning(
+            "Assistant synthesis temperature out of range (%s); clamping to %s",
+            normalized,
+            clamped,
+        )
+    return clamped
+
+
 def _trunc_marker(omitted: int) -> Dict[str, Any]:
     return {"_truncated": True, "_omitted_count": omitted}
 
@@ -146,6 +168,7 @@ def enrich_investigation_with_llm_narrative(
     if not model:
         return result
 
+    normalized_temperature = _normalize_temperature(temperature, fallback=0.2)
     messages = build_synthesis_messages(result, max_context_chars=max_context_chars)
     if _oasis_log.isEnabledFor(logging.DEBUG):
         _oasis_log.debug(
@@ -153,7 +176,7 @@ def enrich_investigation_with_llm_narrative(
             json.dumps(
                 {
                     "model": model,
-                    "options": {"temperature": temperature},
+                    "options": {"temperature": normalized_temperature},
                     "messages": messages,
                 },
                 ensure_ascii=False,
@@ -162,7 +185,7 @@ def enrich_investigation_with_llm_narrative(
         )
     try:
         resp = ollama_manager.chat(
-            model, messages, options={"temperature": temperature}
+            model, messages, options={"temperature": normalized_temperature}
         )
     except Exception as exc:
         logger.warning(

@@ -1476,6 +1476,11 @@ class TestAssistantInvestigateRoute(unittest.TestCase):
                 content_type="application/json",
             )
             self.assertEqual(resp.status_code, 400)
+            payload = json.loads(resp.get_data(as_text=True))
+            self.assertIn("error", payload)
+            self.assertIsInstance(payload["error"], str)
+            self.assertTrue(payload["error"].strip())
+            self.assertIn("finding_scope_report_path", payload["error"])
 
     def test_investigate_accepts_float_sink_line_hint(self):
         """``sink_line`` provided as integral float (113.0) is accepted."""

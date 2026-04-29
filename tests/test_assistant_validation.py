@@ -5,6 +5,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 from unittest import mock
 
@@ -524,6 +525,72 @@ class TestInvestigationSynth(unittest.TestCase):
         self.assertEqual(out.narrative_markdown, "")
         self.assertIsNone(out.synthesis_model)
 
+    def test_enrich_invalid_temperature_falls_back_and_warns(self) -> None:
+        class _FakeOllama:
+            def __init__(self) -> None:
+                self.options = None
+
+            def chat(self, model, messages, options=None, **kwargs):
+                self.options = options
+                return {"message": {"content": "ok"}}
+
+        base = AssistantInvestigationResult(
+            vulnerability_name="XSS",
+            family="flow",
+            status="likely_exploitable",
+            confidence=0.5,
+            summary="deterministic",
+        )
+        synth_logger_name = "oasis.helpers.assistant.think.investigation_synth"
+        fake = _FakeOllama()
+        with self.assertLogs(synth_logger_name, level="WARNING") as captured:
+            out = enrich_investigation_with_llm_narrative(
+                base,
+                ollama_manager=fake,  # type: ignore[arg-type]
+                chat_model="fake-model",
+                temperature="not-a-float",  # type: ignore[arg-type]
+            )
+        self.assertEqual(fake.options, {"temperature": 0.2})
+        self.assertIsInstance(fake.options["temperature"], float)
+        self.assertTrue(
+            any("invalid assistant synthesis temperature" in msg.lower() for msg in captured.output),
+            f"Expected invalid temperature warning, got: {captured.output!r}",
+        )
+        self.assertEqual(out.synthesis_model, "fake-model")
+
+    def test_enrich_clamps_out_of_range_temperature_and_warns(self) -> None:
+        class _FakeOllama:
+            def __init__(self) -> None:
+                self.options = None
+
+            def chat(self, model, messages, options=None, **kwargs):
+                self.options = options
+                return {"message": {"content": "ok"}}
+
+        base = AssistantInvestigationResult(
+            vulnerability_name="XSS",
+            family="flow",
+            status="likely_exploitable",
+            confidence=0.5,
+            summary="deterministic",
+        )
+        synth_logger_name = "oasis.helpers.assistant.think.investigation_synth"
+        for raw_temp, expected in ((9, 1.0), (-0.5, 0.0)):
+            with self.subTest(temperature=raw_temp):
+                fake = _FakeOllama()
+                with self.assertLogs(synth_logger_name, level="WARNING") as captured:
+                    enrich_investigation_with_llm_narrative(
+                        base,
+                        ollama_manager=fake,  # type: ignore[arg-type]
+                        chat_model="fake-model",
+                        temperature=raw_temp,  # type: ignore[arg-type]
+                    )
+                self.assertEqual(fake.options, {"temperature": expected})
+                self.assertTrue(
+                    any("clamping" in msg.lower() for msg in captured.output),
+                    f"Expected clamp warning, got: {captured.output!r}",
+                )
+
 
 class TestAssistantTaintAssignmentParsing(unittest.TestCase):
     def test_generic_fallback_rejects_logical_and_lhs(self) -> None:
@@ -843,6 +910,86 @@ class TestPresentationFilter(unittest.TestCase):
         cit_paths = {c.file_path for c in filtered.citations}
         self.assertNotIn("vulnerable.py", cit_paths)
         self.assertIn("src/Vulnerable.cs", cit_paths)
+
+    def test_flow_filter_tolerates_missing_or_partial_citations(self) -> None:
+        class _FakeScope:
+            sink_file = "src/Vulnerable.cs"
+
+        class _FakeResult:
+            def __init__(self) -> None:
+                self.scope = _FakeScope()
+                self.family = "flow"
+                self.entry_points = [
+                    mock.Mock(framework="flask", label="r", route="/a", citation=None),
+                    mock.Mock(
+                        framework="aspnet",
+                        label="r",
+                        route="/b",
+                        citation=mock.Mock(file_path="src/Vulnerable.cs"),
+                    ),
+                ]
+                self.execution_paths = [
+                    mock.Mock(entry_point=mock.Mock(framework="f", label="x", route="/x", citation=None), hops=[])
+                ]
+                self.taint_flows = [mock.Mock(source_citation=None, sink_citation=None)]
+                self.mitigations = [mock.Mock(citation=None)]
+                self.authz_checks = [mock.Mock(citation=None)]
+                self.control_checks = [mock.Mock(citations=[None])]
+                self.config_findings = [mock.Mock(citation=None)]
+                self.citations = []
+
+            def model_copy(self, update):
+                for key, value in update.items():
+                    setattr(self, key, value)
+                return self
+
+        result = _FakeResult()
+        filtered = apply_presentation_filter_to_result(result)  # type: ignore[arg-type]
+        self.assertIs(filtered, result)
+        self.assertEqual([ep.route for ep in filtered.entry_points], ["/b"])
+        self.assertEqual(len(filtered.citations), 1)
+        self.assertEqual(getattr(filtered.citations[0], "file_path", None), "src/Vulnerable.cs")
+
+    def test_flow_distinguishes_absent_vs_none_entry_point_fields(self) -> None:
+        class _FakeScope:
+            sink_file = "src/Vulnerable.cs"
+
+        class _FakeResult:
+            def __init__(self) -> None:
+                citation = SimpleNamespace(file_path="src/Vulnerable.cs", start_line=12, end_line=12)
+                self.scope = _FakeScope()
+                self.family = "flow"
+                self.entry_points = [
+                    SimpleNamespace(framework="flask", route="/x", citation=citation),
+                    SimpleNamespace(framework="flask", label=None, route="/x", citation=citation),
+                ]
+                self.execution_paths = [
+                    SimpleNamespace(
+                        entry_point=SimpleNamespace(
+                            framework="flask",
+                            label=None,
+                            route="/x",
+                            citation=citation,
+                        ),
+                        hops=[],
+                    )
+                ]
+                self.taint_flows = []
+                self.mitigations = []
+                self.authz_checks = []
+                self.control_checks = []
+                self.config_findings = []
+                self.citations = []
+
+            def model_copy(self, update):
+                for key, value in update.items():
+                    setattr(self, key, value)
+                return self
+
+        result = _FakeResult()
+        filtered = apply_presentation_filter_to_result(result)  # type: ignore[arg-type]
+        self.assertEqual(len(filtered.entry_points), 1)
+        self.assertTrue(hasattr(filtered.entry_points[0], "label"))
 
 
 class TestScopeFocusInLLMPayload(unittest.TestCase):

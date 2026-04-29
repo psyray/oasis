@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import PurePosixPath
-from typing import Iterable, List, Optional, Set
+from typing import Iterable, List, Optional, Protocol, Set
 
 from oasis.schemas.analysis import (
     AssistantInvestigationResult,
@@ -36,6 +36,15 @@ from oasis.schemas.analysis import (
 )
 
 logger = logging.getLogger(__name__)
+_MISSING = object()
+
+
+class CitationLike(Protocol):
+    """Structural citation view used by defensive helper code."""
+
+    file_path: Optional[str]
+    start_line: Optional[int]
+    end_line: Optional[int]
 
 
 def _normalize_path(value: Optional[str]) -> Optional[str]:
@@ -71,24 +80,57 @@ def _execution_path_entry_keys(paths: Iterable[ExecutionPath]) -> Set[tuple]:
     """Stable identifiers for entry points referenced by execution paths."""
     keys: Set[tuple] = set()
     for path in paths:
-        ep = path.entry_point
+        ep = getattr(path, "entry_point", None)
         if ep is None:
             continue
         keys.add(_entry_point_key(ep))
     return keys
 
 
-def _entry_point_key(ep: EntryPointHit) -> tuple:
-    """Identifier comparing entry points by framework + label + citation."""
-    cit = ep.citation
+def _read_attr(obj: Optional[object], name: str) -> tuple[Optional[object], bool]:
+    """Read an attribute and track whether it exists on the runtime object."""
+    if obj is None:
+        return (None, False)
+    value = getattr(obj, name, _MISSING)
+    return ((None, False) if value is _MISSING else (value, True))
+
+
+def _citation_fields(
+    citation: Optional[CitationLike],
+) -> tuple[Optional[str], Optional[int], Optional[int], tuple[bool, bool, bool]]:
+    """Return defensive citation fields, tolerating partial/missing objects."""
+    path_raw, has_path = _read_attr(citation, "file_path")
+    start_raw, has_start = _read_attr(citation, "start_line")
+    end_raw, has_end = _read_attr(citation, "end_line")
+    file_path = path_raw if isinstance(path_raw, str) else None
+    start_line = start_raw if isinstance(start_raw, int) else None
+    end_line = end_raw if isinstance(end_raw, int) else None
     return (
-        ep.framework,
-        ep.label,
-        ep.route,
-        cit.file_path,
-        cit.start_line,
-        cit.end_line,
+        file_path,
+        start_line,
+        end_line,
+        (has_path, has_start, has_end),
     )
+
+
+def _entry_point_key(ep: EntryPointHit) -> tuple:
+    """Identifier comparing entry points by framework + label + citation.
+
+    For fully-populated objects, we use a stable value key so execution path
+    links continue to match equivalent pydantic instances by content.
+    For partial objects (missing attributes), we use an instance discriminator to
+    avoid harmful collisions where absent fields would otherwise collapse
+    unrelated entry points into the same key.
+    """
+    framework, has_framework = _read_attr(ep, "framework")
+    label, has_label = _read_attr(ep, "label")
+    route, has_route = _read_attr(ep, "route")
+    cit_path, cit_start, cit_end, citation_presence = _citation_fields(
+        getattr(ep, "citation", None)
+    )
+    if not all((has_framework, has_label, has_route, *citation_presence)):
+        return ("partial", id(ep))
+    return ("full", framework, label, route, cit_path, cit_start, cit_end)
 
 
 def _filter_entry_points_for_flow(
@@ -103,7 +145,13 @@ def _filter_entry_points_for_flow(
         if linked := [ep for ep in eps if _entry_point_key(ep) in path_keys]:
             return linked
     if sink_norm and (
-        same_file := [ep for ep in eps if _file_matches_sink(ep.citation.file_path, sink_norm)]
+        same_file := [
+            ep
+            for ep in eps
+            if _file_matches_sink(
+                _citation_fields(getattr(ep, "citation", None))[0], sink_norm
+            )
+        ]
     ):
         return same_file
     return []
@@ -117,7 +165,13 @@ def _filter_entry_points_for_access(
     eps = list(result.entry_points)
     if not eps or not sink_norm:
         return []
-    return [ep for ep in eps if _file_matches_sink(ep.citation.file_path, sink_norm)]
+    return [
+        ep
+        for ep in eps
+        if _file_matches_sink(
+            _citation_fields(getattr(ep, "citation", None))[0], sink_norm
+        )
+    ]
 
 
 def _rebuild_citations(
@@ -128,7 +182,12 @@ def _rebuild_citations(
     seen: Set[tuple] = set()
     out: List[Citation] = []
 
-    def add(cit: Citation) -> None:
+    def add(cit: Optional[Citation]) -> None:
+        if cit is None:
+            return
+        file_path = getattr(cit, "file_path", None)
+        if not isinstance(file_path, str) or not file_path.strip():
+            return
         key = (cit.file_path, cit.start_line, cit.end_line)
         if key in seen:
             return
@@ -136,24 +195,25 @@ def _rebuild_citations(
         out.append(cit)
 
     for ep in entry_points:
-        add(ep.citation)
+        add(getattr(ep, "citation", None))
     for path in result.execution_paths:
-        if path.entry_point is not None:
-            add(path.entry_point.citation)
-        for hop in path.hops:
-            add(hop.citation)
+        entry_point = getattr(path, "entry_point", None)
+        if entry_point is not None:
+            add(getattr(entry_point, "citation", None))
+        for hop in getattr(path, "hops", []):
+            add(getattr(hop, "citation", None))
     for flow in result.taint_flows:
-        add(flow.source_citation)
-        add(flow.sink_citation)
+        add(getattr(flow, "source_citation", None))
+        add(getattr(flow, "sink_citation", None))
     for mit in result.mitigations:
-        add(mit.citation)
+        add(getattr(mit, "citation", None))
     for hit in result.authz_checks:
-        add(hit.citation)
+        add(getattr(hit, "citation", None))
     for check in result.control_checks:
-        for cit in check.citations:
+        for cit in getattr(check, "citations", []):
             add(cit)
     for cf in result.config_findings:
-        add(cf.citation)
+        add(getattr(cf, "citation", None))
     return out
 
 
