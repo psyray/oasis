@@ -39,9 +39,13 @@ You receive JSON from a deterministic static-analysis validation run (entry poin
 Rules (strict):
 - Treat fields "status", "confidence", "family", "vulnerability_name", and "summary" as authoritative. Do NOT contradict them or propose a different verdict label.
 - Output Markdown only (no JSON). Aim for 3–6 short paragraphs plus optional bullet lists.
+- The user finding is anchored on `scope_focus.sink_file:scope_focus.sink_line` when present. Always state this anchor explicitly; do not silently shift the discussion to a different file.
 - Explain what the evidence implies in plain language. When citing code, use only paths and line numbers that appear in the JSON (path:line format).
+- If `entry_points` is empty or none cover `scope_focus.sink_file`, do NOT suggest exploitation chains the JSON does not support. Frame any unrelated entry points as ambient observations, not as the attack vector.
+- For `family == "access"`, prioritize `control_checks` and `authz_checks`; do NOT introduce routes outside `scope_focus.sink_file` as the primary attack vector.
+- If you cannot deterministically link the sink to a source/control using the provided JSON, declare the gap (insufficient signal) instead of speculating.
 - If evidence is thin or the tool reported errors/budget exhaustion, say what is missing instead of inventing details.
-- Do not fabricate file paths, line numbers, or frameworks not present in the JSON.
+- Do not fabricate file paths, line numbers, frameworks, route names, or call chains not present in the JSON.
 """
 
 
@@ -49,9 +53,39 @@ def _trunc_marker(omitted: int) -> Dict[str, Any]:
     return {"_truncated": True, "_omitted_count": omitted}
 
 
+def _build_scope_focus(result: AssistantInvestigationResult) -> Dict[str, Any]:
+    """Highlight the sink anchor + verdict so the LLM cannot drift to other files."""
+    focus: Dict[str, Any] = {
+        "vulnerability_name": result.vulnerability_name,
+        "family": result.family,
+        "verdict_status": result.status,
+        "verdict_confidence": float(result.confidence),
+    }
+    if result.scope is not None:
+        if result.scope.sink_file:
+            focus["sink_file"] = result.scope.sink_file
+        if result.scope.sink_line is not None:
+            focus["sink_line"] = result.scope.sink_line
+        if result.scope.scan_root:
+            focus["scan_root"] = result.scope.scan_root
+    return focus
+
+
 def compact_investigation_for_llm(result: AssistantInvestigationResult) -> Dict[str, Any]:
     """Build a size-bounded dict suitable for the synthesis prompt."""
     raw = result.model_dump(mode="json")
+    # Guard against collisions: ``scope_focus`` is computed by OASIS and must
+    # never be overridden by a same-named key from ``model_dump``. If the
+    # serialized payload ever exposes one (schema drift), surface it via a
+    # WARNING log so the discrepancy is visible — but keep the assistant
+    # resilient by always letting the locally computed value win below.
+    if "scope_focus" in raw:
+        logger.warning(
+            "Assistant schema drift detected: AssistantInvestigationResult.model_dump() "
+            "now exposes a 'scope_focus' key; the locally computed scope_focus from "
+            "_build_scope_focus supersedes the dumped value to keep the LLM payload anchored."
+        )
+        raw.pop("scope_focus", None)
     raw.pop("narrative_markdown", None)
     raw.pop("synthesis_model", None)
     raw.pop("synthesis_error", None)
@@ -72,7 +106,10 @@ def compact_investigation_for_llm(result: AssistantInvestigationResult) -> Dict[
     clip_list("config_findings", _MAX_CONFIG)
     clip_list("citations", _MAX_CITATIONS)
     clip_list("errors", _MAX_ERRORS)
-    return raw
+
+    # Place ``scope_focus`` first so the LLM hits it before walking the (possibly
+    # noisy) evidence buckets — the system prompt above explicitly references it.
+    return {"scope_focus": _build_scope_focus(result), **raw}
 
 
 def build_synthesis_messages(
@@ -116,7 +153,7 @@ def enrich_investigation_with_llm_narrative(
             json.dumps(
                 {
                     "model": model,
-                    "options": {"temperature": float(temperature)},
+                    "options": {"temperature": temperature},
                     "messages": messages,
                 },
                 ensure_ascii=False,
@@ -125,9 +162,7 @@ def enrich_investigation_with_llm_narrative(
         )
     try:
         resp = ollama_manager.chat(
-            model,
-            messages,
-            options={"temperature": float(temperature)},
+            model, messages, options={"temperature": temperature}
         )
     except Exception as exc:
         logger.warning(
@@ -149,9 +184,7 @@ def enrich_investigation_with_llm_narrative(
         )
 
     msg = resp.get("message") if isinstance(resp, dict) else None
-    raw = ""
-    if isinstance(msg, dict):
-        raw = msg.get("content") or ""
+    raw = msg.get("content") or "" if isinstance(msg, dict) else ""
     if not isinstance(raw, str):
         raw = ""
     split = parse_assistant_think(raw)
