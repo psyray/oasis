@@ -31,6 +31,7 @@ alwaysApply: false
 - Preserve CLI backward compatibility when possible (short and long flags); if a rename is required, mirror it in docs.
 - For docs touched by behavior changes, keep `README.md` `Features` summary-only and place detailed behavior/usage in the relevant dedicated section (create one for new feature areas).
 - Keep `CHANGELOG.md` entries concise, style-consistent, and filed under the version bucket that matches current branch lineage.
+- **Open-source hygiene**: examples in code, help strings, docstrings, and tests use neutral placeholders (`https://llm.example.com/v1`) — never personal infrastructure details (hostnames, SSH aliases, keys, container names); such documentation lives in the uncommitted workspace mirror, not in the repo.
 - Route logs through centralized project logging helpers; avoid ad-hoc print statements in production paths.
 - For resilience changes (cache, network/model calls), prefer defensive fallbacks and explicit error handling.
 - **Tests**: Integration-style checks live under `tests/` as `test_<area>.py` files aligned with product modules (report contract in `tests/test_report_schema.py`, CLI in `tests/test_oasis_cli.py`, LangGraph orchestration in `tests/test_analyze_orchestration.py`, embedding pure helpers in `tests/test_embedding_pure.py`, dashboard helpers in `tests/test_helpers_dashboard.py`, model backends/providers in `tests/test_backends_openai_compat.py`, etc.). When you change behavior covered by those areas, update or add tests in the matching file rather than skipping coverage for new branches.

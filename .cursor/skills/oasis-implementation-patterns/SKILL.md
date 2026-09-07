@@ -93,6 +93,11 @@ Details live in `.cursor/rules/oasis-python-architecture.mdc` (constants in `oas
 - Never hardcode Ollama assumptions outside `oasis/backends/`: feature code goes through the `ModelBackend` contract — responses are normalized to `{"message": {"content": ...}}`, and Ollama-style kwargs (`options.num_predict`, `format=<json_schema>`) are translated per backend. Adding provider-specific behavior means extending the matching backend (or the contract), **not** branching on the provider in `analyze.py` / `embedding.py` / `web.py`.
 - New provider knobs land in `oasis/config.py` (`OASIS_*` env, documented in the module docstring) plus `oasis/oasis.py` CLI, and stay aligned with `tests/test_backends_openai_compat.py` and the README `Model providers (backends)` section when user-visible.
 
+### Open-source hygiene (no personal infrastructure in the repo)
+
+- Committed code, help strings, docstrings, tests, and docs stay **agnostic of personal infrastructure** (server hostnames, SSH aliases, private URLs, keys, container names, local paths): use neutral placeholders (`https://llm.example.com/v1`, `localhost`). Personal server documentation/configs live outside the repository (an uncommitted private workspace mirror) and are never referenced from committed files.
+- Private strings in reachable history require a **history rewrite** (amend / cherry-pick rebuild of every affected branch — `git branch --contains` — then `git reflog expire --expire=now --all` + `git gc --prune=now`), not a cleanup commit; verify with `git log --all -p | grep …` before pushing.
+
 ### Finding-validation pipeline (`POST /api/assistant/investigate`)
 
 When changing how the assistant validates findings, follow the contract locked in the canonical plan (`.cursor/plans/validation-vulnerability-validation.plan.md`):

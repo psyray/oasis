@@ -48,6 +48,13 @@ coverage report
 - `CHANGELOG.md`: entries concise, style-consistent with the file's charter, filed under the version bucket matching the current branch lineage.
 - Contract changes ship coordinated updates in the same change set (see the `oasis-release-guardrails` skill for the full checklist); migrate all call sites of shared logic at once so `main` never retains two competing implementations.
 
+## Open-source hygiene (personal infra stays out of the repo)
+
+- The repo is public (`github.com/psyray/oasis`): committed files — code, help strings, docstrings, tests, README, CHANGELOG, rules, skills — must stay **agnostic of personal infrastructure**: no server hostnames/SSH aliases, private URLs, keys/tokens, container/service names, local paths, or private model names. Use neutral placeholders in examples (`https://llm.example.com/v1`).
+- Personal LLM-server documentation and configs live **outside the repository** (a private, uncommitted workspace mirror — e.g. a local docs/config folder plus a credentials file) and must never be referenced from committed files.
+- If a private string reaches committed history, a follow-up cleanup commit is **not enough**: rewrite the offending commits (amend / cherry-pick rebuild on **every branch** that contains them — check with `git branch --contains`), then purge (`git reflog expire --expire=now --all && git gc --prune=now --aggressive`) and verify `git log --all -p | grep -E '<private patterns>'` is empty.
+- Headless agent commits may need `-c commit.gpgsign=false` (re-sign interactively afterwards with `git commit --amend --no-edit -S` if required).
+
 ## Model backends (Ollama native / OpenAI-compatible — vLLM, LiteLLM)
 
 - Architecture: `oasis/backends/` — `base.ModelBackend` is the provider-agnostic contract; `ollama_backend.OllamaManager` (native Ollama, **default**) and `openai_compat.OpenAICompatManager` (vLLM, LM Studio, llama.cpp, LiteLLM, …) implement it; the factory `create_model_manager` (`backends/__init__.py`) resolves the backend: `--provider` → `OASIS_LLM_PROVIDER` env → auto (`openai` when `--api-base` is set, else `ollama`). `oasis/ollama_manager.py` is a backward-compat shim only.
