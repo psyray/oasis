@@ -1,3 +1,9 @@
+## 🚀 [Unreleased]
+
+### ✨ Added
+
+- 🧹 **Suppression registry (`--suppressions-file`, `--write-suppression-candidates`)**: persist triage decisions in a JSON registry mapping stable finding fingerprints (file path + vulnerability type + normalized snippet) to notes. Findings matching the registry are exported with a native **SARIF 2.1.0 `suppressions`** entry (`kind: "logical"`, note as justification) while the canonical JSON stays untouched; `--write-suppression-candidates` emits `suppression_candidates.json` listing every run fingerprint to seed the registry. Helpers in `oasis.helpers.suppressions`; SARIF wiring in `oasis.export.sarif` / `report.generate_vulnerability_report`.
+
 ## 🚀 [0.7.0] - 2026-09-07
 
 ### ✨ Added

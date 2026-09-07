@@ -174,6 +174,9 @@ class Report:
         self.executive_summary_embedding_model: str = ""
         self.project: Optional[str] = None
         self.project_slug: Optional[str] = None
+        # Suppressions registry (fingerprint → triage entry) loaded by OasisScanner when
+        # --suppressions-file is provided; consumed by the SARIF export.
+        self.suppressed_registry: Optional[Dict[str, Dict[str, str]]] = None
         self._initialize_project_metadata(input_path)
 
 
@@ -508,6 +511,7 @@ class Report:
             logger=logger,
             safe_name_for_logs=safe_name,
             tool_version=oasis_version,
+            suppressions=getattr(self, "suppressed_registry", None),
         )
         if missing := [k for k, p in written.items() if p is None]:
             logger.warning(

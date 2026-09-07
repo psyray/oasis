@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 from oasis.export.filenames import artifact_filename, report_dir_glob_for_format
 from oasis.export.writers import write_utf8_text
 from oasis.export.sarif import vulnerability_document_to_sarif
+from oasis.helpers.suppressions import finding_fingerprint
 from oasis.schemas.analysis import (
     ChunkDeepAnalysis,
     FileReportEntry,
@@ -148,6 +149,56 @@ class TestSarifExport(unittest.TestCase):
         region = payload["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"]
         self.assertEqual(region.get("startLine"), 12)
         self.assertEqual(region.get("endLine"), 14)
+
+
+class TestSarifSuppressionRegistry(unittest.TestCase):
+    def test_suppressed_finding_gets_native_sarif_entry(self):
+        doc = VulnerabilityReportDocument(
+            title="SQL Injection Security Analysis",
+            generated_at="2026-01-01T00:00:00",
+            model_name="test-model",
+            vulnerability_name="SQL Injection",
+            vulnerability={"name": "SQL Injection", "description": "SQLi desc"},
+            files=[
+                FileReportEntry(
+                    file_path="app/routes.py",
+                    similarity_score=0.91,
+                    chunk_analyses=[
+                        ChunkDeepAnalysis(
+                            findings=[
+                                VulnerabilityFinding(
+                                    title="Unsafe query",
+                                    vulnerable_code="cursor.execute(q)",
+                                    explanation="User input reaches SQL.",
+                                    severity="High",
+                                )
+                            ]
+                        )
+                    ],
+                )
+            ],
+        )
+        fingerprint = finding_fingerprint("app/routes.py", "SQL Injection", "cursor.execute(q)")
+
+        payload = vulnerability_document_to_sarif(
+            doc,
+            tool_version="0.7.0-test",
+            suppressions={fingerprint: {"note": "intentional for tests"}},
+        )
+        result = payload["runs"][0]["results"][0]
+        self.assertEqual(result["suppressions"][0]["kind"], "logical")
+        self.assertEqual(result["suppressions"][0]["status"], "accepted")
+        self.assertEqual(result["suppressions"][0]["justification"], "intentional for tests")
+
+        unmatched = vulnerability_document_to_sarif(
+            doc,
+            tool_version="0.7.0-test",
+            suppressions={"sha256:other": {"note": "n"}},
+        )
+        self.assertNotIn("suppressions", unmatched["runs"][0]["results"][0])
+
+        plain = vulnerability_document_to_sarif(doc, tool_version="0.7.0-test")
+        self.assertNotIn("suppressions", plain["runs"][0]["results"][0])
 
 
 class TestWriterAtomicity(unittest.TestCase):

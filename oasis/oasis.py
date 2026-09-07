@@ -35,6 +35,11 @@ from .helpers.embedding import (
 )
 from .helpers.langgraph_cli import LG_PIPELINE_INFO, cli_bold, cli_emit_section_banner
 from .helpers.report_project import validate_project_alias_for_cli
+from .helpers.suppressions import (
+    count_suppressed_findings,
+    load_suppressions,
+    write_suppression_candidates,
+)
 from .report import Report
 from .web import WebServer
 
@@ -374,6 +379,20 @@ class OasisScanner:
             default=None,
             metavar='PATH',
             help='UTF-8 file with extra instructions for deep analysis and PoC assist (combined with --custom-instructions)',
+        )
+        analysis_group.add_argument(
+            '--suppressions-file',
+            dest='suppressions_file',
+            type=str,
+            default=None,
+            metavar='PATH',
+            help='JSON registry of suppressed finding fingerprints; matching findings are exported with a native SARIF suppressions entry (default: none)',
+        )
+        analysis_group.add_argument(
+            '--write-suppression-candidates',
+            dest='write_suppression_candidates',
+            action='store_true',
+            help='Write suppression_candidates.json in the run output listing every finding fingerprint to copy into a suppressions registry',
         )
         analysis_group.add_argument('-t', '--threshold', type=float, default=DEFAULT_ARGS['THRESHOLD'], 
                                     help=f'Similarity threshold (default: {DEFAULT_ARGS["THRESHOLD"]})')
@@ -791,6 +810,15 @@ class OasisScanner:
             language=getattr(self.args, 'language', 'en')
         )
 
+        suppressions_file = getattr(self.args, "suppressions_file", None)
+        if suppressions_file:
+            self.report.suppressed_registry = load_suppressions(Path(suppressions_file))
+            logger.info(
+                "Suppressions registry: %d fingerprint(s) loaded from %s",
+                len(self.report.suppressed_registry),
+                suppressions_file,
+            )
+
         web_server = None
         if self.args.web:
             self._warn_web_mode_ignores_scan_flags()
@@ -1120,6 +1148,23 @@ class OasisScanner:
         result = self.run_analysis_mode(main_models, [scan_model_name], vuln_mapping)
         if not result:
             return 1
+
+        # Suppression registry hooks: candidate list + end-of-run summary
+        if getattr(self.args, "write_suppression_candidates", False):
+            try:
+                candidates_count = write_suppression_candidates(Path(self.report.output_dir))
+                logger.info("Suppression candidates: %d finding(s) listed", candidates_count)
+            except OSError as exc:
+                logger.warning("Suppression candidates generation failed: %s", exc)
+
+        registry = getattr(self.report, "suppressed_registry", None)
+        if registry:
+            suppressed_count = count_suppressed_findings(Path(self.report.output_dir), registry)
+            if suppressed_count:
+                logger.info(
+                    "Suppressed findings in this run: %d (exported with SARIF suppressions)",
+                    suppressed_count,
+                )
 
         # Output cache file location
         logger.info(f"\nCache file: {self.embedding_manager.cache_file}")

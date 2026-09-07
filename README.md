@@ -54,6 +54,7 @@
 | [Run with Docker](#readme-docker) | Compose, `docker run`, web from container |
 | [Cache Management](#readme-cache) | Embeddings and scan caches |
 | [Audit Mode](#readme-audit) | Pre-scan audit, structured `audit_report.json` |
+| [Suppression registry](#readme-suppressions) | Fingerprint registry, SARIF suppressions, candidates |
 | [Web Interface](#readme-web) | `--web`, security |
 | [Changelog](#readme-changelog) | Release notes |
 | [Contributing](#readme-contributing) | PRs and issues |
@@ -267,6 +268,8 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 - **`--custom-instructions`**: Extra text appended to deep-analysis and **`--poc-assist`** prompts (merged with the file variant below; does **not** inject into the dashboard assistant system prompt—the assistant uses the canonical report JSON and optional RAG).
 - **`--custom-instructions-file`**: UTF-8 file merged with **`--custom-instructions`** (file first, then inline text).
 - `--threshold` `-t`: Similarity threshold (default: 0.5)
+- **`--suppressions-file` `PATH`**: JSON registry of suppressed finding fingerprints; matching findings are exported with a native **SARIF suppressions** entry. See [Suppression registry](#readme-suppressions).
+- **`--write-suppression-candidates`**: Write `suppression_candidates.json` in the run output listing every finding fingerprint to copy into a registry.
 - `--vulns` `-v`: Vulnerability types to check (comma-separated or 'all')
 - `--chunk-size` `-ch`: Maximum size of text chunks for embedding (default: auto-detected)
 
@@ -710,6 +713,44 @@ oasis --input [path_to_analyze] --audit -em qwen3-embedding:4b,bge-m3
    ```
 
 The Audit Mode is especially valuable for large codebases where a full scan might be time-consuming, allowing you to make informed decisions about where to focus your security analysis efforts.
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-suppressions"></a>
+
+## 🧹 Suppression registry
+
+OASIS can persist triage decisions ("this finding is a known false positive") in a **suppressions registry** and carry them into future scans.
+
+### Registry format
+
+A JSON file (recommended location: **`<project>/.oasis_suppressions.json`**) mapping **finding fingerprints** to a triage entry:
+
+```json
+{
+  "version": 1,
+  "suppressions": {
+    "sha256:9f2c…": { "note": "intentional test sink, covered by unit tests" }
+  }
+}
+```
+
+A flat `{"sha256:…": "note"}` form is also accepted. The **fingerprint** is a stable content hash of (file path + vulnerability type + normalized vulnerable snippet), so the same unfixed finding keeps its identity across runs even when titles, severities, or chunk boundaries change. Missing or malformed registry files fail open (the scan runs, a warning is logged).
+
+### Usage
+
+```bash
+# 1. List every finding fingerprint of a run to build your registry
+oasis -i ./my-project -m qwen2.5-coder:14b --write-suppression-candidates
+# → security_reports/<project>/<run>/suppression_candidates.json
+
+# 2. Copy the fingerprints you consider false positives into .oasis_suppressions.json with a note
+
+# 3. Future runs mark matching findings in the SARIF export
+oasis -i ./my-project -m qwen2.5-coder:14b --suppressions-file .oasis_suppressions.json -of sarif
+```
+
+Matching findings are **not removed** — they are exported with a native SARIF 2.1.0 `suppressions` entry (`kind: "logical"`, `status: "accepted"`, your note as justification), so GitHub Code Scanning and other SARIF consumers can filter them, and the canonical JSON stays untouched for auditability. A log line summarizes how many findings matched the registry at the end of the run.
 
 <p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
 
