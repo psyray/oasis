@@ -34,6 +34,12 @@ from .helpers.embedding import (
     resolve_embed_models,
 )
 from .helpers.langgraph_cli import LG_PIPELINE_INFO, cli_bold, cli_emit_section_banner
+from .helpers.ci_gate import (
+    EXIT_FINDINGS_ABOVE_THRESHOLD,
+    evaluate_fail_on_gate,
+    log_fail_on_gate,
+    normalize_severity,
+)
 from .helpers.report_project import validate_project_alias_for_cli
 from .helpers.suppressions import (
     count_suppressed_findings,
@@ -417,6 +423,14 @@ class OasisScanner:
             dest='write_suppression_candidates',
             action='store_true',
             help='Write suppression_candidates.json in the run output listing every finding fingerprint to copy into a suppressions registry',
+        )
+        analysis_group.add_argument(
+            '--fail-on',
+            dest='fail_on',
+            type=str,
+            default=None,
+            metavar='SEVERITY',
+            help='Exit with code 3 when the run reports findings at or above this severity [critical, high, medium, low] (case-insensitive)',
         )
         analysis_group.add_argument('-t', '--threshold', type=float, default=DEFAULT_ARGS['THRESHOLD'], 
                                     help=f'Similarity threshold (default: {DEFAULT_ARGS["THRESHOLD"]})')
@@ -985,6 +999,15 @@ class OasisScanner:
             self.primary_embed_model = primary_embed_model
         except EmbedModelValueError as exc:
             return self._handle_argument_errors(str(exc))
+
+        fail_on_raw = getattr(self.args, "fail_on", None)
+        if fail_on_raw is not None:
+            fail_on = normalize_severity(fail_on_raw)
+            if fail_on is None:
+                return self._handle_argument_errors(
+                    "Invalid --fail-on value: expected one of critical, high, medium, low"
+                )
+            self.args.fail_on = fail_on
         self.chunk_size_is_manual = getattr(self.args, "chunk_size", None) is not None
         display_logo()
         return True
@@ -1189,6 +1212,13 @@ class OasisScanner:
                     "Suppressed findings in this run: %d (exported with SARIF suppressions)",
                     suppressed_count,
                 )
+
+        # CI gate: exit non-zero when findings meet the severity threshold
+        if getattr(self.args, "fail_on", None):
+            gate = evaluate_fail_on_gate(self.report.output_dir, self.args.fail_on)
+            log_fail_on_gate(gate)
+            if gate.get("tripped"):
+                return EXIT_FINDINGS_ABOVE_THRESHOLD
 
         # Output cache file location
         logger.info(f"\nCache file: {self.embedding_manager.cache_file}")

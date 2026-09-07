@@ -47,6 +47,7 @@
 | [Hardware Requirements](#readme-hardware) | CPUs, GPU, scaling |
 | [Advanced Usage Examples](#readme-advanced-usage-examples) | Example CLI invocations |
 | [Command Line Arguments](#readme-command-line-args) | Flags, web/assistant options, streaming |
+| [CI integration](#readme-ci-integration) | `--fail-on` gate, exit codes, GitHub Actions example |
 | [Model providers](#readme-model-providers) | Ollama / OpenAI-compatible backends (vLLM, LM Studio...) |
 | [Getting the Most out of OASIS](#readme-best-practices) | Models, LangGraph workflow, tips |
 | [Supported Vulnerability Types](#readme-vuln-types) | Type tags reference table |
@@ -272,6 +273,7 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 - `--threshold` `-t`: Similarity threshold (default: 0.5)
 - **`--suppressions-file` `PATH`**: JSON registry of suppressed finding fingerprints; matching findings are exported with a native **SARIF suppressions** entry. See [Suppression registry](#readme-suppressions).
 - **`--write-suppression-candidates`**: Write `suppression_candidates.json` in the run output listing every finding fingerprint to copy into a registry.
+- **`--fail-on` `SEVERITY`**: Exit with code **3** when the run reports findings at or above this severity [critical, high, medium, low] (case-insensitive). See [CI integration](#readme-ci-integration).
 - `--vulns` `-v`: Vulnerability types to check (comma-separated or 'all')
 - `--chunk-size` `-ch`: Maximum size of text chunks for embedding (default: auto-detected)
 
@@ -338,6 +340,45 @@ Optional **`OASIS_*`** variables tune timeouts and heuristic budgets without edi
 - **`OASIS_STRUCTURED_DEGENERACY_*`** — thresholds for repetitive structured-output detection.
 
 Higher limits increase worst-case latency and memory use on the Ollama host.
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-ci-integration"></a>
+
+## 🤝 CI integration
+
+### Failing a pipeline on severity (`--fail-on`)
+
+Pass **`--fail-on <SEVERITY>`** to make OASIS exit with code **3** when the finished run reports at least one finding at or above the given severity (`critical`, `high`, `medium`, `low`; case-insensitive). The gate reads the canonical JSON documents of the run after analysis completes, so it covers every deep model of the pass. Operational failures still exit with **1** and argparse usage errors with **2**, keeping the three outcomes distinguishable in CI.
+
+```bash
+oasis -i ./my-project -m qwen2.5-coder:14b --fail-on high
+# → exit 0: no finding at or above High
+# → exit 3: N finding(s) at or above High
+# → exit 1: operational failure (backend unreachable, no models, ...)
+```
+
+The gate summary is logged at the end of the run with per-severity counts, e.g. `CI gate --fail-on high: findings at or above threshold: 2 (low=3, medium=1, high=2, critical=0)`.
+
+### GitHub Actions example
+
+Combine `--fail-on` with the SARIF export (`-of sarif` or `all`) and upload the result to GitHub Code Scanning:
+
+```yaml
+- name: Run OASIS security scan
+  id: oasis
+  continue-on-error: true
+  run: |
+    oasis -i . -m qwen2.5-coder:14b --fail-on high -of sarif
+
+- name: Upload SARIF
+  if: always()
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: security_reports/**/sarif/*.sarif
+```
+
+> The scan step uses `continue-on-error` so the SARIF upload still happens when the gate trips (exit 3); the job result then reflects the OASIS exit code.
 
 <p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
 
