@@ -266,6 +266,46 @@ class TestParameterCountNumeric(unittest.TestCase):
         self.assertEqual(OllamaManager._parameter_count_numeric({}), 0.0)
 
 
+class TestModelDisplayKeepsTag(unittest.TestCase):
+    """Selection-list labels must keep the Ollama version tag so variants of the
+    same base model stay distinguishable (issue #61)."""
+
+    def test_build_formatted_string_keeps_version_tag(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        out = mgr._build_formatted_string(
+            "qwen2.5-coder:7b", "🤖 ", "7.6B params", "32k ctx", "🤖 qwen2.5"
+        )
+        self.assertIn("qwen2.5-coder:7b", out)
+        self.assertIn("based on 🤖 qwen2.5", out)
+
+    def test_format_model_display_keeps_tag_with_model_info(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr._get_model_info = MagicMock(
+            return_value={
+                "parameters": {"num_ctx": 32768},
+                "details": {"parameter_size": "7.6B"},
+            }
+        )
+        self.assertIn("qwen2.5-coder:7b", mgr.format_model_display("qwen2.5-coder:7b"))
+
+    def test_format_model_display_keeps_tag_when_api_fails(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr._get_model_info = MagicMock(side_effect=RuntimeError("boom"))
+        self.assertIn("deepseek-coder-v2:16b", mgr.format_model_display("deepseek-coder-v2:16b"))
+
+    def test_same_base_with_different_tags_formats_differently(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        info = {
+            "parameters": {"num_ctx": 32768},
+            "details": {"parameter_size": "7.6B"},
+        }
+        mgr._get_model_info = MagicMock(return_value=info)
+        first = mgr.format_model_display("qwen2.5-coder:7b")
+        second = mgr.format_model_display("qwen2.5-coder:14b")
+        self.assertNotEqual(first, second)
+        self.assertIn("qwen2.5-coder:14b", second)
+
+
 class TestEffectiveContextSource(unittest.TestCase):
     """``ps()`` must win over Modelfile and GGUF sources for runtime num_ctx."""
 
