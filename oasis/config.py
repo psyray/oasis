@@ -26,6 +26,8 @@ Section overview:
 
 - **Ollama / HTTP client** — chunk LLM timeouts, structured ``num_predict`` ceiling, HTTP client
   timeout, slow-call warning (model I/O and transport).
+- **Model backends (providers)** — Ollama native or OpenAI-compatible servers (vLLM, LM Studio,
+  llama.cpp server, LocalAI, ...): ``OASIS_LLM_PROVIDER``, ``OASIS_OPENAI_*``.
 - **Structured-output degeneracy** — heuristics when validating deep structured JSON from models.
 - **LangGraph context expansion** — padding and max chars around suspicious spans.
 - **Heuristic tuning (grouped)** — ties structured-output degeneracy and ``POC_*`` caps; read
@@ -69,6 +71,15 @@ CLI debug only (orthogonal to reports):
 Transport / diagnostics (same file, separate concern):
 
 - ``OASIS_OLLAMA_HTTP_CLIENT_TIMEOUT_SEC``, ``OASIS_OLLAMA_SLOW_CALL_WARNING_SEC``
+
+Model backends / providers (see ``oasis/backends/``):
+
+- ``OASIS_LLM_PROVIDER`` (``ollama`` | ``openai``)
+- ``OASIS_OPENAI_BASE_URL`` (e.g. ``https://llm.example/v1``)
+- ``OASIS_OPENAI_API_KEY``
+- ``OASIS_OPENAI_CTX_TOKENS``
+- ``OASIS_OPENAI_HTTP_TIMEOUT_SEC``
+- ``OASIS_OPENAI_STRUCTURED_OUTPUT`` (``auto`` | ``on`` | ``off``)
 
 Static lists (extensions, models, languages, …) follow those sections.
 """
@@ -296,6 +307,45 @@ OLLAMA_SLOW_CALL_WARNING_SEC = _parse_env_float(
     45.0,
     minimum=1.0,
 )
+
+# =============================================================================
+# Model backends — provider selection (Ollama native or OpenAI-compatible server)
+# =============================================================================
+# The OpenAI-compatible backend covers vLLM, LM Studio, llama.cpp server,
+# LocalAI, LiteLLM, ... (anything exposing /v1/chat/completions).
+LLM_PROVIDER_OLLAMA = "ollama"
+LLM_PROVIDER_OPENAI = "openai"
+LLM_PROVIDER_CHOICES = (LLM_PROVIDER_OLLAMA, LLM_PROVIDER_OPENAI)
+LLM_PROVIDER_ENV: Optional[str] = os.environ.get("OASIS_LLM_PROVIDER", "").strip().lower() or None
+
+# OpenAI-compatible server settings (CLI --api-base / --api-key override these).
+OPENAI_COMPAT_BASE_URL = os.environ.get("OASIS_OPENAI_BASE_URL", "").strip() or "http://localhost:8000/v1"
+# Local servers commonly ignore auth (vLLM accepts any bearer); keep a stable dummy.
+OPENAI_COMPAT_API_KEY = os.environ.get("OASIS_OPENAI_API_KEY", "").strip() or "local"
+
+# OpenAI-compatible servers do not expose per-model context windows over the
+# protocol; deployments declare the value here (0 = unknown, fallbacks apply).
+OPENAI_CTX_TOKENS = _parse_env_int("OASIS_OPENAI_CTX_TOKENS", 0, minimum=0)
+
+_openai_http_timeout = max(CHUNK_ANALYZE_TIMEOUT + 120, 240)
+OPENAI_HTTP_CLIENT_TIMEOUT_SEC = _parse_env_int(
+    "OASIS_OPENAI_HTTP_TIMEOUT_SEC",
+    _openai_http_timeout,
+    minimum=max(60, CHUNK_ANALYZE_TIMEOUT),
+)
+
+# Structured-output enforcement on OpenAI-compatible servers:
+#   "auto" — send response_format JSON schema; on HTTP 400/404/422 retry once
+#            without it and append the schema to the prompt (server compat).
+#   "on"   — always send response_format, surface server errors.
+#   "off"  — never send response_format; schema hint goes into the prompt.
+_raw_openai_structured = os.environ.get("OASIS_OPENAI_STRUCTURED_OUTPUT", "auto").strip().lower()
+OPENAI_STRUCTURED_OUTPUT: str = _raw_openai_structured if _raw_openai_structured in ("auto", "on", "off") else "auto"
+if os.environ.get("OASIS_OPENAI_STRUCTURED_OUTPUT", "auto").strip().lower() not in ("auto", "on", "off"):
+    logger.warning(
+        "Invalid OASIS_OPENAI_STRUCTURED_OUTPUT=%r; expected auto|on|off. Using 'auto'.",
+        _raw_openai_structured,
+    )
 
 # =============================================================================
 # Heuristic tuning — structured-output degeneracy + PoC pipeline (read before changing one knob)

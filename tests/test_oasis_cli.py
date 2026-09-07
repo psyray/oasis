@@ -531,7 +531,7 @@ class TestOllamaInitOrdering(unittest.TestCase):
         fake_manager.ensure_model_available.return_value = True
         fake_manager.detect_optimal_chunk_size.return_value = 36864
 
-        with patch("oasis.oasis.OllamaManager", return_value=fake_manager):
+        with patch("oasis.oasis.create_model_manager", return_value=fake_manager):
             result = scanner._init_ollama()
 
         self.assertTrue(result)
@@ -561,7 +561,7 @@ class TestOllamaInitOrdering(unittest.TestCase):
         fake_manager.check_connection.return_value = True
         fake_manager.ensure_model_available.return_value = False
 
-        with patch("oasis.oasis.OllamaManager", return_value=fake_manager):
+        with patch("oasis.oasis.create_model_manager", return_value=fake_manager):
             result = scanner._init_ollama()
 
         self.assertFalse(result)

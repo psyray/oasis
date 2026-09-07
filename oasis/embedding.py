@@ -29,6 +29,7 @@ _OLLAMA_CONTEXT_ERROR_FRAGMENTS = (
 )
 
 # Import from other modules
+from .backends import create_model_manager, ModelBackend
 from .ollama_manager import OllamaManager
 from .schemas.function_extract import FunctionExtractResponse
 from .tools import create_cache_dir, logger, chunk_content, sanitize_name, open_file
@@ -39,13 +40,13 @@ from .helpers.embedding import resolve_embed_models, resolve_valid_embedding_inp
 
 
 class EmbeddingManager:
-    def __init__(self, args, ollama_manager: OllamaManager):
+    def __init__(self, args, ollama_manager: ModelBackend):
         """
         Initialize the embedding manager
 
         Args:
             args: Arguments
-            ollama_manager: Ollama manager
+            ollama_manager: Model backend (Ollama or OpenAI-compatible)
         """
         try:
             self.ollama_manager = ollama_manager
@@ -151,6 +152,9 @@ class EmbeddingManager:
                 chunk_size=self.chunk_size,
                 analyze_by_function=self.analyze_by_function,
                 api_url=self.ollama_manager.api_url,
+                provider=getattr(self.ollama_manager, "provider", None),
+                api_base=getattr(self.ollama_manager, "api_base", None),
+                api_key=getattr(self.ollama_manager, "api_key", None),
             )
             for file_path in files
             if self.analyze_by_function or str(file_path) not in self.code_base
@@ -1001,8 +1005,8 @@ def process_file_parallel(args: tuple) -> Tuple[str, str, List[float], bool, Opt
         Tuple of (file_path, content, embedding, is_function_analysis, function_embeddings)
     """
     try:
-        # Create a new Ollama client for each process
-        ollama_manager = OllamaManager(args.api_url)
+        # Create a new backend client for each process
+        ollama_manager = create_model_manager(args)
 
         # Read file content
         if not (content := open_file(args.input_path)):
@@ -1209,7 +1213,7 @@ def generate_content_embedding(
     content: str,
     model: str,
     chunk_size: int = DEFAULT_ARGS['CHUNK_SIZE'],
-    ollama_manager: OllamaManager = None,
+    ollama_manager: ModelBackend = None,
 ) -> Optional[List[float]]:
     """
     Generate embedding for content.
@@ -1255,7 +1259,7 @@ def generate_content_embedding(
         chunk_limit=max(EMBEDDING_FALLBACK_MIN_CHUNK_SIZE, int(chunk_size * 0.5)),
     )
 
-def extract_functions_from_file(file_path: str, content: str, extraction_model: str = EXTRACT_FUNCTIONS['MODEL'], ollama_manager: OllamaManager = None) -> Dict[str, str]:
+def extract_functions_from_file(file_path: str, content: str, extraction_model: str = EXTRACT_FUNCTIONS['MODEL'], ollama_manager: ModelBackend = None) -> Dict[str, str]:
     """
     Extract functions from file content
     

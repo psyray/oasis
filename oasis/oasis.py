@@ -15,6 +15,7 @@ from .config import (
     EMBEDDING_DETECTED_CHUNK_SIZE_MAX,
     EMBEDDING_DETECTED_CHUNK_SIZE_MIN,
     LANGUAGES,
+    LLM_PROVIDER_CHOICES,
     MAX_CHUNK_SIZE,
     MODEL_EMOJIS,
     REPORT,
@@ -23,7 +24,8 @@ from .config import (
 
 # Import from other modules
 from .tools import generate_timestamp, setup_logging, logger, display_logo, get_vulnerability_mapping
-from .ollama_manager import OllamaManager
+from .backends import create_model_manager
+from .ollama_manager import OllamaManager  # noqa: F401  (compat: tests patch this symbol)
 from .embedding import EmbeddingManager
 from .analyze import SecurityAnalyzer, EmbeddingAnalyzer
 from .helpers.embedding import (
@@ -404,6 +406,37 @@ class OasisScanner:
         )
         model_group.add_argument('-lm', '--list-models', action='store_true',
                                 help='List available models and exit')
+        model_group.add_argument(
+            '--provider',
+            dest='provider',
+            choices=LLM_PROVIDER_CHOICES,
+            default=None,
+            metavar='{ollama,openai}',
+            help=(
+                'Model backend: "ollama" (native Ollama API, auto-pull) or "openai" '
+                '(OpenAI-compatible server: vLLM, LM Studio, llama.cpp, LocalAI...) '
+                '(default: ollama, env OASIS_LLM_PROVIDER)'
+            ),
+        )
+        model_group.add_argument(
+            '--api-base',
+            dest='api_base',
+            type=str,
+            default=None,
+            metavar='URL',
+            help=(
+                'Base URL of the OpenAI-compatible server, e.g. https://llm.example.com/v1 '
+                '(default: http://localhost:8000/v1, env OASIS_OPENAI_BASE_URL)'
+            ),
+        )
+        model_group.add_argument(
+            '--api-key',
+            dest='api_key',
+            type=str,
+            default=None,
+            metavar='KEY',
+            help='API key for the OpenAI-compatible server (default: env OASIS_OPENAI_API_KEY, else "local")',
+        )
         
         # Cache Management
         cache_group = parser.add_argument_group('Cache Management', 'Options for managing cache files')
@@ -432,6 +465,30 @@ class OasisScanner:
             help=(
                 'Ollama API URL for dashboard assistant chat (default: same as --ollama-url when unset in env OASIS_WEB_OLLAMA_URL)'
             ),
+        )
+        web_group.add_argument(
+            '--web-provider',
+            dest='web_provider',
+            choices=LLM_PROVIDER_CHOICES,
+            default=None,
+            metavar='{ollama,openai}',
+            help='Model backend for the dashboard assistant (default: same as --provider)',
+        )
+        web_group.add_argument(
+            '--web-api-base',
+            dest='web_api_base',
+            type=str,
+            default=None,
+            metavar='URL',
+            help='OpenAI-compatible base URL for the dashboard assistant (default: same as --api-base)',
+        )
+        web_group.add_argument(
+            '--web-api-key',
+            dest='web_api_key',
+            type=str,
+            default=None,
+            metavar='KEY',
+            help='API key for the dashboard assistant backend (default: same as --api-key)',
         )
         web_group.add_argument(
             '--web-embed-model',
@@ -744,9 +801,15 @@ class OasisScanner:
                 web_password=self.args.web_password,
                 web_port=self.args.web_port,
                 web_ollama_url=getattr(self.args, "web_ollama_url", None) or os.environ.get("OASIS_WEB_OLLAMA_URL"),
+                web_provider=getattr(self.args, "web_provider", None),
+                web_api_base=getattr(self.args, "web_api_base", None),
+                web_api_key=getattr(self.args, "web_api_key", None),
                 web_embed_model=getattr(self.args, "web_embed_model", None),
                 web_assistant_rag=bool(getattr(self.args, "web_assistant_rag", True)),
                 default_ollama_url=getattr(self.args, "ollama_url", None),
+                default_provider=getattr(self.args, "provider", None),
+                default_api_base=getattr(self.args, "api_base", None),
+                default_api_key=getattr(self.args, "api_key", None),
             )
             self.report.set_progress_notifier(web_server.emit_scan_progress)
 
@@ -883,20 +946,27 @@ class OasisScanner:
         Returns:
             True if Ollama is running and connected, False otherwise
         """
-        # Initialize Ollama manager
+        # Initialize model backend (Ollama native or OpenAI-compatible server)
         if ollama_url is None:
             ollama_url = self.args.ollama_url
-        self.ollama_manager = OllamaManager(ollama_url)
+        self.ollama_manager = create_model_manager(self.args, ollama_url=ollama_url)
 
-        if self.ollama_manager.get_client() is None:
-            logger.error("Ollama is not running. Please start Ollama and try again.")
+        try:
+            client_ready = self.ollama_manager.get_client() is not None
+        except ConnectionError:
+            client_ready = False
+        if not client_ready:
+            logger.error(
+                "LLM backend is not reachable (%s). Please start it and try again.",
+                getattr(self.ollama_manager, "api_url", None) or getattr(self.ollama_manager, "api_base", ""),
+            )
             return False
 
         if not check_embeddings:
             return True
 
         cli_emit_section_banner(
-            logger, "🔌", "Ollama & embed model", "context length, chunk size, model pull"
+            logger, "🔌", "LLM backend & embed model", "connection, context length, chunk size, model availability"
         )
 
         # Check Ollama connection
@@ -973,7 +1043,7 @@ class OasisScanner:
         # Get available models
         available_models = self.ollama_manager.get_available_models()
         if not available_models:
-            logger.error("No models available. Please check Ollama installation.")
+            logger.error("No models available. Please check the LLM backend configuration (--provider / --api-base / --ollama-url).")
             return 1
 
         # Get selected models (either from args or interactive selection)
@@ -1108,15 +1178,19 @@ class OasisScanner:
             False: Error occurred, program should exit with error code
         """
         try:
-            self._init_ollama(self.args.ollama_url, check_embeddings=False)
-                
-            logger.info("🔎 Querying available models from Ollama...")
+            if not self._init_ollama(self.args.ollama_url, check_embeddings=False):
+                logger.error(
+                    "Cannot reach the LLM backend; check --provider / --api-base / --ollama-url and that the server is running."
+                )
+                return False
+
+            logger.info("🔎 Querying available models from the LLM backend...")
             
             # Display formatted list of models
             available_models = self.ollama_manager.get_available_models(show_formatted=True)
             
             if not available_models:
-                logger.error("No models available. Please check your Ollama installation.")
+                logger.error("No models available. Please check your LLM backend configuration.")
             
             # Indicate special case handling was successful
             return None  # Special return value to indicate early termination

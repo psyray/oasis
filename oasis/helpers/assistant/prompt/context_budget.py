@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 if TYPE_CHECKING:
-    from oasis.ollama_manager import OllamaManager
+    from oasis.backends import ModelBackend
 
 from .prompt_tuning import (
     resolve_assistant_chars_per_token_guess,
@@ -87,7 +87,7 @@ class AssistantBudgetMeta:
 def assistant_total_system_budget_chars(
     *,
     fallback_total: int,
-    ollama_manager: Optional["OllamaManager"],
+    ollama_manager: Optional["ModelBackend"],
     chat_model: str,
     approx_message_chars_in_request: int,
     chars_per_token_guess: Optional[int] = None,

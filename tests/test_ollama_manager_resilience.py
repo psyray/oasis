@@ -22,7 +22,7 @@ class TestOllamaManagerResilience(unittest.TestCase):
         fake_client = MagicMock()
         fake_client.list.side_effect = RuntimeError("simulated transport failure")
 
-        with patch("oasis.ollama_manager.ollama.Client", return_value=fake_client):
+        with patch("oasis.backends.ollama_backend.ollama.Client", return_value=fake_client):
             mgr.client = None
             with self.assertRaises(ConnectionError) as ctx:
                 mgr.get_client()
@@ -33,7 +33,7 @@ class TestOllamaManagerResilience(unittest.TestCase):
         fake_client = MagicMock()
         fake_client.list.side_effect = ConnectionError("connection refused")
 
-        with patch("oasis.ollama_manager.ollama.Client", return_value=fake_client):
+        with patch("oasis.backends.ollama_backend.ollama.Client", return_value=fake_client):
             mgr.client = None
             self.assertFalse(mgr.check_connection())
 

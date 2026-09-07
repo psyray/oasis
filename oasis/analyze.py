@@ -27,6 +27,7 @@ from .config import (
 
 # Import from other modules
 from .ollama_manager import OllamaManager
+from .backends import create_model_manager, ModelBackend
 from .helpers.misc import absolute_snippet_lines_in_file
 from .tools import chunk_content_with_spans, logger, calculate_similarity, sanitize_name
 from .report import (
@@ -198,7 +199,7 @@ class SecurityAnalyzer:
     Entry: ``process_analysis_with_model`` → ``invoke_oasis_langgraph``.
     """
 
-    def __init__(self, args, llm_model: str, embedding_manager: EmbeddingManager, ollama_manager: OllamaManager,
+    def __init__(self, args, llm_model: str, embedding_manager: EmbeddingManager, ollama_manager: ModelBackend,
                  scan_model: str = None,
                  structured_output_failure_handler: Optional[StructuredOutputFailureHandler] = None):
         """
@@ -208,7 +209,7 @@ class SecurityAnalyzer:
             args: Command line arguments
             llm_model: Main model to use for deep analysis
             embedding_manager: Embedding manager to use for embeddings
-            ollama_manager: Ollama manager for model interactions
+            ollama_manager: Model backend for LLM interactions (Ollama or OpenAI-compatible)
             scan_model: Lightweight model for initial scanning (if None, uses llm_model)
         """
         try:
@@ -2006,7 +2007,10 @@ class EmbeddingAnalyzer:
         common_args = {
             "vulnerability": vuln,
             "embedding_model": self.embedding_model,
-            "api_url": self.ollama_manager.api_url
+            "api_url": self.ollama_manager.api_url,
+            "provider": getattr(self.ollama_manager, "provider", None),
+            "api_base": getattr(self.ollama_manager, "api_base", None),
+            "api_key": getattr(self.ollama_manager, "api_key", None),
         }
         
         # Process each element based on analysis mode
@@ -2112,8 +2116,8 @@ def analyze_item_parallel(args: tuple) -> Dict:
         Dict with analysis results
     """
     try:
-        # Create a new Ollama client for each process
-        client = OllamaManager(args.api_url).get_client()
+        # Create a new backend client for each process
+        client = create_model_manager(args).get_client()
         
         # Build vulnerability embedding prompt directly
         vuln_data = args.vulnerability
