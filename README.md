@@ -47,6 +47,7 @@
 | [Hardware Requirements](#readme-hardware) | CPUs, GPU, scaling |
 | [Advanced Usage Examples](#readme-advanced-usage-examples) | Example CLI invocations |
 | [Command Line Arguments](#readme-command-line-args) | Flags, web/assistant options, streaming |
+| [Model providers](#readme-model-providers) | Ollama / OpenAI-compatible backends (vLLM, LM Studio...) |
 | [Getting the Most out of OASIS](#readme-best-practices) | Models, LangGraph workflow, tips |
 | [Supported Vulnerability Types](#readme-vuln-types) | Type tags reference table |
 | [Output Structure](#readme-output-structure) | `security_reports/`, project slug, canonical JSON |
@@ -69,6 +70,7 @@
 - 🤖 **Dashboard assistant**: In the report modal, the AI assistant triages **single-vulnerability JSON** reports or **executive / scan-wide** mode (aggregated JSON under the run) with optional **RAG** over the local embedding cache, a **chat model** selector (Ollama tags), **Markdown** replies, persisted **chat sessions** keyed by the canonical report path, and configurable Ollama/RAG flags (`--web-ollama-url`, `--web-embed-model`, `--web-assistant-rag`)
 - 🛡️ **Finding validation agent**: The assistant can run a deterministic, code-driven investigation for one selected finding via `POST /api/assistant/investigate`, then return a citation-backed exploitability verdict with confidence. Optional LLM narrative can be added on top, but it is constrained to stay consistent with the deterministic result. See [Finding Validation Principle](#readme-finding-validation-principle) for full behavior and guardrails.
 - 🔍 **Multi-Model Analysis**: Leverage multiple Ollama models for comprehensive security scanning
+- 🤝 **OpenAI-compatible backends**: Run the same pipeline against **vLLM**, LM Studio, llama.cpp server, LocalAI, ... via `--provider openai --api-base URL`
 - 🔄 **Two-Phase Scanning**: Use lightweight models for initial scanning and powerful models for deep analysis
 - 🧠 **LangGraph Orchestration**: Single pipeline (discover → scan → expand → deep → verify → report, optional PoC assist) with bounded context-expand retries
 - 🔄 **Interactive Model Selection**: Guided selection of scan and analysis models with parameter-based filtering
@@ -275,6 +277,11 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 - `--small-model-thinking` `-smt`: Enable/disable thinking for the quick scan model [yes,no] (default: no)
 - `--embed-model` `-em`: Embedding model(s); in audit mode, supports a comma-separated list (example: `-em nomic-embed-text,bge-m3`) (default: nomic-embed-text)
 - `--list-models` `-lm`: List available models and exit
+- **`--provider`**: Model backend — `ollama` (native API, auto-pull) or `openai` (OpenAI-compatible server: vLLM, LM Studio, llama.cpp, LocalAI...) (default: `ollama`, env `OASIS_LLM_PROVIDER`)
+- **`--api-base`**: Base URL of the OpenAI-compatible server, e.g. `https://llm.example.com/v1` (default: `http://localhost:8000/v1`, env `OASIS_OPENAI_BASE_URL`)
+- **`--api-key`**: API key for the OpenAI-compatible server (default: env `OASIS_OPENAI_API_KEY`, else `local`; never logged)
+
+See [Model providers](#readme-model-providers) for details and per-server examples.
 
 ### Cache Management
 - `--clear-cache-embeddings` `-cce`: Clear embeddings cache before starting
@@ -287,6 +294,9 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 - `--web-password` `-wpw`: Web interface password (if not specified, a random password will be generated)
 - `--web-port` `-wp`: Web interface port (default: 5000)
 - **`--web-ollama-url`**: Ollama HTTP API URL for the in-dashboard assistant (overridden by `OASIS_WEB_OLLAMA_URL`, otherwise same as `--ollama-url`).
+- **`--web-provider`**: Model backend for the dashboard assistant (default: same as `--provider`, env `OASIS_WEB_LLM_PROVIDER`).
+- **`--web-api-base`**: OpenAI-compatible base URL for the dashboard assistant (default: same as `--api-base`, env `OASIS_WEB_OPENAI_BASE_URL`).
+- **`--web-api-key`**: API key for the dashboard assistant backend (default: same as `--api-key`, env `OASIS_WEB_OPENAI_API_KEY`).
 - **`--web-embed-model`**: Embedding model for optional RAG over the local `.oasis_cache` pickle (defaults to the report’s `embed_model` or `nomic-embed-text`).
 - **`--web-assistant-rag` / `--no-web-assistant-rag`**: Use embedding-cache retrieval in assistant answers (default: on).
 
@@ -302,13 +312,18 @@ Assistant replies are rendered as **Markdown** (sanitized HTML). Model “thinki
 
 ### Special Modes
 - `--audit` `-a`: Run embedding distribution analysis
-- `--ollama-url` `-ol`: Ollama URL (default: http://localhost:11434)
+- `--ollama-url` `-ol`: Ollama URL (default: http://localhost:11434; used when `--provider` is `ollama`)
 - `--version` `-V`: Show OASIS version and exit
 
 ### Environment overrides (advanced)
 
 Optional **`OASIS_*`** variables tune timeouts and heuristic budgets without editing code (see `oasis/config.py` for the full list). Examples:
 
+- **`OASIS_LLM_PROVIDER`** — default model backend (`ollama` | `openai`) when `--provider` is not set.
+- **`OASIS_OPENAI_BASE_URL`** — OpenAI-compatible base URL when `--api-base` is not set.
+- **`OASIS_OPENAI_API_KEY`** — API key for OpenAI-compatible servers (never logged).
+- **`OASIS_OPENAI_CTX_TOKENS`** — declared context window (tokens) of OpenAI-compatible models; used for chunk sizing and assistant budget (the OpenAI protocol does not expose it).
+- **`OASIS_OPENAI_STRUCTURED_OUTPUT`** — `auto` (default: send `response_format` JSON schema, fall back to schema-in-prompt on HTTP 4xx), `on` (always send, surface errors), `off` (schema-in-prompt only).
 - **`OASIS_WEB_OLLAMA_URL`** — Ollama base URL for the dashboard assistant when `--web-ollama-url` is not set.
 - **`OASIS_CHUNK_ANALYZE_TIMEOUT_SEC`** — server-side deadline for one Ollama generate call (seconds).
 - **`OASIS_CHUNK_DEEP_NUM_PREDICT`** — cap on structured deep output tokens (`num_predict`).
@@ -317,6 +332,37 @@ Optional **`OASIS_*`** variables tune timeouts and heuristic budgets without edi
 - **`OASIS_STRUCTURED_DEGENERACY_*`** — thresholds for repetitive structured-output detection.
 
 Higher limits increase worst-case latency and memory use on the Ollama host.
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-model-providers"></a>
+
+## 🤝 Model providers (backends)
+
+OASIS talks to local LLM servers through a **backend abstraction** (`oasis/backends/`). Two providers ship out of the box:
+
+| Provider | Flag | Servers | Notes |
+|----------|------|---------|-------|
+| `ollama` (default) | `-ol` / `--ollama-url` | Ollama | Auto-pulls missing models, detects runtime context (`ps()`), per-model `think` support |
+| `openai` | `--api-base` / `--api-key` | **vLLM**, LM Studio, llama.cpp server, LocalAI, LiteLLM, ... | Any server exposing `/v1/chat/completions`, `/v1/embeddings`, `/v1/models` |
+
+### vLLM example
+
+```bash
+oasis -i /path/to/codebase \
+  --provider openai \
+  --api-base https://llm.example.com/v1 \
+  -m Qwen/Qwen2.5-Coder-32B-Instruct \
+  -sm Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+- Model ids must exactly match what the server serves (check `oasis --provider openai --api-base URL -lm`); there is **no auto-pull** — deploy/serve the models on the server first.
+- Embeddings use the same server (`/v1/embeddings`); point `-em` at a served embedding model (e.g. `nomic-embed-text` on LM Studio / vLLM with `--task embed`).
+- Declare the model context with **`OASIS_OPENAI_CTX_TOKENS`** so chunk sizing and the assistant budget adapt (the OpenAI protocol does not expose context windows).
+- Structured outputs are sent as `response_format` JSON schemas; on servers that reject them, OASIS automatically retries with the schema appended to the prompt (see `OASIS_OPENAI_STRUCTURED_OUTPUT`).
+- Dashboard assistant: `--web-provider openai --web-api-base ...` (or nothing — it follows the scan backend by default).
+
+Provider selection precedence: `--provider` → `OASIS_LLM_PROVIDER` → auto (`openai` when an API base is set, else `ollama`).
 
 <p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
 

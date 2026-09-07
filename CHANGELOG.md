@@ -1,3 +1,15 @@
+## 🚀 [0.7.0] - 2026-09-07
+
+### ✨ Added
+
+- 🤝 **OpenAI-compatible model backend (`--provider openai`)**: OASIS now runs its full pipeline against any **OpenAI-compatible local server** — **vLLM**, LM Studio, llama.cpp server, LocalAI, LiteLLM, ... — via `--provider openai --api-base https://your-server/v1` (optional `--api-key`, never logged). Covers chat, streaming, embeddings (`/v1/embeddings`), and model listing (`/v1/models`); structured outputs are sent as `response_format` JSON schemas with an automatic schema-in-prompt retry on HTTP 4xx (`OASIS_OPENAI_STRUCTURED_OUTPUT=auto|on|off`). Because these servers do not expose model context windows, declare them with **`OASIS_OPENAI_CTX_TOKENS`** for chunk sizing and the assistant budget. Model availability is a registry check (no auto-pull), and errors list the served ids. New CLI flags: `--provider`, `--api-base`, `--api-key`, plus `--web-provider` / `--web-api-base` / `--web-api-key` for the dashboard assistant; env equivalents `OASIS_LLM_PROVIDER`, `OASIS_OPENAI_BASE_URL`, `OASIS_OPENAI_API_KEY`.
+- 🧱 **Model backend abstraction (`oasis/backends/`)**: new `ModelBackend` base class centralizes everything provider-agnostic (chat transport, model listing, interactive selection, thinking overrides, chunk-size detection) with two implementations: the native `OllamaManager` (pull / `ps()` / `show()` / `think=`) and the new `OpenAICompatManager`. A `create_model_manager` factory resolves the backend from CLI args / env (explicit flag → env → auto-detect). `oasis.ollama_manager` remains as a compatibility shim.
+
+### 🔄 Changed
+
+- 🖥️ **Provider-neutral CLI/dashboard messages**: backend initialization, model-availability errors, and dashboard banners no longer hardcode Ollama wording; the Ollama backend stays the **default** provider with unchanged flags and behavior.
+- 📚 **README**: new "Model providers (backends)" section documenting the vLLM workflow (served model ids, embeddings, context declaration, structured-output fallback) and the new flags/env vars.
+
 ## 🚀 [0.6.2] - 2026-09-07
 
 ### 🐛 Fixed
