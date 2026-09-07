@@ -1,3 +1,8 @@
+## 🚀 [0.6.2] - 2026-09-07
+
+### 🐛 Fixed
+- 🤖 **Model selection list**: interactive model selection (and the preloaded list) now shows the **full Ollama name including the version tag** (e.g. `qwen2.5-coder:7b`) instead of truncating after `:`, so different versions of the same base model are easy to tell apart (issue #61).
+
 ## 🚀 [0.6.1] - 2026-04-29
 
 ### 🐛 Fixed
