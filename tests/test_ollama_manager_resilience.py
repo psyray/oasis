@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from oasis.config import MAX_CHUNK_SIZE
 from oasis.ollama_manager import OllamaManager
 
 
@@ -202,6 +203,7 @@ class TestModelInfoNumCtx(unittest.TestCase):
 
     def test_detect_optimal_chunk_size_uses_num_ctx(self):
         mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr.get_running_num_ctx = MagicMock(return_value=None)
         mgr._get_model_info = MagicMock(
             return_value={"parameters": {"num_ctx": 1000}}
         )
@@ -209,10 +211,43 @@ class TestModelInfoNumCtx(unittest.TestCase):
 
     def test_detect_optimal_chunk_size_uses_modelinfo_without_parameters(self):
         mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr.get_running_num_ctx = MagicMock(return_value=None)
         mgr._get_model_info = MagicMock(
             return_value={"modelinfo": {"embed.context_length": 10000}}
         )
         self.assertEqual(mgr._detect_optimal_chunk_size("embed"), int(10000 * 0.9))
+
+
+class TestDetectChunkSizePrefersRuntimePs(unittest.TestCase):
+    """Chunk sizing must trust the runtime-loaded context over declarative
+    metadata, which can exceed what the embeddings runner actually enforces
+    (issue #58: show() reported 8192 while the runtime enforced 2048)."""
+
+    def test_runtime_ps_context_wins_over_metadata(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr.get_running_num_ctx = MagicMock(return_value=2048)
+        mgr._get_model_info = MagicMock(
+            return_value={"parameters": {"num_ctx": 8192}}
+        )
+        self.assertEqual(
+            mgr._detect_optimal_chunk_size("nomic-embed-text"), int(2048 * 0.9)
+        )
+
+    def test_metadata_fallback_when_model_not_loaded(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr.get_running_num_ctx = MagicMock(return_value=None)
+        mgr._get_model_info = MagicMock(
+            return_value={"parameters": {"num_ctx": 8192}}
+        )
+        self.assertEqual(
+            mgr._detect_optimal_chunk_size("nomic-embed-text"), int(8192 * 0.9)
+        )
+
+    def test_default_chunk_size_when_no_context_source(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr.get_running_num_ctx = MagicMock(return_value=None)
+        mgr._get_model_info = MagicMock(return_value={})
+        self.assertEqual(mgr._detect_optimal_chunk_size("m"), MAX_CHUNK_SIZE)
 
 
 class TestModelAvailabilityNormalization(unittest.TestCase):

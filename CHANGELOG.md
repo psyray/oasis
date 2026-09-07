@@ -1,6 +1,7 @@
 ## 🚀 [0.6.2] - 2026-09-07
 
 ### 🐛 Fixed
+- 🧠 **Embedding context auto-detection & retry (issue #58)**: chunk sizing now prefers the **runtime-loaded context from Ollama `ps()`** over declarative Modelfile `num_ctx` / GGUF metadata (which can exceed what the embeddings runner actually enforces), and both the long-content and short-content embedding paths share a context-aware retry that halves the chunk limit on context-length errors. The retry now also catches real `ollama.ResponseError` failures (which the previous `RuntimeError` catch never reached), so `input length exceeds the context length` no longer silently drops a file's embedding.
 - 🤖 **Model selection list**: interactive model selection (and the preloaded list) now shows the **full Ollama name including the version tag** (e.g. `qwen2.5-coder:7b`) instead of truncating after `:`, so different versions of the same base model are easy to tell apart (issue #61).
 
 ## 🚀 [0.6.1] - 2026-04-29
