@@ -1135,7 +1135,7 @@ class OllamaManager:
             # Fallback to simple formatting if API fails
             logger.exception(f"Error fetching model details: {str(e)}")
             model_emoji = self._get_model_emoji(model_name)
-            return f"{model_emoji}{model_name.split(':')[0]}"
+            return f"{model_emoji}{model_name}"
     
     def _preload_model_info(self, model_names: List[str]) -> None:
         """
@@ -1453,10 +1453,9 @@ class OllamaManager:
             model_emoji: Emoji for the model
             param_str: Formatted parameter information
         """
-        # Remove version tag (everything after colon) for display only
-        display_name = model_name.split(':')[0]
-        
-        formatted_parts = [f"{model_emoji}{display_name}"]
+        # Keep the full Ollama name (including the version tag) so variants of the
+        # same base model stay distinguishable in the selection list (issue #61).
+        formatted_parts = [f"{model_emoji}{model_name}"]
         
         # Format technical info parts
         tech_info_parts = []
