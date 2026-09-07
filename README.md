@@ -56,6 +56,7 @@
 | [Cache Management](#readme-cache) | Embeddings and scan caches |
 | [Audit Mode](#readme-audit) | Pre-scan audit, structured `audit_report.json` |
 | [Suppression registry](#readme-suppressions) | Fingerprint registry, SARIF suppressions, candidates |
+| [Scan diff](#readme-scan-diff) | `--diff-against` baseline comparison, new/fixed/persistent |
 | [Web Interface](#readme-web) | `--web`, security |
 | [Changelog](#readme-changelog) | Release notes |
 | [Contributing](#readme-contributing) | PRs and issues |
@@ -250,6 +251,7 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 ### Input/Output Options
 - `--input` `-i`: Path to file, directory, or .txt file containing newline-separated paths to analyze
 - `--project-name` `-pn`: Optional project alias for report grouping/filtering (overrides the name derived from `-i`; allowed chars: `A-Z`, `a-z`, `0-9`, `_`, `-`)
+- **`--diff-against` `PATH`**: Write a **scan diff report** comparing this run with a baseline run — new / fixed / persistent findings plus severity changes. See [Scan diff](#readme-scan-diff).
 - `--output-format` `-of`: Comma-separated formats or `all` for json, sarif, pdf, html, md (default: all)
 - `--extensions` `-x`: Custom file extensions to analyze (e.g., "py,js,java")
 - `--language` `-l`: Language for reports (default: en)  
@@ -804,6 +806,32 @@ oasis -i ./my-project -m qwen2.5-coder:14b --suppressions-file .oasis_suppressio
 ```
 
 Matching findings are **not removed** — they are exported with a native SARIF 2.1.0 `suppressions` entry (`kind: "logical"`, `status: "accepted"`, your note as justification), so GitHub Code Scanning and other SARIF consumers can filter them, and the canonical JSON stays untouched for auditability. A log line summarizes how many findings matched the registry at the end of the run.
+
+<a id="readme-scan-diff"></a>
+
+## 🔄 Scan diff (baseline)
+
+Pass **`--diff-against PATH`** to compare the finished run with a previous run and write a **diff report** under the current run output:
+
+- **`diff/diff_report.json`** — canonical document (`report_type: "diff"`, schema `DiffReportDocument`)
+- **`diff/diff_report.md`** — human-readable Markdown sibling
+
+Findings are matched across runs by a **stable fingerprint** (file path + vulnerability type + normalized vulnerable snippet), so buckets stay accurate even when titles, severities, or chunk boundaries change:
+
+- **New** — fingerprint present in the current run only
+- **Fixed** — fingerprint present in the baseline only
+- **Persistent** — present in both; a severity change is tracked separately (and the finding stays listed as persistent)
+
+```bash
+# Scan 1 (baseline)
+oasis -i ./my-project -pn my-project -m qwen2.5-coder:14b
+# Scan 2, compared with scan 1
+oasis -i ./my-project -pn my-project -m qwen2.5-coder:14b \
+  --diff-against security_reports/my-project/<run_timestamp>
+```
+
+The baseline `PATH` accepts a **run directory** (`security_reports/<project>/<timestamp>`), a **model directory** (containing `json/`), a `json` directory, or a **single canonical JSON file**. Executive-summary, audit, and progress documents are ignored; only `report_type: "vulnerability"` documents participate. A per-run log line summarizes the buckets, e.g. `Scan diff vs baseline: new=1 fixed=2 persistent=9 severity_changes=1`.
+
 
 <p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
 

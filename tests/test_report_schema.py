@@ -35,6 +35,7 @@ try:
     from oasis.schemas.analysis import (
         ChunkDeepAnalysis,
         DashboardStats,
+        DiffReportDocument,
         FileReportEntry,
         FindingValidationSummary,
         MediumRiskAnalysis,
@@ -56,6 +57,7 @@ except ModuleNotFoundError:
     _spec.loader.exec_module(_analysis)
     ChunkDeepAnalysis = _analysis.ChunkDeepAnalysis
     DashboardStats = _analysis.DashboardStats
+    DiffReportDocument = _analysis.DiffReportDocument
     FileReportEntry = _analysis.FileReportEntry
     MediumRiskAnalysis = _analysis.MediumRiskAnalysis
     ScanVerdict = _analysis.ScanVerdict
@@ -2589,6 +2591,25 @@ Not a table line anymore.
         ids = [r.get("id") for r in phases]
         self.assertIn("graph_discover", ids)
         self.assertIn("graph_verify", ids)
+
+
+class TestDiffReportSchema(unittest.TestCase):
+    def test_diff_document_round_trip_and_defaults(self):
+        doc = DiffReportDocument(
+            generated_at="2026-01-01T00:00:00",
+            baseline_path="security_reports/proj/20260101_000000",
+            current_path="security_reports/proj/20260102_000000",
+        )
+        self.assertEqual(doc.report_type, "diff")
+        self.assertEqual(doc.counts.new, 0)
+        self.assertEqual(doc.new, [])
+        payload = json.loads(doc.model_dump_json())
+        restored = DiffReportDocument.model_validate(payload)
+        self.assertEqual(restored, doc)
+
+    def test_diff_document_rejects_other_report_types(self):
+        with self.assertRaises(ValueError):
+            DiffReportDocument(generated_at="x", report_type="vulnerability")
 
 
 if __name__ == "__main__":

@@ -174,6 +174,60 @@ class VulnerabilityReportDocument(BaseModel):
     )
 
 
+class DiffFindingRef(BaseModel):
+    """One finding referenced in a diff report (baseline or current run)."""
+
+    file_path: str
+    vulnerability_name: str
+    title: str = ""
+    severity: str = ""
+    snippet: str = ""
+    fingerprint: str = Field(description="Stable content hash across runs (file + vuln type + snippet)")
+
+
+class DiffSeverityChange(BaseModel):
+    """Severity regression/upgrade for a finding present in both runs."""
+
+    fingerprint: str
+    file_path: str
+    vulnerability_name: str
+    title: str = ""
+    baseline_severity: str = ""
+    current_severity: str = ""
+
+
+class DiffCounts(BaseModel):
+    """Bucket sizes for a diff report."""
+
+    new: int = 0
+    fixed: int = 0
+    persistent: int = 0
+    severity_changes: int = 0
+
+
+class DiffReportDocument(BaseModel):
+    """Canonical diff report comparing a scan run against a baseline run.
+
+    Buckets are computed from stable finding fingerprints: ``new`` findings
+    appear only in the current run, ``fixed`` only in the baseline, and
+    ``persistent`` in both. Severity changes are tracked separately and their
+    findings remain listed under ``persistent``.
+    """
+
+    schema_version: int = Field(default=ANALYSIS_SCHEMA_VERSION)
+    report_type: Literal["diff"] = "diff"
+    title: str = "Scan diff report"
+    generated_at: str
+    baseline_path: str = Field(default="", description="Baseline run path provided via --diff-against")
+    current_path: str = Field(default="", description="Current run output directory")
+    new: List[DiffFindingRef] = Field(default_factory=list)
+    fixed: List[DiffFindingRef] = Field(default_factory=list)
+    persistent: List[DiffFindingRef] = Field(default_factory=list)
+    severity_changes: List[DiffSeverityChange] = Field(default_factory=list)
+    counts: DiffCounts = Field(default_factory=DiffCounts)
+
+
+
 class Citation(BaseModel):
     """Source citation used by validation helpers to point at concrete code."""
 

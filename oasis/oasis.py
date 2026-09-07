@@ -41,6 +41,7 @@ from .helpers.ci_gate import (
     normalize_severity,
 )
 from .helpers.report_project import validate_project_alias_for_cli
+from .helpers.report_diff import write_diff_artifacts
 from .helpers.suppressions import (
     count_suppressed_findings,
     load_suppressions,
@@ -312,6 +313,14 @@ class OasisScanner:
                 "When provided, it overrides the default project name derived from --input. "
                 "Allowed characters: letters, digits, '_' and '-'."
             ),
+        )
+        io_group.add_argument(
+            '--diff-against',
+            dest='diff_against',
+            type=str,
+            default=None,
+            metavar='PATH',
+            help='Write a diff report (diff/diff_report.json + .md) comparing this run with a baseline: path to a run directory, model directory, json directory, or canonical JSON file',
         )
         io_group.add_argument(
             '-of',
@@ -1212,6 +1221,25 @@ class OasisScanner:
                     "Suppressed findings in this run: %d (exported with SARIF suppressions)",
                     suppressed_count,
                 )
+
+        # Baseline diff report (when requested) — written before the CI gate so
+        # an exit-3 threshold run still produces the diff artifacts.
+        diff_against = getattr(self.args, "diff_against", None)
+        if diff_against:
+            try:
+                diff_doc = write_diff_artifacts(Path(self.report.output_dir), Path(diff_against))
+            except OSError as exc:
+                logger.warning("Diff report generation failed: %s", exc)
+            else:
+                if diff_doc:
+                    counts = diff_doc.get("counts") or {}
+                    logger.info(
+                        "Scan diff vs baseline: new=%s fixed=%s persistent=%s severity_changes=%s",
+                        counts.get("new", 0),
+                        counts.get("fixed", 0),
+                        counts.get("persistent", 0),
+                        counts.get("severity_changes", 0),
+                    )
 
         # CI gate: exit non-zero when findings meet the severity threshold
         if getattr(self.args, "fail_on", None):
