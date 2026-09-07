@@ -1005,18 +1005,18 @@ class OllamaManager:
         return None, ""
 
     def _detect_optimal_chunk_size(self, model):
-        model_info = self._get_model_info(model)
-        logger.debug(f"Raw model info type: {type(model_info)}")
-
-        tokens, source = self._model_info_effective_context_tokens(model_info)
+        # Runtime ps() context wins over declarative metadata: the embeddings runner
+        # may load the model with a smaller context than the Modelfile/GGUF declares
+        # (issue #58: show() reported 8192 while the runtime enforced 2048).
+        tokens, source = self.get_effective_context_token_count_with_source(model)
         logger.debug(f"Resolved effective context tokens: {tokens} (source={source or 'none'})")
         if tokens is not None and tokens > 0:
             chunk_size = int(tokens * 0.9)
-            label = (
-                "Modelfile num_ctx"
-                if source == "parameters"
-                else "GGUF context_length"
-            )
+            label = {
+                "ps": "runtime ps (loaded context)",
+                "parameters": "Modelfile num_ctx",
+                "modelinfo": "GGUF context_length",
+            }.get(source, source or "unknown source")
             logger.info(f"Model {model} context ({label}, tokens): {tokens}")
             logger.info(f"🔄 Using chunk size: {chunk_size}")
             return chunk_size

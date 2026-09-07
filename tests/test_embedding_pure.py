@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
 
 from oasis.config import EMBEDDING_THRESHOLDS
 from oasis.embedding import build_vulnerability_embedding_prompt, generate_content_embedding
+from ollama import ResponseError
 
 try:
     from oasis.analyze import EmbeddingAnalyzer
@@ -88,6 +89,62 @@ class TestEmbeddingPure(unittest.TestCase):
             large_content,
             "embed-model",
             chunk_size=1024,
+            ollama_manager=fake_manager,
+        )
+
+        self.assertEqual(embedding, [1.0, 2.0])
+        self.assertGreaterEqual(len(fake_client.calls), 2)
+
+    def test_generate_content_embedding_survives_real_response_error(self):
+        """Real API failure mode (ollama ResponseError is NOT a RuntimeError, issue #58):
+        the full-text call must still trigger the chunked retry."""
+
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            def embeddings(self, model, prompt):
+                self.calls.append(prompt)
+                if len(prompt) > 512:
+                    raise ResponseError("the input length exceeds the context length", 500)
+                return {"embedding": [1.0, 2.0]}
+
+        fake_client = FakeClient()
+        fake_manager = SimpleNamespace(get_client=lambda: fake_client)
+        large_content = "a" * 600
+
+        embedding = generate_content_embedding(
+            large_content,
+            "embed-model",
+            chunk_size=1024,
+            ollama_manager=fake_manager,
+        )
+
+        self.assertEqual(embedding, [1.0, 2.0])
+        self.assertGreaterEqual(len(fake_client.calls), 2)
+
+    def test_long_content_path_retries_with_smaller_chunks_on_context_error(self):
+        """len(content) > chunk_size: aggregation context errors halve the limit and
+        retry instead of dropping the file embedding (issue #58 traceback path)."""
+
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            def embeddings(self, model, prompt):
+                self.calls.append(prompt)
+                if len(prompt) > 300:
+                    raise ResponseError("the input length exceeds the context length", 500)
+                return {"embedding": [1.0, 2.0]}
+
+        fake_client = FakeClient()
+        fake_manager = SimpleNamespace(get_client=lambda: fake_client)
+        large_content = "a" * 700
+
+        embedding = generate_content_embedding(
+            large_content,
+            "embed-model",
+            chunk_size=640,
             ollama_manager=fake_manager,
         )
 
