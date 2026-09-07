@@ -19,7 +19,7 @@ Apply the code organization and delivery style repeatedly used in OASIS commits.
    - `oasis/schemas/`: Pydantic models for LLM JSON and canonical vulnerability reports
    - `oasis/report.py`: JSON-first vulnerability reports; Jinja under `oasis/templates/reports/`
    - `oasis/web.py`: dashboard indexing (`json/` stats), APIs (`/api/report-json`, `/api/progress`, Socket.IO `scan_progress`, legacy MD preview rules)
-   - `oasis/ollama_manager.py`: model and Ollama interactions
+   - `oasis/backends/`: provider-agnostic model backends — factory `create_model_manager`, the `ModelBackend` contract, `OllamaManager` (native Ollama) and `OpenAICompatManager` (OpenAI-compatible servers: vLLM / LiteLLM via `--provider/--api-base/--api-key`); `oasis/ollama_manager.py` remains a backward-compat shim
    - `oasis/helpers/`: **all** shared helpers (formatting, parsing, progress helpers, small pure utilities). Do not leave helper-shaped functions in feature modules—extract them here and group by category in dedicated modules (see Design Guardrails).
    - `oasis/helpers/embed_models.py`: canonical embed-model normalization/parsing; reuse it for CLI parsing and embedding-manager primary model resolution.
    - `oasis/static/js/dashboard/*`: web dashboard behavior (JSON modal preview, `force=1` on reload for stats/reports/progress, `applyProgressPayload` / `progressState`)
@@ -88,6 +88,11 @@ Details live in `.cursor/rules/oasis-python-architecture.mdc` (constants in `oas
 - Before shipping, ask: “If this behavior changes tomorrow, is there exactly **one** place to edit?” If not, centralize first (Python: `oasis/helpers/` or `oasis/schemas/` as appropriate; JS dashboard: shared modules under `oasis/static/js/dashboard/`).
 - Duplicating strings, field names, validation rules, or API shapes across modules is still duplication—use shared constants, Pydantic models, or helpers.
 
+### Provider-agnostic LLM calls (model backends)
+
+- Never hardcode Ollama assumptions outside `oasis/backends/`: feature code goes through the `ModelBackend` contract — responses are normalized to `{"message": {"content": ...}}`, and Ollama-style kwargs (`options.num_predict`, `format=<json_schema>`) are translated per backend. Adding provider-specific behavior means extending the matching backend (or the contract), **not** branching on the provider in `analyze.py` / `embedding.py` / `web.py`.
+- New provider knobs land in `oasis/config.py` (`OASIS_*` env, documented in the module docstring) plus `oasis/oasis.py` CLI, and stay aligned with `tests/test_backends_openai_compat.py` and the README `Model providers (backends)` section when user-visible.
+
 ### Finding-validation pipeline (`POST /api/assistant/investigate`)
 
 When changing how the assistant validates findings, follow the contract locked in the canonical plan (`.cursor/plans/validation-vulnerability-validation.plan.md`):
@@ -116,5 +121,6 @@ When changing how the assistant validates findings, follow the contract locked i
 - No obvious module boundary violation; **no new helper-shaped logic** left outside `oasis/helpers/` without a strong, documented reason.
 - Any CLI option change is documented.
 - Structured output/report changes stay aligned across `oasis/schemas/`, `oasis/report.py`, `oasis/templates/reports/`, and `tests/test_report_schema.py`.
+- Backend/provider changes keep `oasis/backends/` contracts, `oasis/config.py` env docs, and `tests/test_backends_openai_compat.py` aligned; call sites stay provider-agnostic.
 - Incremental progress contract changes stay aligned across `oasis/helpers/progress/__init__.py`, `report.py`, `web.py`, dashboard JS, and contract tests when applicable (same spirit as report schema alignment).
 - Change intent can be summarized with a conventional commit subject.

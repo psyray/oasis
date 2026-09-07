@@ -1,6 +1,6 @@
 # OASIS — Agent Instructions
 
-**OASIS** (**O**llama **A**utomated **S**ecurity **I**ntelligence **S**canner) — Python 3.9+ CLI plus a Flask/Socket.IO web dashboard for AI-powered, fully local code security auditing via Ollama models and a LangGraph pipeline. Public repo: `github.com/psyray/oasis`.
+**OASIS** (**O**llama **A**utomated **S**ecurity **I**ntelligence **S**canner) — Python 3.9+ CLI plus a Flask/Socket.IO web dashboard for AI-powered, fully local code security auditing via local LLM backends (native Ollama, or OpenAI-compatible servers such as vLLM / LiteLLM) and a LangGraph pipeline. Public repo: `github.com/psyray/oasis`.
 
 ## Install / refresh (pipx only)
 
@@ -31,7 +31,7 @@ PYTHONPATH="$(pwd)" coverage run -m unittest discover -s tests
 coverage report
 ```
 
-- Test changes go in the matching `tests/test_<area>.py` (report contracts → `test_report_schema.py`, CLI → `test_oasis_cli.py`, LangGraph orchestration → `test_analyze_orchestration.py`, dashboard helpers → `test_helpers_dashboard.py`, finding validation → `test_assistant_validation.py`, assistant API → `test_web_assistant_api.py`), in the same change set for contract- or regression-sensitive behavior.
+- Test changes go in the matching `tests/test_<area>.py` (report contracts → `test_report_schema.py`, CLI → `test_oasis_cli.py`, LangGraph orchestration → `test_analyze_orchestration.py`, dashboard helpers → `test_helpers_dashboard.py`, finding validation → `test_assistant_validation.py`, assistant API → `test_web_assistant_api.py`, model backends/providers → `test_backends_openai_compat.py`), in the same change set for contract- or regression-sensitive behavior.
 
 ## Lint gates before "done"
 
@@ -48,9 +48,15 @@ coverage report
 - `CHANGELOG.md`: entries concise, style-consistent with the file's charter, filed under the version bucket matching the current branch lineage.
 - Contract changes ship coordinated updates in the same change set (see the `oasis-release-guardrails` skill for the full checklist); migrate all call sites of shared logic at once so `main` never retains two competing implementations.
 
+## Model backends (Ollama native / OpenAI-compatible — vLLM, LiteLLM)
+
+- Architecture: `oasis/backends/` — `base.ModelBackend` is the provider-agnostic contract; `ollama_backend.OllamaManager` (native Ollama, **default**) and `openai_compat.OpenAICompatManager` (vLLM, LM Studio, llama.cpp, LiteLLM, …) implement it; the factory `create_model_manager` (`backends/__init__.py`) resolves the backend: `--provider` → `OASIS_LLM_PROVIDER` env → auto (`openai` when `--api-base` is set, else `ollama`). `oasis/ollama_manager.py` is a backward-compat shim only.
+- **Call sites stay provider-agnostic**: backends normalize responses to the Ollama shape (`{"message": {"content": ...}}`) and translate Ollama semantics (`options.num_predict` → `max_tokens`, `format=<json_schema>` → `response_format`, automatic schema-in-prompt fallback on HTTP 4xx per `OASIS_OPENAI_STRUCTURED_OUTPUT`). Never branch on the provider outside `oasis/backends/` — extend the backend contract instead. Context windows on OpenAI-compatible servers come from `OASIS_OPENAI_CTX_TOKENS`.
+- OpenAI-compat flags: `--provider/--api-base/--api-key` (+ `--web-provider/--web-api-base/--web-api-key` for the dashboard assistant). Provider tests live in `tests/test_backends_openai_compat.py`.
+
 ## Project skills (load on demand)
 
-- `oasis-python-architecture` — Python module layout, helpers centralization, LangGraph graph layer, wire contracts.
+- `oasis-python-architecture` — Python module layout, helpers centralization, model backends, LangGraph graph layer, wire contracts.
 - `oasis-dashboard-js-patterns` — dashboard JS modules, report-modal architecture, frontend/backend contracts.
 - `oasis-implementation-patterns` — end-to-end workflow for features/fixes/refactors (module selection, design guardrails, done criteria).
 - `oasis-release-guardrails` — release/version checklist (changelog, docs alignment, quality gate).

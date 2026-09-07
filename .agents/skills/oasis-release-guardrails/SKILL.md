@@ -19,6 +19,7 @@ Keep release changes coherent across code, docs, and metadata like historical `r
 - [ ] Verify `README.md` reflects CLI options and workflow changes (including LangGraph flags: `--langgraph-max-expand`, `--poc-hints`, `--poc-assist` when user-visible).
 - [ ] Keep `README.md` `Features` summary-only; move details into the relevant section, or create one for a new feature.
 - [ ] If audit behavior changes, keep `README.md` aligned for multi-model embedding audits (`--audit -em model_a,model_b`), **`audit_report.json`** vs Markdown fallbacks, and dashboard comparison behavior.
+- [ ] If model-provider/backend behavior changes, align the README **`Model providers (backends)`** section, the `OASIS_*` provider env reference in `oasis/config.py` (module docstring), and `tests/test_backends_openai_compat.py` in the same change set.
 - [ ] Ensure dashboard/web changes include matching template/assets updates when required (including **`bootstrap.js`** theme hooks, **`executive-preview.js`** / Chart.js, filtered-preview query params).
 - [ ] For structured output/report changes, keep schema models, templates, and report contract tests in sync (executive **`schema_version`**, **`analysis_root`** semantics, audit **`AuditReportDocument`**).
 - [ ] If `Audit Metrics Summary` markdown format changes, align `oasis/report.py`, `oasis/web.py` metrics parsing, dashboard audit comparison rendering, and changelog notes in one batch.
