@@ -523,7 +523,12 @@ class Report:
     
     def _generate_and_save_report(self, output_files, report_content, report_type: str = None):
         """
-        Write report content and convert to all configured formats
+        Write report content and convert to all configured formats.
+
+        Markdown is the internal master format for PDF/HTML generation. When
+        ``md`` is not among the requested output formats, this method is a
+        no-op; callers that emit JSON directly (e.g. audit reports) handle
+        their own format.
 
         Args:
             output_files: Dictionary of output file paths
@@ -533,11 +538,19 @@ class Report:
         logger.debug("--------------------------------")
         logger.debug(f"Generating {report_type} report for {', '.join(self.output_format)}, please wait...")
 
+        markdown_file = output_files.get("md")
+        if markdown_file is None:
+            logger.debug(
+                "Skipping markdown generation for %s: 'md' not in requested output formats",
+                report_type,
+            )
+            return
+
         # Write markdown
-        write_markdown_lines(output_files["md"], report_content, logger)
+        write_markdown_lines(markdown_file, report_content, logger)
 
         # Convert to PDF and HTML
-        self.convert_to_all_formats(output_files["md"])
+        self.convert_to_all_formats(markdown_file)
 
     def report_generated(self, report_type: str = None, report_structure: bool = False):
         """
