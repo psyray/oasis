@@ -343,12 +343,22 @@ class OpenAICompatClient:
     def _normalize_chat_response(data: Any) -> Dict[str, Any]:
         choices = data.get("choices") if isinstance(data, dict) else None
         content = ""
+        thinking = ""
         if choices and isinstance(choices[0], dict):
             message = choices[0].get("message")
             if isinstance(message, dict):
                 raw = message.get("content")
                 if isinstance(raw, str):
                     content = raw
+                # Reasoning models (vLLM reasoning parsers) return thinking in a
+                # separate ``reasoning_content`` field even for non-streaming
+                # calls; map it to the ollama native ``thinking`` channel so
+                # callers can capture reasoning the same way as streaming.
+                reasoning = message.get("reasoning_content")
+                if isinstance(reasoning, str) and reasoning:
+                    thinking = reasoning
+        if thinking:
+            return {"message": {"content": content, "thinking": thinking}}
         return {"message": {"content": content}}
 
     @staticmethod

@@ -974,6 +974,91 @@ class TestInvestigationSynth(unittest.TestCase):
         self.assertEqual(out.synthesis_model, "fake-model")
         self.assertIsNone(out.synthesis_error)
 
+    def test_enrich_captures_thinking_channel_and_forces_think(self) -> None:
+        class _ThinkingOllama:
+            def __init__(self) -> None:
+                self.chat_kwargs: dict = {}
+
+            def chat(self, model, messages, options=None, **kwargs):
+                self.chat_kwargs = kwargs
+                return {
+                    "message": {"content": "## Narrative", "thinking": "chain of thought"}
+                }
+
+        cit = Citation(file_path="a.py", start_line=1, end_line=1, snippet="x")
+        base = AssistantInvestigationResult(
+            vulnerability_name="XSS",
+            family="flow",
+            status="likely_exploitable",
+            confidence=0.5,
+            summary="deterministic",
+            citations=[cit],
+        )
+        fake = _ThinkingOllama()
+        out = enrich_investigation_with_llm_narrative(
+            base,
+            ollama_manager=fake,  # type: ignore[arg-type]
+            chat_model="fake-model",
+        )
+        self.assertTrue(fake.chat_kwargs.get("think"))
+        self.assertEqual(out.narrative_markdown, "## Narrative")
+        self.assertEqual(out.narrative_thought_segments, ["chain of thought"])
+        self.assertIsNone(out.synthesis_error)
+
+    def test_enrich_collects_inline_think_tags_into_segments(self) -> None:
+        class _InlineThinkOllama:
+            def chat(self, model, messages, options=None, **kwargs):
+                return {"message": {"content": "<think>hmm</think>Visible text"}}
+
+        cit = Citation(file_path="a.py", start_line=1, end_line=1, snippet="x")
+        base = AssistantInvestigationResult(
+            vulnerability_name="XSS",
+            family="flow",
+            status="likely_exploitable",
+            confidence=0.5,
+            summary="deterministic",
+            citations=[cit],
+        )
+        out = enrich_investigation_with_llm_narrative(
+            base,
+            ollama_manager=_InlineThinkOllama(),  # type: ignore[arg-type]
+            chat_model="fake-model",
+        )
+        self.assertEqual(out.narrative_markdown, "Visible text")
+        self.assertEqual(out.narrative_thought_segments, ["hmm"])
+
+    def test_enrich_retries_without_thinking_when_model_refuses(self) -> None:
+        class _RefusingOllama:
+            def __init__(self) -> None:
+                self.calls: list = []
+
+            def chat(self, model, messages, options=None, **kwargs):
+                self.calls.append(kwargs)
+                if kwargs.get("think"):
+                    raise RuntimeError("model does not support thinking")
+                return {"message": {"content": "ok"}}
+
+        cit = Citation(file_path="a.py", start_line=1, end_line=1, snippet="x")
+        base = AssistantInvestigationResult(
+            vulnerability_name="XSS",
+            family="flow",
+            status="likely_exploitable",
+            confidence=0.5,
+            summary="deterministic",
+            citations=[cit],
+        )
+        fake = _RefusingOllama()
+        out = enrich_investigation_with_llm_narrative(
+            base,
+            ollama_manager=fake,  # type: ignore[arg-type]
+            chat_model="fake-model",
+        )
+        self.assertEqual(fake.calls[0].get("think"), True)
+        self.assertNotIn("think", fake.calls[1])
+        self.assertEqual(out.narrative_markdown, "ok")
+        self.assertEqual(out.narrative_thought_segments, [])
+        self.assertIsNone(out.synthesis_error)
+
     def test_enrich_no_op_when_model_empty(self) -> None:
         cit = Citation(file_path="a.py", start_line=1, end_line=1, snippet="x")
         base = AssistantInvestigationResult(

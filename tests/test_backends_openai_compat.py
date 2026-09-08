@@ -170,6 +170,36 @@ class TestOpenAICompatChat(unittest.TestCase):
         client.chat("m", [{"role": "user", "content": "x"}], think=True)
         self.assertEqual(captured["payload"]["chat_template_kwargs"], {"enable_thinking": True})
 
+    def test_chat_maps_reasoning_content_to_thinking_channel(self):
+        def chat_handler(request):
+            return 200, {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Final answer",
+                            "reasoning_content": "thinking hard",
+                        }
+                    }
+                ]
+            }
+
+        client = _client_with_routes(chat_handler=chat_handler)
+        response = client.chat("m", [{"role": "user", "content": "x"}])
+        self.assertEqual(
+            response,
+            {"message": {"content": "Final answer", "thinking": "thinking hard"}},
+        )
+
+    def test_chat_without_reasoning_content_has_no_thinking_key(self):
+        def chat_handler(request):
+            return 200, {
+                "choices": [{"message": {"content": "pong", "reasoning_content": None}}]
+            }
+
+        client = _client_with_routes(chat_handler=chat_handler)
+        response = client.chat("m", [{"role": "user", "content": "x"}])
+        self.assertEqual(response, {"message": {"content": "pong"}})
+
     def test_chat_without_think_omits_chat_template_kwargs(self):
         captured = {}
 
@@ -424,6 +454,36 @@ class TestOpenAICompatContext(unittest.TestCase):
         manager = OpenAICompatManager(api_base="http://llm.test/v1")
         manager.set_model_thinking("m", True)
         self.assertTrue(manager._resolve_model_thinking("m"))
+
+    def test_explicit_think_kwarg_wins_over_model_override(self):
+        """A caller forcing thinking for one call must beat the global override."""
+        from oasis.backends.base import ModelBackend
+
+        class _StubClient:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, **kwargs):
+                self.calls.append(kwargs)
+                return {"message": {"content": "pong"}}
+
+        class _Backend(ModelBackend):
+            def __init__(self, stub):
+                super().__init__()
+                self._stub = stub
+
+            def get_client(self):
+                return self._stub
+
+        stub = _StubClient()
+        backend = _Backend(stub)
+        backend.set_model_thinking("m", False)
+        backend.chat("m", [{"role": "user", "content": "x"}], think=True)
+        self.assertIs(stub.calls[0]["think"], True)
+
+        # Without an explicit think kwarg the per-model override still applies.
+        backend.chat("m", [{"role": "user", "content": "x"}])
+        self.assertIs(stub.calls[1]["think"], False)
 
     def test_cache_invalidation_hooks_are_safe_noops(self):
         manager = OpenAICompatManager(api_base="http://llm.test/v1")

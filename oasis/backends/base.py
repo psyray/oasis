@@ -175,9 +175,13 @@ class ModelBackend:
             request_kwargs["options"] = options
         request_kwargs |= kwargs
 
-        thinking = self._resolve_model_thinking(model)
-        if thinking is not None:
-            request_kwargs["think"] = thinking
+        # Explicit call-site ``think`` wins; per-model overrides fill the rest
+        # (a caller forcing thinking for one call — e.g. validation narratives —
+        # must not be silently overridden by the global -mt/-smt config).
+        if "think" not in request_kwargs:
+            thinking = self._resolve_model_thinking(model)
+            if thinking is not None:
+                request_kwargs["think"] = thinking
 
         method = getattr(client, method_name)
         payload_chars = estimate_ollama_payload_chars(payload_key, payload_value)
@@ -254,9 +258,10 @@ class ModelBackend:
             request_kwargs["options"] = options
         request_kwargs |= kwargs
 
-        thinking = self._resolve_model_thinking(model)
-        if thinking is not None:
-            request_kwargs["think"] = thinking
+        if "think" not in request_kwargs:
+            thinking = self._resolve_model_thinking(model)
+            if thinking is not None:
+                request_kwargs["think"] = thinking
 
         try:
             iterator = client.chat(**request_kwargs)

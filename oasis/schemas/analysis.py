@@ -358,6 +358,13 @@ class AssistantInvestigationResult(BaseModel):
         default=None,
         description="Chat model used for narrative_markdown when synthesis succeeded.",
     )
+    narrative_thought_segments: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Reasoning segments captured from the narrative synthesis call "
+            "(``thinking`` channel or inline think tags); empty when thinking is off."
+        ),
+    )
     synthesis_error: Optional[str] = Field(
         default=None,
         description="Set when narrative synthesis was requested but failed or was skipped.",

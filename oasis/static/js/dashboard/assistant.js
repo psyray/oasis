@@ -455,6 +455,25 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt, opt
                 copiedCode: label('assistantCopiedCode', 'Copied'),
             });
         }
+        const segments = Array.isArray(result.narrative_thought_segments)
+            ? result.narrative_thought_segments
+                  .map(function (seg) {
+                      return typeof seg === 'string' ? seg.trim() : '';
+                  })
+                  .filter(Boolean)
+            : [];
+        if (segments.length) {
+            const thoughts = document.createElement('details');
+            thoughts.className = 'oasis-assistant-think';
+            const thoughtsSummary = document.createElement('summary');
+            thoughtsSummary.textContent = label('validateNarrativeReasoning', 'Reasoning');
+            const thoughtsPre = document.createElement('pre');
+            thoughtsPre.className = 'oasis-assistant-think-pre';
+            thoughtsPre.textContent = segments.join('\n\n');
+            thoughts.appendChild(thoughtsSummary);
+            thoughts.appendChild(thoughtsPre);
+            container.appendChild(thoughts);
+        }
     }
     if (!llmMd && synthesisErrorText) {
         const synErr = document.createElement('p');

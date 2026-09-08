@@ -388,6 +388,16 @@ class OasisScanner:
             help='Total wall-clock budget (seconds) for scan-time finding validation per scan (default: 120)',
         )
         analysis_group.add_argument(
+            '--validate-findings-narrative',
+            dest='validate_findings_narrative',
+            action='store_true',
+            default=False,
+            help=(
+                'Add a thinking-enabled LLM narrative to each scan-time finding verdict '
+                '(uses the deep model; off by default, increases scan time)'
+            ),
+        )
+        analysis_group.add_argument(
             '--poc-hints',
             dest='poc_hints',
             action='store_true',

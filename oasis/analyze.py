@@ -1596,7 +1596,80 @@ FINDINGS SUMMARY (valid JSON envelope; ``truncated_for_llm_prompt_budget`` may b
                 pbar=pbar,
             )
         results_by_key = stats.get("results_by_key")
-        return results_by_key if isinstance(results_by_key, dict) else None
+        if not isinstance(results_by_key, dict) or not results_by_key:
+            return None
+        if getattr(args, "validate_findings_narrative", False):
+            self._enrich_scan_validations_with_narrative(
+                vuln_name, results_by_key, args, pbar=pbar
+            )
+        return results_by_key
+
+    def _enrich_scan_validations_with_narrative(
+        self,
+        vuln_name: str,
+        results_by_key: Dict[str, Dict[str, Any]],
+        args: Any,
+        pbar=None,
+    ) -> None:
+        """Best-effort thinking-enabled LLM narrative per scan-time verdict.
+
+        Gated by ``--validate-findings-narrative``; updates the sidecar payloads
+        in place (deterministic verdicts stay authoritative). Verdicts a
+        narrative cannot help with (false positives, insufficient signal) are
+        skipped, and the narrative phase stops at the same wall-clock budget
+        as the deterministic validation.
+        """
+        from oasis.schemas.analysis import AssistantInvestigationResult
+        from oasis.helpers.assistant.think.investigation_synth import (
+            enrich_investigation_with_llm_narrative,
+        )
+
+        budget = float(getattr(args, "validate_findings_budget", 120.0) or 120.0)
+        deadline = time_module.monotonic() + budget
+        # Verdicts a narrative cannot help triage: no signal to explain.
+        skipped_statuses = {"insufficient_signal", "error"}
+        enriched = 0
+        for key, payload in results_by_key.items():
+            if time_module.monotonic() >= deadline:
+                logger.warning(
+                    "Scan-time finding narratives budget exhausted for %s after %d narrative(s)",
+                    cli_bold(vuln_name),
+                    enriched,
+                )
+                break
+            try:
+                result = AssistantInvestigationResult.model_validate(payload)
+            except Exception:
+                logger.debug(
+                    "Scan-time narrative skipped for %s: invalid payload key=%s",
+                    vuln_name,
+                    key,
+                )
+                continue
+            if result.status in skipped_statuses:
+                continue
+            enriched_result = enrich_investigation_with_llm_narrative(
+                result,
+                ollama_manager=self.ollama_manager,
+                chat_model=self.llm_model,
+            )
+            if not enriched_result.narrative_markdown:
+                continue
+            payload.update(
+                {
+                    "narrative_markdown": enriched_result.narrative_markdown,
+                    "narrative_thought_segments": enriched_result.narrative_thought_segments,
+                    "synthesis_model": enriched_result.synthesis_model,
+                    "synthesis_error": enriched_result.synthesis_error,
+                }
+            )
+            enriched += 1
+        if enriched:
+            logger.info(
+                "🧠 LLM narratives · %s · %d verdict(s) narrated (thinking on)",
+                cli_bold(vuln_name),
+                enriched,
+            )
 
     def _write_scan_finding_validations_sidecar(
         self,

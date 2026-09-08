@@ -370,6 +370,115 @@ class TestScanTimeFindingValidationHook(unittest.TestCase):
             self.assertEqual(kwargs["scan_root"], root)
             self.assertEqual(kwargs["total_budget_seconds"], 60.0)
 
+    def test_hook_skips_narrative_enrichment_by_default(self):
+        """Without --validate-findings-narrative the sidecar payloads stay deterministic."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            analyzer = self._make_analyzer(root)
+            args = SimpleNamespace(validate_findings=True, validate_findings_budget=60.0)
+            stats = {
+                "validated": 1,
+                "cached": 0,
+                "skipped_no_anchor": 0,
+                "statuses": {"confirmed_exploitable": 1},
+                "budget_exhausted": False,
+                "results_by_key": {"k": {"status": "confirmed_exploitable"}},
+            }
+            with patch(
+                "oasis.helpers.assistant.batch.annotate_rows_with_validation",
+                return_value=stats,
+            ), patch.object(analyzer, "_enrich_scan_validations_with_narrative") as m_narr:
+                analyzer._validate_findings_for_report("XSS", [], args)
+            m_narr.assert_not_called()
+
+    def test_hook_narrative_enriches_sidecar_payloads_when_flag_on(self):
+        """With the flag on, payloads gain narrative fields before the sidecar write."""
+        from oasis.schemas.analysis import AssistantInvestigationResult
+
+        base_payload = AssistantInvestigationResult(
+            vulnerability_name="XSS",
+            family="flow",
+            status="confirmed_exploitable",
+            confidence=0.9,
+            summary="deterministic",
+        ).model_dump()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            analyzer = self._make_analyzer(root)
+            analyzer.ollama_manager = SimpleNamespace()  # unused by the mocked synth
+            analyzer.llm_model = "deep-model"
+            args = SimpleNamespace(
+                validate_findings=True,
+                validate_findings_budget=60.0,
+                validate_findings_narrative=True,
+            )
+            stats = {
+                "validated": 1,
+                "cached": 0,
+                "skipped_no_anchor": 0,
+                "statuses": {"confirmed_exploitable": 1},
+                "budget_exhausted": False,
+                "results_by_key": {"k": base_payload},
+            }
+            synthetic = MagicMock(
+                narrative_markdown="LLM narrative",
+                narrative_thought_segments=["thought"],
+                synthesis_model="deep-model",
+                synthesis_error=None,
+            )
+            with patch(
+                "oasis.helpers.assistant.batch.annotate_rows_with_validation",
+                return_value=stats,
+            ), patch(
+                "oasis.helpers.assistant.think.investigation_synth."
+                "enrich_investigation_with_llm_narrative",
+                return_value=synthetic,
+            ) as m_narr:
+                returned = analyzer._validate_findings_for_report("XSS", [], args)
+            m_narr.assert_called_once()
+            self.assertEqual(returned["k"]["narrative_markdown"], "LLM narrative")
+            self.assertEqual(returned["k"]["narrative_thought_segments"], ["thought"])
+            self.assertEqual(returned["k"]["synthesis_model"], "deep-model")
+            self.assertEqual(returned["k"]["summary"], "deterministic")
+
+    def test_hook_narrative_skips_insufficient_signal_and_error(self):
+        from oasis.schemas.analysis import AssistantInvestigationResult
+
+        fp_payload = AssistantInvestigationResult(
+            vulnerability_name="XSS",
+            family="flow",
+            status="insufficient_signal",
+            confidence=0.2,
+            summary="fp",
+        ).model_dump()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            analyzer = self._make_analyzer(root)
+            analyzer.ollama_manager = SimpleNamespace()
+            analyzer.llm_model = "deep-model"
+            args = SimpleNamespace(
+                validate_findings=True,
+                validate_findings_budget=60.0,
+                validate_findings_narrative=True,
+            )
+            stats = {
+                "validated": 1,
+                "cached": 0,
+                "skipped_no_anchor": 0,
+                "statuses": {"insufficient_signal": 1},
+                "budget_exhausted": False,
+                "results_by_key": {"k": fp_payload},
+            }
+            with patch(
+                "oasis.helpers.assistant.batch.annotate_rows_with_validation",
+                return_value=stats,
+            ), patch(
+                "oasis.helpers.assistant.think.investigation_synth."
+                "enrich_investigation_with_llm_narrative"
+            ) as m_narr:
+                analyzer._validate_findings_for_report("XSS", [], args)
+            m_narr.assert_not_called()
+
     def test_hook_returns_results_by_key_and_writes_sidecar_after_report(self):
         """The hook hands the full payloads back and the sidecar is written beside the JSON report."""
         with tempfile.TemporaryDirectory() as td:
