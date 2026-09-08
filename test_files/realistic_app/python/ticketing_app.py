@@ -13,7 +13,6 @@ Design rules:
 
 import base64
 import os
-import pickle  # nosec: intentional insecure deserialization sink for tests
 import re
 import sqlite3
 import subprocess  # nosec: intentional command injection sink for tests
@@ -132,6 +131,7 @@ def feedback():
 @app.route("/internal/import", methods=["POST"])
 def import_backup():
     """VULNERABLE: pickle.loads on attacker-controlled data."""
+    import pickle  # nosec: test fixture — imported locally to keep the dangerous sink visible
     data = base64.b64decode(request.data)
     obj = pickle.loads(data)  # nosec: test fixture
     return jsonify(obj)
