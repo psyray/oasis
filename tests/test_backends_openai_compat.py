@@ -281,6 +281,13 @@ class TestOpenAICompatChat(unittest.TestCase):
         ]
 
         def stream_handler(request: httpx.Request) -> httpx.Response:
+            # Emulate real server behavior: SSE body only when the request asks
+            # for streaming; a JSON completion otherwise.
+            body = json.loads(request.content.decode("utf-8"))
+            if not body.get("stream"):
+                return httpx.Response(
+                    200, json={"choices": [{"message": {"content": "ok"}}]}, request=request
+                )
             return httpx.Response(200, content=b"\n".join(sse_lines), request=request)
 
         client = OpenAICompatClient(
@@ -290,6 +297,32 @@ class TestOpenAICompatChat(unittest.TestCase):
         self.assertEqual(
             chunks,
             [{"message": {"content": "hel"}}, {"message": {"content": "lo"}}],
+        )
+
+    def test_stream_maps_reasoning_deltas_to_thinking_channel(self):
+        sse_lines = [
+            b'data: {"choices": [{"delta": {"reasoning_content": "think"}}]}',
+            b'data: {"choices": [{"delta": {"reasoning_content": "ing"}}]}',
+            b'data: {"choices": [{"delta": {"content": "answer"}}]}',
+            b'data: {"choices": [{"finish_reason": "stop", "delta": {}}]}',
+            b'data: [DONE]',
+            b'',
+        ]
+
+        def stream_handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=b"\n".join(sse_lines), request=request)
+
+        client = OpenAICompatClient(
+            "http://llm.test/v1", transport=httpx.MockTransport(stream_handler)
+        )
+        chunks = list(client.chat("m", [{"role": "user", "content": "x"}], stream=True))
+        self.assertEqual(
+            chunks,
+            [
+                {"message": {"thinking": "think"}},
+                {"message": {"thinking": "ing"}},
+                {"message": {"content": "answer"}},
+            ],
         )
 
     def test_backend_chat_stream_yields_error_chunk_on_http_error(self):

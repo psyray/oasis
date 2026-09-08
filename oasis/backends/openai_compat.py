@@ -362,6 +362,12 @@ class OpenAICompatClient:
         content = delta.get("content")
         if isinstance(content, str) and content:
             return {"message": {"content": content}}
+        # Reasoning models (vLLM reasoning parsers) stream thinking in a
+        # separate ``reasoning_content`` field; map it to the ollama native
+        # ``thinking`` channel so callers can render it separately.
+        thinking = delta.get("reasoning_content")
+        if isinstance(thinking, str) and thinking:
+            return {"message": {"thinking": thinking}}
         return None
 
     # ------------------------------------------------------------------
@@ -372,11 +378,15 @@ class OpenAICompatClient:
         """
         Yield ollama-shaped chunks ``{"message": {"content": ...}}`` from an SSE stream.
 
+        ``stream: true`` is set here (not by the caller) so the server actually
+        answers with an SSE body; reasoning deltas (``reasoning_content``) are
+        normalized to the ollama ``thinking`` channel so callers can surface them.
         Transport and HTTP errors propagate; :meth:`ModelBackend.chat_stream`
         converts them into ``{"type": "error", ...}`` chunks for callers.
         """
         http = self._http()
-        with http.stream("POST", "/chat/completions", json=payload, timeout=timeout) as response:
+        stream_payload = {**payload, "stream": True}
+        with http.stream("POST", "/chat/completions", json=stream_payload, timeout=timeout) as response:
             if response.status_code >= 400:
                 body = response.read().decode(errors="replace")[:500]
                 raise RuntimeError(
