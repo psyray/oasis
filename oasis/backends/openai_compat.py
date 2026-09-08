@@ -19,6 +19,9 @@ Options translation (Ollama-style ``options`` dict → OpenAI payload):
 ``seed``/``presence_penalty``/``frequency_penalty`` are forwarded verbatim,
 ``timeout`` (ms) becomes the per-request httpx timeout (seconds), and unsupported
 keys (``num_ctx``, ``repeat_penalty``, ...) are dropped with a debug log.
+The Ollama ``think`` flag maps to vLLM-style ``chat_template_kwargs
+.enable_thinking`` (reasoning models), gated by ``OASIS_OPENAI_THINKING_KWARGS``
+with the same auto/on/off negotiation as structured outputs.
 """
 
 import json
@@ -157,13 +160,12 @@ class OpenAICompatClient:
 
         Accepts Ollama-style kwargs for drop-in compatibility: ``format`` (JSON
         schema for structured outputs), ``stream`` (SSE generator), ``think``
-        (ignored — OpenAI-compatible servers have no standard thinking flag).
+        (translated to vLLM-style ``chat_template_kwargs.enable_thinking`` when
+        ``OASIS_OPENAI_THINKING_KWARGS`` allows it).
         """
         stream = bool(kwargs.pop("stream", False))
         schema = kwargs.pop("format", None)
         think = kwargs.pop("think", None)
-        if think is not None:
-            logger.debug("Ignoring 'think' option for OpenAI-compatible backend (unsupported)")
         if kwargs:
             logger.debug(
                 "Ignoring unsupported chat kwargs for OpenAI-compatible backend: %s",
@@ -171,6 +173,14 @@ class OpenAICompatClient:
             )
 
         payload, timeout = self._build_chat_payload(model, messages, options)
+        if think is not None and config.OPENAI_THINKING_KWARGS != "off":
+            # vLLM-style thinking control for reasoning models: the chat-template
+            # variable is simply unused by templates that don't declare it.
+            payload["chat_template_kwargs"] = {"enable_thinking": bool(think)}
+        elif think is not None:
+            logger.debug(
+                "Ignoring 'think' option for OpenAI-compatible backend (OASIS_OPENAI_THINKING_KWARGS=off)"
+            )
         structured_enabled = isinstance(schema, dict) and bool(schema) and config.OPENAI_STRUCTURED_OUTPUT != "off"
         if structured_enabled:
             payload["response_format"] = {
@@ -187,10 +197,19 @@ class OpenAICompatClient:
         try:
             data = self._post_json("/chat/completions", payload, timeout=timeout)
         except RuntimeError as error:
-            fallback_payload = self._schema_in_prompt_fallback_payload(payload, schema, error)
-            if fallback_payload is None:
-                raise
-            data = self._post_json("/chat/completions", fallback_payload, timeout=timeout)
+            # Compat retries after HTTP 4xx, least destructive first: strip the
+            # vendor-only thinking kwargs (keeps response_format), then fall back
+            # to schema-in-prompt for servers that reject structured outputs.
+            data = None
+            last_error: Optional[Exception] = error
+            for retry_payload in self._compat_retry_payloads(payload, schema, error):
+                try:
+                    data = self._post_json("/chat/completions", retry_payload, timeout=timeout)
+                    break
+                except RuntimeError as retry_error:
+                    last_error = retry_error
+            if data is None:
+                raise last_error
         return self._normalize_chat_response(data)
 
     def generate(self, model: str, prompt: str, options: Optional[dict] = None, **kwargs: Any):
@@ -206,6 +225,48 @@ class OpenAICompatClient:
     # Payload building / response normalization
     # ------------------------------------------------------------------
 
+    def _thinking_kwargs_fallback_payload(
+        self,
+        payload: Dict[str, Any],
+        error: Exception,
+    ) -> Optional[Dict[str, Any]]:
+        """Build a retry payload without ``chat_template_kwargs`` when the server rejects it (auto mode + HTTP 4xx only).
+
+        Returns ``None`` when the fallback does not apply so other retries (or the
+        original error) take over.
+        """
+        if "chat_template_kwargs" not in payload or config.OPENAI_THINKING_KWARGS != "auto":
+            return None
+        message = str(error)
+        if not any(f"returned {status}" in message for status in _STRUCTURED_UNSUPPORTED_STATUS):
+            return None
+        logger.warning(
+            "OpenAI-compatible server rejected chat_template_kwargs; retrying once "
+            "without thinking control"
+        )
+        retry_payload = dict(payload)
+        retry_payload.pop("chat_template_kwargs", None)
+        return retry_payload
+
+    def _compat_retry_payloads(
+        self,
+        payload: Dict[str, Any],
+        schema: Any,
+        error: Exception,
+    ) -> List[Dict[str, Any]]:
+        """Compat retry payloads after an HTTP 4xx, least destructive first.
+
+        1. ``chat_template_kwargs`` stripped (vendor-only field) — servers that
+           reject unknown body fields but support ``response_format`` still work.
+        2. Structured output replaced by a schema-in-prompt hint (existing
+           structured-output negotiation).
+        """
+        candidates = (
+            self._thinking_kwargs_fallback_payload(payload, error),
+            self._schema_in_prompt_fallback_payload(payload, schema, error),
+        )
+        return [candidate for candidate in candidates if candidate is not None]
+
     def _schema_in_prompt_fallback_payload(
         self,
         payload: Dict[str, Any],
@@ -215,6 +276,9 @@ class OpenAICompatClient:
         """Build a retry payload without structured enforcement when the server rejects ``response_format`` (auto mode + HTTP 4xx only).
 
         Returns ``None`` when the fallback does not apply so the original error propagates.
+        When thinking kwargs negotiation is in auto mode, the vendor-only
+        ``chat_template_kwargs`` field is stripped too, so this retry is the
+        maximally-compatible payload (no extension fields at all).
         """
         if "response_format" not in payload or schema is None:
             return None
@@ -229,6 +293,8 @@ class OpenAICompatClient:
         )
         retry_payload = dict(payload)
         retry_payload.pop("response_format", None)
+        if config.OPENAI_THINKING_KWARGS == "auto":
+            retry_payload.pop("chat_template_kwargs", None)
         messages = [dict(m) if isinstance(m, dict) else m for m in payload.get("messages", [])]
         if messages and isinstance(messages[-1], dict):
             hint = _SCHEMA_PROMPT_HINT.format(schema=json.dumps(schema, indent=2))

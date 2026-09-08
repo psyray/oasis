@@ -156,6 +156,103 @@ class TestOpenAICompatChat(unittest.TestCase):
         self.assertIn("verdict", calls[1]["messages"][-1]["content"])
         self.assertEqual(response["message"]["content"], '{"verdict": "SAFE"}')
 
+    def test_chat_translates_think_to_chat_template_kwargs(self):
+        captured = {}
+
+        def chat_handler(request):
+            captured["payload"] = json.loads(request.content.decode("utf-8"))
+            return 200, {"choices": [{"message": {"content": "pong"}}]}
+
+        client = _client_with_routes(chat_handler=chat_handler)
+        client.chat("m", [{"role": "user", "content": "x"}], think=False)
+        self.assertEqual(captured["payload"]["chat_template_kwargs"], {"enable_thinking": False})
+
+        client.chat("m", [{"role": "user", "content": "x"}], think=True)
+        self.assertEqual(captured["payload"]["chat_template_kwargs"], {"enable_thinking": True})
+
+    def test_chat_without_think_omits_chat_template_kwargs(self):
+        captured = {}
+
+        def chat_handler(request):
+            captured["payload"] = json.loads(request.content.decode("utf-8"))
+            return 200, {"choices": [{"message": {"content": "pong"}}]}
+
+        client = _client_with_routes(chat_handler=chat_handler)
+        client.chat("m", [{"role": "user", "content": "x"}])
+        self.assertNotIn("chat_template_kwargs", captured["payload"])
+
+    def test_chat_thinking_off_ignores_think(self):
+        captured = {}
+
+        def chat_handler(request):
+            captured["payload"] = json.loads(request.content.decode("utf-8"))
+            return 200, {"choices": [{"message": {"content": "pong"}}]}
+
+        client = _client_with_routes(chat_handler=chat_handler)
+        with patch.object(config, "OPENAI_THINKING_KWARGS", "off"):
+            client.chat("m", [{"role": "user", "content": "x"}], think=False)
+
+        self.assertNotIn("chat_template_kwargs", captured["payload"])
+
+    def test_chat_strips_chat_template_kwargs_on_400(self):
+        calls = []
+
+        def chat_handler(request):
+            body = json.loads(request.content.decode("utf-8"))
+            calls.append(body)
+            if "chat_template_kwargs" in body:
+                return 400, {"error": {"message": "unknown field chat_template_kwargs"}}
+            return 200, {"choices": [{"message": {"content": "pong"}}]}
+
+        client = _client_with_routes(chat_handler=chat_handler)
+        response = client.chat(
+            "m", [{"role": "user", "content": "x"}], think=False, format={"type": "object"}
+        )
+
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("chat_template_kwargs", calls[1])
+        self.assertIn("response_format", calls[1])
+        self.assertEqual(response["message"]["content"], "pong")
+
+    def test_chat_compat_retries_strip_fields_in_order(self):
+        calls = []
+
+        def chat_handler(request):
+            body = json.loads(request.content.decode("utf-8"))
+            calls.append(body)
+            if "chat_template_kwargs" in body:
+                return 400, {"error": {"message": "unknown field chat_template_kwargs"}}
+            if "response_format" in body:
+                return 400, {"error": {"message": "response_format not supported"}}
+            return 200, {"choices": [{"message": {"content": '{"verdict": "SAFE"}'}}]}
+
+        client = _client_with_routes(chat_handler=chat_handler)
+        schema = {"type": "object", "properties": {"verdict": {"type": "string"}}}
+        response = client.chat(
+            "m", [{"role": "user", "content": "x"}], think=False, format=schema
+        )
+
+        self.assertEqual(len(calls), 3)
+        self.assertNotIn("chat_template_kwargs", calls[1])
+        self.assertIn("response_format", calls[1])
+        self.assertNotIn("response_format", calls[2])
+        self.assertIn("verdict", calls[2]["messages"][-1]["content"])
+        self.assertEqual(response["message"]["content"], '{"verdict": "SAFE"}')
+
+    def test_chat_thinking_on_surfaces_server_errors(self):
+        calls = []
+
+        def chat_handler(request):
+            body = json.loads(request.content.decode("utf-8"))
+            calls.append(body)
+            return 400, {"error": {"message": "unknown field chat_template_kwargs"}}
+
+        client = _client_with_routes(chat_handler=chat_handler)
+        with patch.object(config, "OPENAI_THINKING_KWARGS", "on"), self.assertRaises(RuntimeError):
+            client.chat("m", [{"role": "user", "content": "x"}], think=False)
+
+        self.assertEqual(len(calls), 1)
+
     def test_chat_structured_off_never_sends_response_format(self):
         captured = {}
 

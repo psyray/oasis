@@ -327,6 +327,7 @@ Optional **`OASIS_*`** variables tune timeouts and heuristic budgets without edi
 - **`OASIS_OPENAI_API_KEY`** — API key for OpenAI-compatible servers (never logged).
 - **`OASIS_OPENAI_CTX_TOKENS`** — declared context window (tokens) of OpenAI-compatible models; used for chunk sizing and assistant budget (the OpenAI protocol does not expose it).
 - **`OASIS_OPENAI_STRUCTURED_OUTPUT`** — `auto` (default: send `response_format` JSON schema, fall back to schema-in-prompt on HTTP 4xx), `on` (always send, surface errors), `off` (schema-in-prompt only).
+- **`OASIS_OPENAI_THINKING_KWARGS`** — `auto` (default: translate the `-mt`/`-smt` thinking flags into vLLM-style `chat_template_kwargs.enable_thinking`, retry without it on HTTP 4xx), `on` (always translate, surface errors), `off` (never send — strict servers).
 - **`OASIS_WEB_OLLAMA_URL`** — Ollama base URL for the dashboard assistant when `--web-ollama-url` is not set.
 - **`OASIS_CHUNK_ANALYZE_TIMEOUT_SEC`** — server-side deadline for one Ollama generate call (seconds).
 - **`OASIS_CHUNK_DEEP_NUM_PREDICT`** — cap on structured deep output tokens (`num_predict`).
@@ -363,6 +364,7 @@ oasis -i /path/to/codebase \
 - Embeddings use the same server (`/v1/embeddings`); point `-em` at a served embedding model (e.g. `nomic-embed-text` on LM Studio / vLLM with `--task embed`).
 - Declare the model context with **`OASIS_OPENAI_CTX_TOKENS`** so chunk sizing and the assistant budget adapt (the OpenAI protocol does not expose context windows).
 - Structured outputs are sent as `response_format` JSON schemas; on servers that reject them, OASIS automatically retries with the schema appended to the prompt (see `OASIS_OPENAI_STRUCTURED_OUTPUT`).
+- Thinking flags (`-mt` / `-smt`) map to `chat_template_kwargs.enable_thinking` (vLLM convention) so reasoning models like Qwen3 honor the OASIS default (`thinking off` = no reasoning tokens); on servers rejecting the field, OASIS retries without it (see `OASIS_OPENAI_THINKING_KWARGS`). When thinking is left enabled, reasoning tokens consume the `max_tokens` budget.
 - Dashboard assistant: `--web-provider openai --web-api-base ...` (or nothing — it follows the scan backend by default).
 
 Provider selection precedence: `--provider` → `OASIS_LLM_PROVIDER` → auto (`openai` when an API base is set, else `ollama`).

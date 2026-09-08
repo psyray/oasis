@@ -347,6 +347,20 @@ if os.environ.get("OASIS_OPENAI_STRUCTURED_OUTPUT", "auto").strip().lower() not 
         _raw_openai_structured,
     )
 
+# Thinking transport on OpenAI-compatible servers (reasoning models, e.g. Qwen3 on
+# vLLM, expose their thinking toggle through ``chat_template_kwargs``):
+#   "auto" — translate the OASIS ``think`` flag into ``chat_template_kwargs``;
+#            on HTTP 4xx retry once without it (server compat, mirrors structured).
+#   "on"   — always translate when ``think`` is set, surface server errors.
+#   "off"  — never send it (strict servers that reject unknown payload fields).
+_raw_openai_thinking = os.environ.get("OASIS_OPENAI_THINKING_KWARGS", "auto").strip().lower()
+OPENAI_THINKING_KWARGS: str = _raw_openai_thinking if _raw_openai_thinking in ("auto", "on", "off") else "auto"
+if os.environ.get("OASIS_OPENAI_THINKING_KWARGS", "auto").strip().lower() not in ("auto", "on", "off"):
+    logger.warning(
+        "Invalid OASIS_OPENAI_THINKING_KWARGS=%r; expected auto|on|off. Using 'auto'.",
+        _raw_openai_thinking,
+    )
+
 # =============================================================================
 # Heuristic tuning — structured-output degeneracy + PoC pipeline (read before changing one knob)
 # =============================================================================
