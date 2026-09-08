@@ -4,8 +4,8 @@
 Not part of the unittest suite — it needs a running LLM server (Ollama or any
 OpenAI-compatible endpoint). For each fixture language directory it runs the
 ``oasis`` CLI on a reduced vulnerability set (default: the Injection family —
-SQL Injection, Command Injection, Cross-Site Scripting (XSS)), then checks the
-canonical JSON reports for the expected detections and scan-time verdicts.
+sqli, cmdi, xss tags), then checks the canonical JSON reports for the expected
+detections and scan-time verdicts.
 
 Examples:
     python scripts/e2e_fixture_scan.py \
@@ -31,11 +31,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List
 
-DEFAULT_VULNS = [
-    "SQL Injection",
-    "Command Injection",
-    "Cross-Site Scripting (XSS)",
-]
+DEFAULT_VULNS = ["sqli", "cmdi", "xss"]  # CLI tags for the Injection family
 DEFAULT_LANGUAGES = ["csharp", "java", "js", "php", "python"]
 
 
