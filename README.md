@@ -69,7 +69,7 @@
 ## 🌟 Features
 
 - 🤖 **Dashboard assistant**: In the report modal, the AI assistant triages **single-vulnerability JSON** reports or **executive / scan-wide** mode (aggregated JSON under the run) with optional **RAG** over the local embedding cache, a **chat model** selector (Ollama tags), **Markdown** replies, persisted **chat sessions** keyed by the canonical report path, and configurable Ollama/RAG flags (`--web-ollama-url`, `--web-embed-model`, `--web-assistant-rag`)
-- 🛡️ **Finding validation agent**: The assistant can run a deterministic, code-driven investigation for one selected finding via `POST /api/assistant/investigate`, then return a citation-backed exploitability verdict with confidence. Optional LLM narrative can be added on top, but it is constrained to stay consistent with the deterministic result. See [Finding Validation Principle](#readme-finding-validation-principle) for full behavior and guardrails.
+- 🛡️ **Finding validation agent**: Findings are **validated automatically during the scan** — a deterministic, code-driven investigation (entry points, call chains, taint flows, on-path mitigations) embeds an exploitability verdict with confidence in every report, shown as color-coded badges. In the dashboard, the assistant panel exposes the full evidence per finding via a single finding picker or the **Ask AI** buttons in the Detailed analysis section; a manual `POST /api/assistant/investigate` re-validation with optional LLM narrative stays available and is constrained to stay consistent with the deterministic result. See [Finding Validation Principle](#readme-finding-validation-principle) for full behavior and guardrails.
 - 🔍 **Multi-Model Analysis**: Leverage multiple Ollama models for comprehensive security scanning
 - 🤝 **OpenAI-compatible backends**: Run the same pipeline against **vLLM**, LM Studio, llama.cpp server, LocalAI, ... via `--provider openai --api-base URL`
 - 🔄 **Two-Phase Scanning**: Use lightweight models for initial scanning and powerful models for deep analysis
@@ -309,7 +309,7 @@ For **JSON** reports, the dashboard modal includes an **Assistant** panel (triag
 
 Assistant replies are rendered as **Markdown** (sanitized HTML). Model “thinking” sections wrapped in tags such as `<think>…</think>` are stripped from the visible answer and shown in collapsible blocks when present.
 
-**Chat persistence** stores each conversation under `security_reports/<project_slug>/<run_timestamp>/.../json/.../<report>.json` in a sibling `chat/` folder (one JSON file per session). The UI can resume the latest session, start a new chat, or delete saved sessions. Data stays on the server filesystem next to your reports (no separate database). REST endpoints: `GET /api/assistant/sessions`, `GET /api/assistant/session`, `POST /api/assistant/chat`, **`POST /api/assistant/chat-stream`** (NDJSON progressive replies—the UI falls back to `POST /api/assistant/chat` when streaming is unavailable), `POST /api/assistant/session-branch`, `DELETE /api/assistant/session`, `DELETE /api/assistant/sessions`.
+**Chat persistence** stores each conversation under `security_reports/<project_slug>/<run_timestamp>/.../json/.../<report>.json` in a sibling `chat/` folder (one JSON file per session). The UI can resume the latest session, start a new chat, or delete saved sessions. Data stays on the server filesystem next to your reports (no separate database). REST endpoints: `GET /api/assistant/sessions`, `GET /api/assistant/session`, `POST /api/assistant/chat`, **`POST /api/assistant/chat-stream`** (NDJSON progressive replies—the UI falls back to `POST /api/assistant/chat` when streaming is unavailable), `POST /api/assistant/session-branch`, `DELETE /api/assistant/session`, `DELETE /api/assistant/sessions`. Scan-time verdicts are served from a sibling **`finding_validations.json`** sidecar via `GET /api/assistant/finding-validations?report_path=…` (with `finding_scope_report_path=…` in executive aggregate mode) and also feed the chat system prompt when no session validation exists.
 
 ### Logging and Debug
 - `--debug` `-d`: Enable debug output
@@ -422,7 +422,7 @@ Analysis is orchestrated by a single **LangGraph** pipeline:
 3. **Expand** — widen suspicious chunk context within budget (retries capped by **`--langgraph-max-expand`**)  
 4. **Deep** — `ChunkDeepAnalysis` for flagged chunks  
 5. **Verify** — schema consistency; may loop back to **Expand** when retries remain  
-6. **Report** — vulnerability reports + executive summary  
+6. **Report** — vulnerability reports + executive summary; with **`--validate-findings`** (default: on) each finding is deterministically validated right before its report is written (verdicts embedded in the reports and visible as badges)  
 7. **PoC stage (optional)** — **`--poc-hints`** (hint bullets from findings) and/or **`--poc-assist`** (LLM-produced executable PoC text, not run by OASIS)
 
 Within each run you still choose a **scan model** (`-sm`) and **deep model(s)** (`-m`) as before.
