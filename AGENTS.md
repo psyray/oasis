@@ -1,6 +1,6 @@
 # OASIS — Agent Instructions
 
-**OASIS** (**O**llama **A**utomated **S**ecurity **I**ntelligence **S**canner) — Python 3.9+ CLI plus a Flask/Socket.IO web dashboard for AI-powered, fully local code security auditing via local LLM backends (native Ollama, or OpenAI-compatible servers such as vLLM / LiteLLM) and a LangGraph pipeline. Public repo: `github.com/psyray/oasis`.
+**OASIS** (**O**pen **A**utomated **S**ecurity **I**ntelligence **S**canner) — Python 3.9+ CLI plus a Flask/Socket.IO web dashboard for AI-powered, fully local code security auditing via local LLM backends (native Ollama, or OpenAI-compatible servers such as vLLM / LiteLLM) and a LangGraph pipeline. Public repo: `github.com/psyray/oasis`.
 
 ## Install / refresh (pipx only)
 

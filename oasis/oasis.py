@@ -51,7 +51,7 @@ from .report import Report
 from .web import WebServer
 
 class OasisScanner:
-    """Main class for OASIS - Ollama Automated Security Intelligence Scanner"""
+    """Main class for OASIS - Open Automated Security Intelligence Scanner"""
     
     def __init__(self):
         """Initialize the OASIS scanner"""
@@ -284,7 +284,7 @@ class OasisScanner:
                 return super()._split_lines(text, width)
 
         parser = argparse.ArgumentParser(
-            description='🏝️  OASIS - Ollama Automated Security Intelligence Scanner',
+            description='🏝️  OASIS - Open Automated Security Intelligence Scanner',
             formatter_class=CustomFormatter
         )
         
@@ -957,7 +957,7 @@ class OasisScanner:
         if self.args.version:
             # Import here to avoid circular imports
             from .__init__ import __version__
-            print(f"OASIS - Ollama Automated Security Intelligence Scanner v{__version__}")
+            print(f"OASIS - Open Automated Security Intelligence Scanner v{__version__}")
             return None
 
         if getattr(self.args, "check_update", False):

@@ -20,7 +20,7 @@
   <h1>OASIS</h1>
 </div>
 <p align="center">
-  <small>🏝️ <strong>O</strong>llama <strong>A</strong>utomated <strong>S</strong>ecurity <strong>I</strong>ntelligence <strong>S</strong>canner</small>
+  <small>🏝️ <strong>O</strong>pen <strong>A</strong>utomated <strong>S</strong>ecurity <strong>I</strong>ntelligence <strong>S</strong>canner</small>
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  🛡️ An AI-powered security auditing tool that leverages Ollama models to detect and analyze potential security vulnerabilities in your code.
+  🛡️ An AI-powered security auditing tool that leverages local LLMs (Ollama, or any OpenAI-compatible server: vLLM, LiteLLM, LM Studio…) to detect and analyze potential security vulnerabilities in your code.
 </p>
 
 <p align="center">

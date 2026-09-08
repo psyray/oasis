@@ -368,7 +368,7 @@ def display_logo():
      `Y88P'  YP  YP  `8888Y' __/_||_\\_ `8888Y' 
 
 ╔════════════════════════════════════════════════╗
-║ Ollama Automated Security Intelligence Scanner ║
+║ Open Automated Security Intelligence Scanner   ║
 ╚════════════════════════════════════════════════╝
 """
     logger.info(logo)

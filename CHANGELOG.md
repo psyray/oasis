@@ -28,6 +28,7 @@
 
 - 🖥️ **Provider-neutral CLI/dashboard messages**: banners and errors no longer hardcode Ollama wording; Ollama stays the **default** provider with unchanged behavior.
 - 📚 **README**: new "Model providers (backends)" section (vLLM workflow + new flags/env vars).
+- 🏝️ **Branding**: OASIS now stands for **Open** Automated Security Intelligence Scanner (README tagline, CLI banner, dashboard footer, packaging metadata) — reflecting multi-backend support (native Ollama by default, plus any OpenAI-compatible local server).
 
 ## 🚀 [0.6.1] - 2026-04-29
 
