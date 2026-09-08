@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
-PATTERNS_VERSION = 1
+PATTERNS_VERSION = 2
 
 
 # --------------------------------------------------------------------------- #
@@ -43,7 +43,17 @@ ENTRY_POINTS: Dict[str, List[Tuple[str, str]]] = {
         (r"@(?:Get|Post|Put|Delete|Patch|Request)Mapping\s*\(\s*(?:value\s*=\s*)?['\"]([^'\"]+)['\"]", "spring_mapping"),
     ],
     "laravel": [
-        (r"\bRoute::(get|post|put|delete|patch|any)\s*\(\s*['\"]([^'\"]+)['\"]", "laravel_route"),
+        (r"\bRoute::(?:get|post|put|delete|patch|any)\s*\(\s*['\"]([^'\"]+)['\"]", "laravel_route"),
+    ],
+    "php": [
+        # Native PHP request dispatch: superglobals read from the request body.
+        # Each superglobal access marks a place where user-controlled data
+        # enters the program (procedural scripts, index.php?action=… routers).
+        (r"\$_GET\s*\[", "php_get"),
+        (r"\$_POST\s*\[", "php_post"),
+        (r"\$_REQUEST\s*\[", "php_request"),
+        (r"\$_FILES\s*\[", "php_files"),
+        (r"\$argv\s*\[", "php_argv"),
     ],
     "rails": [
         (r"^\s*(?:get|post|put|delete|patch)\s+['\"]([^'\"]+)['\"]", "rails_route"),
@@ -96,6 +106,10 @@ SOURCES: Dict[str, List[str]] = {
         r"\breq\.query\b",
         r"\brouter\.query\b",
         r"\bparams\.get\s*\(",
+        # PHP superglobals
+        r"\$_GET\s*\[",
+        r"\$_POST\s*\[",
+        r"\$_REQUEST\s*\[",
         # ASP.NET Core
         r"\bRequest\.Query\[",
         r"\bRequest\.Form\[",
@@ -114,6 +128,8 @@ SOURCES: Dict[str, List[str]] = {
         r"\bRequest\.Headers\[",
         r"\bRequest\.Cookies\[",
         r"\[FromHeader\b",
+        r"\$_COOKIE\s*\[",
+        r"\$_SERVER\[\s*['\"]HTTP_",
     ],
     "http_body": [
         r"\brequest\.body\b",
@@ -122,16 +138,20 @@ SOURCES: Dict[str, List[str]] = {
         r"\breq\.body\b",
         r"\bRequest\.Body\b",
         r"\bHttpContext\.Request\.Body\b",
+        r"file_get_contents\s*\(\s*['\"]php://input",
+        r"\$HTTP_RAW_POST_DATA\b",
     ],
     "http_file_upload": [
         r"\brequest\.files\b",
         r"\brequest\.FILES\b",
         r"\breq\.files\b",
         r"\bMultipartFile\b",
+        r"\$_FILES\s*\[",
     ],
     "env_var": [
         r"\bos\.environ\[",
         r"\bos\.environ\.get\s*\(",
+        r"\bgetenv\s*\(",
     ],
 }
 
@@ -151,6 +171,11 @@ SINKS: Dict[str, List[str]] = {
         r"\.(?:FromSql|FromSqlRaw|FromSqlInterpolated|ExecuteSqlRaw|ExecuteSqlInterpolated)\s*\(",
         # Dapper
         r"\.(?:Query|QueryAsync|QueryFirst|QueryFirstAsync|Execute|ExecuteAsync)\s*\(",
+        # PHP database access
+        r"->\s*query\s*\(",
+        r"\bmysqli_(?:query|real_query|multi_query|prepare)\s*\(",
+        r"\b(?:pg_query|pg_exec)\s*\(",
+        r"\b(?:new\s+)?(?:PDO|SQLite3)\b",
     ],
     "os_exec": [
         r"\bsubprocess\.(?:call|run|Popen|check_output|check_call)\s*\(",
@@ -159,6 +184,12 @@ SINKS: Dict[str, List[str]] = {
         # .NET: System.Diagnostics.Process.Start(...) and ProcessStartInfo
         r"\bProcess\.Start\s*\(",
         r"\bnew\s+ProcessStartInfo\s*\(",
+        # PHP process execution
+        r"\bshell_exec\s*\(",
+        r"\bsystem\s*\(",
+        r"\bpassthru\s*\(",
+        r"\bproc_open\s*\(",
+        r"\bpopen\s*\(",
     ],
     "shell_exec": [
         r"\bshell\s*=\s*True\b",
@@ -178,6 +209,12 @@ SINKS: Dict[str, List[str]] = {
         r"\brender_template_string\s*\(",
         r"\bMarkup\s*\(",
         r"\|\s*safe\b",
+        # PHP reflected/stored output (echo/print render unsanitized data)
+        r"\becho\s+",
+        r"\bprint\s+",
+        r"\bprint_r\s*\(",
+        r"\bprintf?\s*\(",
+        r"\bvprintf\s*\(",
     ],
     "innerHTML_write": [
         r"\.innerHTML\s*=",
@@ -192,6 +229,9 @@ SINKS: Dict[str, List[str]] = {
         r"\bPath\s*\([^)]*\)\.read_text\s*\(",
         r"\bFile(?:Input|Reader)Stream\s*\(",
         r"\bfs\.(?:readFile|readFileSync|createReadStream)\s*\(",
+        r"\bfopen\s*\(",
+        r"\bfile_get_contents\s*\(",
+        r"\breadfile\s*\(",
     ],
     "path_join": [
         r"\bos\.path\.join\s*\(",
@@ -211,6 +251,8 @@ SINKS: Dict[str, List[str]] = {
         r"\bhttpx\.(?:get|post|put|delete|patch|request|AsyncClient)\s*\(",
         r"\bfetch\s*\(",
         r"\baxios\.(?:get|post|put|delete|patch|request)\s*\(",
+        r"\bcurl_init\s*\(",
+        r"\bcurl_exec\s*\(",
     ],
     "redirect_call": [
         r"\bredirect\s*\(",
@@ -307,6 +349,7 @@ MITIGATIONS: Dict[str, List[str]] = {
     ],
     "shlex_quote": [
         r"\bshlex\.quote\s*\(",
+        r"\bescapeshellarg\s*\(",
     ],
     "allowlist_cmd": [
         r"\bif\s+cmd\s+in\s+\{?\[",
@@ -320,6 +363,9 @@ MITIGATIONS: Dict[str, List[str]] = {
         r"\bescape\s*\(",
         r"\bencodeURIComponent\s*\(",
         r"\bDOMPurify\.sanitize\s*\(",
+        r"\bhtmlspecialchars\s*\(",
+        r"\bhtmlentities\s*\(",
+        r"\bstrip_tags\s*\(",
     ],
     "bleach_clean": [
         r"\bbleach\.clean\s*\(",

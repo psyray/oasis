@@ -59,9 +59,14 @@ def _sink_from_payload_indices(
     sink_file: Optional[Path] = None
     fp = file_entry.get("file_path")
     if isinstance(fp, str) and fp.strip():
-        candidate = (scan_root / fp).resolve(strict=False)
-        if is_path_within_root(candidate, scan_root) and candidate.is_file():
-            sink_file = candidate
+        # Report JSON stores paths relative to the directory OASIS was launched
+        # from, while *scan_root* is the analyzed folder (often a subdirectory).
+        # Try both interpretations and keep whichever resolves inside *scan_root*.
+        candidates = ((scan_root / fp).resolve(strict=False), Path(fp).resolve(strict=False))
+        for candidate in candidates:
+            if is_path_within_root(candidate, scan_root) and candidate.is_file():
+                sink_file = candidate
+                break
 
     sink_line: Optional[int] = None
     chunks = file_entry.get("chunk_analyses") or []

@@ -8,7 +8,7 @@ to minimise copy overhead between nodes.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict
 
 from oasis.helpers.vuln.taxonomy import VulnDescriptor
 
@@ -30,6 +30,10 @@ class AssistantGraphState(TypedDict, total=False):
     authz_hits: List[Any]
     control_checks: List[Any]
     config_findings: List[Any]
+
+    # Internal hand-off between ``collect_entry_points`` and ``trace_execution``.
+    # Declared so LangGraph keeps it across nodes (undeclared keys are dropped).
+    _entry_points_grouped: Dict[str, List[Any]]
 
     errors: List[str]
     budget_exhausted: bool

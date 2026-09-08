@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from oasis.agent.assistant_labels import (
     ASSISTANT_ROUTE_ACCESS,
@@ -27,7 +27,7 @@ from oasis.helpers.assistant.scan.log_filter import run_log_filter_scan
 from oasis.helpers.assistant.scan.mitigations import find_mitigations_in_root
 from oasis.helpers.assistant.scan.secret_scan import run_secret_scan
 from oasis.helpers.assistant.scan.taint import detect_flows_for_descriptor
-from oasis.helpers.assistant.scan.trace import trace_to_entry_points
+from oasis.helpers.assistant.scan.trace import enclosing_symbol_with_line, trace_to_entry_points
 from oasis.helpers.assistant.verdict.verdict import VerdictInputs, compute_verdict
 from oasis.helpers.vuln.taxonomy import VulnDescriptor, VulnFamily, get_descriptor
 
@@ -84,8 +84,7 @@ def node_collect_entry_points(state: AssistantGraphState) -> Dict[str, Any]:
             "entry_points": [],
         }
     flat = [ep for entries in grouped.values() for ep in entries]
-    state["_entry_points_grouped"] = grouped  # type: ignore[index]
-    return {"entry_points": flat}
+    return {"entry_points": flat, "_entry_points_grouped": grouped}
 
 
 def node_trace_execution(state: AssistantGraphState) -> Dict[str, Any]:
@@ -133,11 +132,50 @@ def node_taint_flow(state: AssistantGraphState) -> Dict[str, Any]:
             "errors": [*state.get("errors", []), f"taint: {exc}"],
             "taint_flows": [],
         }
+    if not flows:
+        # Findings may anchor on a wrapper (e.g. a function returning tainted
+        # data) whose *call site* is the real sink (PHP `echo f($_GET[…])`,
+        # template renderers). Retry on the caller-hop lines produced by the
+        # trace so flows anchored there are still surfaced.
+        for path in state.get("execution_paths") or []:
+            for hop in getattr(path, "hops", None) or []:
+                hop_line = _hop_line_int(getattr(getattr(hop, "citation", None), "start_line", None), sink_line)
+                if hop_line is None:
+                    continue
+                try:
+                    flows = detect_flows_for_descriptor(
+                        Path(sink_file),
+                        hop_line,
+                        descriptor.sink_kinds,
+                        descriptor.source_kinds,
+                    )
+                except Exception:  # pragma: no cover - defensive
+                    continue
+                if flows:
+                    return {"taint_flows": flows}
     return {"taint_flows": flows}
 
 
+def _hop_line_int(hop_line: Any, sink_line: Any) -> Optional[int]:
+    """Return *hop_line* as a positive int different from the sink line, else None."""
+    try:
+        line = int(hop_line)
+    except (TypeError, ValueError):
+        return None
+    if line <= 0 or line == int(sink_line):
+        return None
+    return line
+
+
 def node_detect_mitigations(state: AssistantGraphState) -> Dict[str, Any]:
-    """Scan for sanitizers/validators relevant to this vulnerability."""
+    """Scan for sanitizers/validators relevant to this vulnerability.
+
+    Only mitigations that sit **on the finding's path** keep their
+    ``nullifies`` flag: same enclosing function as the sink, or the same
+    enclosing function as a traced caller hop. A sanitizer in an unrelated
+    sibling function (e.g. a ``*_safe`` variant in the same file) must not
+    neutralise the finding.
+    """
     if not _budget_ok(state):
         return {"budget_exhausted": True}
     descriptor = _ensure_descriptor(state)
@@ -152,7 +190,40 @@ def node_detect_mitigations(state: AssistantGraphState) -> Dict[str, Any]:
             "errors": [*state.get("errors", []), f"mitigations: {exc}"],
             "mitigations": [],
         }
-    return {"mitigations": hits}
+    kept = [hit for hit in hits if _mitigation_on_path(hit, state) or not hit.nullifies]
+    return {"mitigations": kept}
+
+
+def _mitigation_on_path(hit, state: AssistantGraphState) -> bool:
+    """True when *hit* sits in the sink's function or a traced caller function."""
+    sink_file = state.get("sink_file")
+    sink_line = state.get("sink_line")
+    if not sink_file or not sink_line:
+        return False
+    citation = hit.citation
+    try:
+        hit_symbol = enclosing_symbol_with_line(Path(citation.file_path), int(citation.start_line))
+    except (OSError, ValueError):
+        return False
+    sink_symbol = enclosing_symbol_with_line(Path(sink_file), int(sink_line))
+    if hit_symbol is not None and hit_symbol == sink_symbol:
+        return True
+    for path in state.get("execution_paths") or []:
+        for hop in getattr(path, "hops", None) or []:
+            hop_citation = getattr(hop, "citation", None)
+            if hop_citation is None:
+                continue
+            try:
+                if Path(hop_citation.file_path).resolve(strict=False) != Path(citation.file_path).resolve(strict=False):
+                    continue
+                hop_symbol = enclosing_symbol_with_line(
+                    Path(hop_citation.file_path), int(hop_citation.start_line)
+                )
+            except (OSError, ValueError):
+                continue
+            if hop_symbol is not None and hit_symbol == hop_symbol:
+                return True
+    return False
 
 
 def node_detect_authz(state: AssistantGraphState) -> Dict[str, Any]:
