@@ -33,6 +33,34 @@ from typing import Any, Dict, List
 
 DEFAULT_VULNS = ["sqli", "cmdi", "xss"]  # CLI tags for the Injection family
 DEFAULT_LANGUAGES = ["csharp", "java", "js", "php", "python"]
+# Canonical vulnerability names the CLI assigns to each tag (stable registry).
+TAG_VULN_NAMES = {
+    "auth": "Authentication Issues",
+    "cmdi": "Command Injection",
+    "config": "Security Misconfiguration",
+    "cors": "CORS Misconfiguration",
+    "crypto": "Insecure Cryptographic Usage",
+    "csrf": "Cross-Site Request Forgery",
+    "data": "Sensitive Data Exposure",
+    "debug": "Debug Information Exposure",
+    "deser": "Insecure Deserialization",
+    "idor": "Insecure Direct Object Reference",
+    "input": "Insufficient Input Validation",
+    "jwt": "JWT Implementation Flaws",
+    "lfi": "Local File Inclusion",
+    "logging": "Sensitive Data Logging",
+    "pathtra": "Path Traversal",
+    "rce": "Remote Code Execution",
+    "redirect": "Open Redirect",
+    "rfi": "Remote File Inclusion",
+    "secrets": "Hardcoded Secrets",
+    "session": "Session Management Issues",
+    "sqli": "SQL Injection",
+    "ssrf": "Server-Side Request Forgery",
+    "upload": "File Upload Vulnerabilities",
+    "xss": "Cross-Site Scripting (XSS)",
+    "xxe": "XML External Entity Injection",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -146,13 +174,18 @@ def _log_tail(log_path: Path, lines: int = 8) -> str:
 
 
 def collect_results(run_root: Path, languages: List[str], vulns: List[str]) -> List[Dict[str, Any]]:
-    """Flatten canonical JSON findings per (language, vulnerability)."""
+    """Flatten canonical JSON findings per (language, vulnerability).
+
+    *vulns* holds CLI tags (e.g. ``sqli``); canonical documents carry the full
+    vulnerability name (e.g. ``SQL Injection``) matched through TAG_VULN_NAMES.
+    """
+    wanted: Dict[str, str] = {tag: TAG_VULN_NAMES.get(tag, tag) for tag in vulns}
     collected: List[Dict[str, Any]] = []
     for language in languages:
         language_root = run_root / language
         docs = list(language_root.rglob("json/*.json")) if language_root.is_dir() else []
         per_vuln: Dict[str, Dict[str, Any]] = {
-            vuln: {"findings": 0, "statuses": Counter()} for vuln in vulns
+            tag: {"findings": 0, "statuses": Counter()} for tag in wanted
         }
         for doc_path in docs:
             try:
@@ -161,8 +194,8 @@ def collect_results(run_root: Path, languages: List[str], vulns: List[str]) -> L
                 continue
             if str(doc.get("report_type") or "") != "vulnerability":
                 continue
-            vuln_name = str(doc.get("vulnerability_name") or "")
-            if vuln_name not in per_vuln:
+            tag = next((t for t, name in wanted.items() if name == str(doc.get("vulnerability_name") or "")), None)
+            if tag is None:
                 continue
             for file_entry in doc.get("files") or []:
                 if not isinstance(file_entry, dict):
@@ -173,14 +206,14 @@ def collect_results(run_root: Path, languages: List[str], vulns: List[str]) -> L
                     for finding in chunk.get("findings") or []:
                         if not isinstance(finding, dict):
                             continue
-                        per_vuln[vuln_name]["findings"] += 1
+                        per_vuln[tag]["findings"] += 1
                         validation = finding.get("validation")
                         if isinstance(validation, dict):
-                            per_vuln[vuln_name]["statuses"][
+                            per_vuln[tag]["statuses"][
                                 str(validation.get("status") or "?")
                             ] += 1
-        for vuln in vulns:
-            collected.append({"language": language, "vuln": vuln, **per_vuln[vuln]})
+        for tag in wanted:
+            collected.append({"language": language, "vuln": tag, **per_vuln[tag]})
     return collected
 
 
