@@ -33,6 +33,8 @@ Keep release changes coherent across code, docs, and metadata like historical `r
 - Use `release: vX.Y.Z` for release batches.
 - Use `version: bump to X.Y.Z` for isolated version metadata updates.
 - Use `fix|feat|refactor|docs` for normal non-release changes.
+- **Never commit directly to `master`/`main`** — hotfixes only. Commit on the active `release/*` or `feat/*` branch and merge into master (fast-forward or PR). If a commit lands on the wrong branch before push, move it (fast-forward the target branch, `git reset --hard` the wrong one) instead of leaving it there.
+- **Never commit directly to `master`/`main`** — hotfixes only. Commit on the active `release/*` or `feat/*` branch and merge into master (fast-forward or PR). If a commit lands on the wrong branch before push, move it (fast-forward the target branch, `git reset --hard` the wrong one) instead of leaving it there.
 
 ## Quality Gate
 

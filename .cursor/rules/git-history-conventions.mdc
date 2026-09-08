@@ -5,6 +5,7 @@ alwaysApply: true
 
 # OASIS Git Conventions
 
+- **Never commit directly to `master`/`main`** — hotfixes (`fix:` patches needed on production) are the only exception. Day-to-day work lands on `release/*` or `feat/*` branches; `master` only receives merges (fast-forward from a release branch or PR merges). If a commit accidentally lands on the wrong branch before push, move it (fast-forward the target branch, then `git reset --hard` the wrong one) instead of leaving it there.
 - Use Conventional Commit prefixes seen in history: `feat`, `fix`, `refactor`, `docs`, `release`, `version`.
 - Keep commit subjects short and scoped to user-visible intent (why), not low-level implementation detail.
 - For release-oriented changes, keep version, changelog, and docs aligned in the same working session.

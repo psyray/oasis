@@ -42,6 +42,7 @@ coverage report
 
 ## Git & docs conventions
 
+- **Branch discipline: never commit directly to `master`** (hotfixes only). Work is committed on the active `release/*` or `feat/*` branch; `master` only receives merges from these branches (fast-forward or PR). If a commit lands on the wrong branch before push, move it (fast-forward the target branch, then `git reset --hard` the wrong one) instead of recommitting on top of it.
 - Conventional Commit prefixes: `feat`, `fix`, `refactor`, `docs`, `release` (`release: vX.Y.Z`), `version` (`version: bump to X.Y.Z`). Subjects short and scoped to user-visible intent; incremental commits focused on one concern.
 - Version bumps update **both** authoritative locations together: `pyproject.toml` `[project].version` and `oasis/__init__.py` `__version__` (same semver).
 - `README.md`: keep `Features` summary-only; place detailed behavior/usage in the relevant dedicated section (create one for new feature areas). Update README in the same change when a CLI flag or behavior changes; keep install/upgrade docs aligned with the pipx workflow.
