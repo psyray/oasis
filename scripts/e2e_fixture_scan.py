@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -84,6 +85,7 @@ def build_cli_command(args: argparse.Namespace, fixture_dir: Path) -> List[str]:
         "-of", "json",
         "-pn", "e2e-fixtures",
         "--validate-findings",
+        "-v", ",".join(args.vulns),
     ]
     if args.scan_model:
         command += ["-sm", args.scan_model]
@@ -97,33 +99,54 @@ def build_cli_command(args: argparse.Namespace, fixture_dir: Path) -> List[str]:
 
 
 def run_scan_for_language(args: argparse.Namespace, language: str, run_root: Path) -> Dict[str, Any]:
-    """Run one fixture scan; return {"ok": bool, "detail": str}."""
+    """Run one fixture scan; return {"ok": bool, "detail": str}.
+
+    The fixture is copied into ``workdir/code`` first: OASIS writes reports to
+    ``<scanned dir>.parent/security_reports``, so scanning the local copy keeps
+    every run output inside the E2E workdir instead of the fixtures tree.
+    """
     fixture_dir = args.fixtures_dir / language
     if not fixture_dir.is_dir():
         return {"ok": False, "detail": f"fixture directory missing: {fixture_dir}"}
 
     workdir = run_root / language
     workdir.mkdir(parents=True, exist_ok=True)
-    command = build_cli_command(args, fixture_dir)
+    scan_dir = workdir / "code"
+    scan_dir.mkdir(parents=True, exist_ok=True)
+    for source in fixture_dir.iterdir():
+        if source.is_file():
+            shutil.copy2(source, scan_dir / source.name)
+    command = build_cli_command(args, scan_dir)
 
     started = time.monotonic()
+    log_path = workdir / "oasis-run.log"
     try:
-        proc = subprocess.run(
-            command,
-            cwd=workdir,
-            capture_output=True,
-            text=True,
-            timeout=args.timeout,
-            check=False,
-        )
+        with log_path.open("w", encoding="utf-8") as log_file:
+            proc = subprocess.run(
+                command,
+                cwd=workdir,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                timeout=args.timeout,
+                check=False,
+            )
     except FileNotFoundError:
         return {"ok": False, "detail": "oasis CLI not found on PATH (pipx install -e .)"}
     except subprocess.TimeoutExpired:
-        return {"ok": False, "detail": f"scan timed out after {args.timeout}s"}
+        return {"ok": False, "detail": f"scan timed out after {args.timeout}s (log: {log_path})"}
     if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-5:]
-        return {"ok": False, "detail": f"exit {proc.returncode}: {' | '.join(tail)}"}
+        tail = _log_tail(log_path)
+        return {"ok": False, "detail": f"exit {proc.returncode} (log: {log_path}): {tail}"}
     return {"ok": True, "detail": f"done in {time.monotonic() - started:.0f}s"}
+
+
+def _log_tail(log_path: Path, lines: int = 8) -> str:
+    """Last *lines* of a run log for the failure detail (empty when unreadable)."""
+    try:
+        content = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return " | ".join(content.strip().splitlines()[-lines:])
 
 
 def collect_results(run_root: Path, languages: List[str], vulns: List[str]) -> List[Dict[str, Any]]:
