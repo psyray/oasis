@@ -56,6 +56,7 @@
 | [Cache Management](#readme-cache) | Embeddings and scan caches |
 | [Audit Mode](#readme-audit) | Pre-scan audit, structured `audit_report.json` |
 | [Suppression registry](#readme-suppressions) | Fingerprint registry, SARIF suppressions, candidates |
+| [Inline ignore markers](#readme-inline-ignore) | `#oasisignore` / `#noqa`-style source markers dropped before reports |
 | [Scan diff](#readme-scan-diff) | `--diff-against` baseline comparison, new/fixed/persistent |
 | [Web Interface](#readme-web) | `--web`, security |
 | [Changelog](#readme-changelog) | Release notes |
@@ -276,6 +277,8 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 - `--threshold` `-t`: Similarity threshold (default: 0.5)
 - **`--suppressions-file` `PATH`**: JSON registry of suppressed finding fingerprints; matching findings are exported with a native **SARIF suppressions** entry. See [Suppression registry](#readme-suppressions).
 - **`--write-suppression-candidates`**: Write `suppression_candidates.json` in the run output listing every finding fingerprint to copy into a registry.
+- **`--inline-ignore`** / **`--no-inline-ignore`**: Honor inline ignore markers on source lines (e.g. `# noqa`, `# oasisignore`) and drop annotated findings before validation and reports (default: **on**). See [Inline ignore markers](#readme-inline-ignore).
+- **`--inline-ignore-tokens`** `CSV`: Comma-separated ignore markers to honor (default: `oasisignore,nosec,noqa,nosemgrep`).
 - **`--fail-on` `SEVERITY`**: Exit with code **3** when the run reports findings at or above this severity [critical, high, medium, low] (case-insensitive). See [CI integration](#readme-ci-integration).
 - `--vulns` `-v`: Vulnerability types to check (comma-separated or 'all')
 - `--chunk-size` `-ch`: Maximum size of text chunks for embedding (default: auto-detected)
@@ -819,6 +822,36 @@ oasis -i ./my-project -m qwen2.5-coder:14b --suppressions-file .oasis_suppressio
 ```
 
 Matching findings are **not removed** — they are exported with a native SARIF 2.1.0 `suppressions` entry (`kind: "logical"`, `status: "accepted"`, your note as justification), so GitHub Code Scanning and other SARIF consumers can filter them, and the canonical JSON stays untouched for auditability. A log line summarizes how many findings matched the registry at the end of the run.
+
+<a id="readme-inline-ignore"></a>
+
+## 🚫 Inline ignore markers
+
+Findings whose source lines carry an ignore marker are **dropped from the reports**. The marker is honored on the vulnerable lines themselves, on the line right after the snippet (trailing-comment convention), and inside the quoted snippet. Default markers: **`oasisignore`** (OASIS-specific) plus the common ecosystem triage tokens **`noqa`**, **`nosec`**, **`nosemgrep`**, matched case-insensitively on any line of the span.
+
+```python
+# Known test-only sink — skipped by OASIS from the next scans
+password = "hunter2"  # oasisignore
+```
+
+```bash
+# Default behavior (on): annotated findings never reach the reports
+oasis -i ./my-project -m qwen2.5-coder:14b
+
+# Keep annotated findings visible in the reports
+oasis -i ./my-project -m qwen2.5-coder:14b --no-inline-ignore
+
+# Honor only your own marker
+oasis -i ./my-project -m qwen2.5-coder:14b --inline-ignore-tokens oasisignore
+```
+
+Notes:
+
+- Detection is deterministic and language-agnostic (no comment-syntax parsing); a marker on the line **above** the vulnerable line is deliberately not honored (it may belong to another statement).
+- The scan still sees annotated code (no LLM-cost change); the filter runs right after the deep pass, **before** scan-time validation, so ignored findings consume no validation budget.
+- Chunk notes are rewritten when findings are dropped: the section displays **`N finding(s) skipped via inline ignore marker`** with the original LLM notes kept after `Original notes:` for traceability.
+- Combine with the [Suppression registry](#readme-suppressions) for cross-run triage of findings that cannot be annotated in code.
+- Unreadable files fail open: the finding is kept and a warning is logged.
 
 <a id="readme-scan-diff"></a>
 

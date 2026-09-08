@@ -23,7 +23,7 @@ kept findings stay at their original positions.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from oasis.helpers.suppressions import finding_fingerprint, normalize_snippet_text
 
@@ -51,7 +51,8 @@ class _Cluster:
     best_snippet_len: int = -1
 
 
-def _get(obj: Any, name: str) -> Any:
+def finding_field(obj: Any, name: str) -> Any:
+    """Read *name* from a dict-like or model-like finding/row/chunk (shared accessor)."""
     return obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
 
 
@@ -68,15 +69,15 @@ def _coerce_line(value: Any) -> Optional[int]:
 
 
 def _resolved_range(finding: Any) -> Optional[Tuple[int, int]]:
-    start = _coerce_line(_get(finding, "snippet_start_line"))
-    end = _coerce_line(_get(finding, "snippet_end_line"))
+    start = _coerce_line(finding_field(finding, "snippet_start_line"))
+    end = _coerce_line(finding_field(finding, "snippet_end_line"))
     if start is None or end is None or end < start:
         return None
     return start, end
 
 
 def _severity_rank(finding: Any) -> int:
-    severity = _get(finding, "severity")
+    severity = finding_field(finding, "severity")
     return _SEVERITY_RANK.get(str(severity or "").strip().lower(), 0)
 
 
@@ -86,15 +87,39 @@ def _ranges_overlap(
     return first[0] <= second[1] and second[0] <= first[1]
 
 
-def _iter_chunks(rows: Any) -> Any:
-    """Yield ``(row_index, chunk_index, chunk, file_path)`` across all rows."""
+def iter_structured_chunks(
+    rows: Any,
+) -> Iterator[Tuple[int, int, Any, List[Any], str]]:
+    """Yield ``(row_index, chunk_index, chunk, findings, file_path)`` for every
+    structured chunk holding a findings list.
+
+    Shared traversal for the in-place findings passes (dedup, inline ignore
+    markers). Callers may replace ``chunk.findings`` while iterating: the
+    yielded list is the snapshot they enumerate.
+    """
     for row_index, row in enumerate(rows or []):
-        file_path = _normalize_file_path(_get(row, "file_path"))
-        chunks = _get(row, "structured_chunks")
+        file_path = _normalize_file_path(finding_field(row, "file_path"))
+        chunks = finding_field(row, "structured_chunks")
         if not isinstance(chunks, list):
             continue
         for chunk_index, chunk in enumerate(chunks):
-            yield row_index, chunk_index, chunk, file_path
+            findings = finding_field(chunk, "findings")
+            if not isinstance(findings, list):
+                continue
+            yield row_index, chunk_index, chunk, findings, file_path
+
+
+def set_chunk_field(chunk: Any, name: str, value: Any) -> None:
+    """Assign one field back to a dict-like or model-like chunk."""
+    if isinstance(chunk, dict):
+        chunk[name] = value
+    else:
+        setattr(chunk, name, value)
+
+
+def set_chunk_findings(chunk: Any, kept: List[Any]) -> None:
+    """Assign a filtered findings list back to a dict-like or model-like chunk."""
+    set_chunk_field(chunk, "findings", kept)
 
 
 def deduplicate_rows_findings(
@@ -109,12 +134,9 @@ def deduplicate_rows_findings(
     """
     clusters: List[_Cluster] = []
 
-    for row_index, chunk_index, chunk, file_path in _iter_chunks(rows):
-        findings = _get(chunk, "findings")
-        if not isinstance(findings, list):
-            continue
+    for row_index, chunk_index, _chunk, findings, file_path in iter_structured_chunks(rows):
         for finding_index, finding in enumerate(findings):
-            snippet = _get(finding, "vulnerable_code")
+            snippet = finding_field(finding, "vulnerable_code")
             snippet_text = snippet if isinstance(snippet, str) else ""
             fingerprint = (
                 finding_fingerprint(file_path, vulnerability_name, snippet_text)
@@ -174,20 +196,14 @@ def deduplicate_rows_findings(
                 removed.add(member)
 
     if removed:
-        for row_index, chunk_index, chunk, _file_path in _iter_chunks(rows):
-            findings = _get(chunk, "findings")
-            if not isinstance(findings, list):
-                continue
+        for row_index, chunk_index, chunk, findings, _file_path in iter_structured_chunks(rows):
             kept = [
                 finding
                 for finding_index, finding in enumerate(findings)
                 if (row_index, chunk_index, finding_index) not in removed
             ]
             if len(kept) != len(findings):
-                if isinstance(chunk, dict):
-                    chunk["findings"] = kept
-                else:
-                    chunk.findings = kept
+                set_chunk_findings(chunk, kept)
 
     return {
         "clusters": len(clusters),
@@ -195,4 +211,10 @@ def deduplicate_rows_findings(
     }
 
 
-__all__ = ["deduplicate_rows_findings"]
+__all__ = [
+    "deduplicate_rows_findings",
+    "finding_field",
+    "iter_structured_chunks",
+    "set_chunk_field",
+    "set_chunk_findings",
+]

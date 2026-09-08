@@ -1,5 +1,7 @@
 """CLI validation tests for OasisScanner (argparse helpers, argument rules)."""
 
+from __future__ import annotations
+
 import argparse
 import shutil
 import sys
@@ -58,6 +60,8 @@ class TestOasisCliParsing(unittest.TestCase):
         validate_findings: bool = True,
         validate_findings_budget: float = 120.0,
         validate_findings_narrative: bool = False,
+        inline_ignore: bool = True,
+        inline_ignore_tokens: str | None = None,
     ):
         self.assertEqual(namespace.langgraph_max_expand_iterations, max_expand)
         self.assertEqual(namespace.poc_hints, poc_hints)
@@ -65,6 +69,8 @@ class TestOasisCliParsing(unittest.TestCase):
         self.assertIs(namespace.validate_findings, validate_findings)
         self.assertEqual(namespace.validate_findings_budget, validate_findings_budget)
         self.assertIs(namespace.validate_findings_narrative, validate_findings_narrative)
+        self.assertIs(namespace.inline_ignore, inline_ignore)
+        self.assertEqual(namespace.inline_ignore_tokens, inline_ignore_tokens)
 
     def test_parse_yes_no_accepts_yes_no(self):
         self.assertTrue(OasisScanner._parse_yes_no_flag("yes"))
@@ -131,6 +137,46 @@ class TestOasisCliParsing(unittest.TestCase):
                 poc_assist=False,
                 validate_findings=True,
                 validate_findings_budget=45.5,
+            )
+        finally:
+            shutil.rmtree(td)
+
+    def test_inline_ignore_flags_default_disable_and_custom_tokens(self):
+        scanner = OasisScanner()
+        parser = scanner.setup_argument_parser()
+        td = tempfile.mkdtemp()
+        try:
+            ns = self._parse_cli_args(parser, td)
+            self._assert_langgraph_flags(
+                ns,
+                max_expand=2,
+                poc_hints=False,
+                poc_assist=False,
+                inline_ignore=True,
+                inline_ignore_tokens=None,
+            )
+            ns2 = self._parse_cli_args(
+                parser,
+                td,
+                "--no-inline-ignore",
+                "--inline-ignore-tokens",
+                "noqa,nosec",
+            )
+            self._assert_langgraph_flags(
+                ns2,
+                max_expand=2,
+                poc_hints=False,
+                poc_assist=False,
+                inline_ignore=False,
+                inline_ignore_tokens="noqa,nosec",
+            )
+            ns3 = self._parse_cli_args(parser, td, "--inline-ignore")
+            self._assert_langgraph_flags(
+                ns3,
+                max_expand=2,
+                poc_hints=False,
+                poc_assist=False,
+                inline_ignore=True,
             )
         finally:
             shutil.rmtree(td)

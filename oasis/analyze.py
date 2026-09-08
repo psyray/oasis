@@ -30,6 +30,7 @@ from .ollama_manager import OllamaManager
 from .backends import create_model_manager, ModelBackend
 from .helpers.misc import absolute_snippet_lines_in_file
 from .helpers.findings_dedupe import deduplicate_rows_findings
+from .helpers.ignore_markers import drop_inline_ignored_findings
 from .tools import chunk_content_with_spans, logger, calculate_similarity, sanitize_name
 from .report import (
     Report,
@@ -1519,6 +1520,24 @@ FINDINGS SUMMARY (valid JSON envelope; ``truncated_for_llm_prompt_budget`` may b
                             "🧹 Finding dedup · %s · %d duplicate(s) removed",
                             cli_bold(vuln_name),
                             dedupe_stats["duplicates_removed"],
+                        )
+
+                # Inline ignore markers ("# noqa", "# oasisignore", …): drop
+                # findings whose source lines are annotated. Runs after dedup
+                # and before validation/report so ignored findings consume no
+                # validation budget and never reach the reports.
+                inline_scan_root = getattr(getattr(self, "embedding_manager", None), "input_path", None)
+                if detailed_results and getattr(args, "inline_ignore", True) and inline_scan_root:
+                    inline_stats = drop_inline_ignored_findings(
+                        detailed_results,
+                        scan_root=Path(inline_scan_root).resolve(),
+                        tokens=getattr(args, "inline_ignore_tokens", None),
+                    )
+                    if inline_stats.get("dropped"):
+                        logger.info(
+                            "🚫 Inline ignore · %s · %d finding(s) skipped (source markers)",
+                            cli_bold(vuln_name),
+                            inline_stats["dropped"],
                         )
 
                 # Scan-time deterministic validation (verdicts embedded in reports)

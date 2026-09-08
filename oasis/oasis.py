@@ -33,6 +33,7 @@ from .helpers.embedding import (
     parse_embed_models_csv,
     resolve_embed_models,
 )
+from .helpers.ignore_markers import DEFAULT_INLINE_IGNORE_TOKENS
 from .helpers.langgraph_cli import LG_PIPELINE_INFO, cli_bold, cli_emit_section_banner
 from .helpers.ci_gate import (
     EXIT_FINDINGS_ABOVE_THRESHOLD,
@@ -395,6 +396,33 @@ class OasisScanner:
             help=(
                 'Add a thinking-enabled LLM narrative to each scan-time finding verdict '
                 '(uses the deep model; off by default, increases scan time)'
+            ),
+        )
+        analysis_group.add_argument(
+            '--inline-ignore',
+            dest='inline_ignore',
+            action='store_true',
+            default=True,
+            help=(
+                'Drop findings whose source lines carry an ignore marker '
+                '(e.g. # noqa, # oasisignore) before validation and reports (default: on)'
+            ),
+        )
+        analysis_group.add_argument(
+            '--no-inline-ignore',
+            dest='inline_ignore',
+            action='store_false',
+            help='Keep inline-ignored findings in the reports',
+        )
+        analysis_group.add_argument(
+            '--inline-ignore-tokens',
+            dest='inline_ignore_tokens',
+            type=str,
+            default=None,
+            metavar='CSV',
+            help=(
+                'Comma-separated ignore markers honored on source lines '
+                f'(default: {",".join(DEFAULT_INLINE_IGNORE_TOKENS)})'
             ),
         )
         analysis_group.add_argument(

@@ -12,6 +12,7 @@
 - 🧹 **Transverse finding deduplication**: duplicate deep-pass findings (same snippet fingerprint or overlapping line ranges) are merged before validation and report writing.
 - 🧪 **E2E fixture check script (`scripts/e2e_fixture_scan.py`)**: dev gate that scans each fixture with the Injection family in an isolated workdir (optional `--scan-model` for a separate scan model) and prints a pass/fail table; requires a live LLM server, not part of the unittest suite.
 - 🧹 **Suppression registry (`--suppressions-file`, `--write-suppression-candidates`)**: JSON registry keyed by finding fingerprints; matching findings get a native SARIF 2.1.0 `suppressions` entry.
+- 🚫 **Inline ignore markers**: findings whose source lines carry an ignore marker — `# oasisignore` (OASIS-specific), `# noqa`, `# nosec`, `# nosemgrep` — are dropped after dedup, before validation and reports; chunk notes display the skip (`N finding(s) skipped via inline ignore marker`, original notes preserved). Flags: `--inline-ignore` / `--no-inline-ignore` (default: on), `--inline-ignore-tokens CSV` to customize the marker list. Markers on the line above the snippet are intentionally not honored; unreadable files fail open.
 - 🤝 **CI gate (`--fail-on SEVERITY`)**: exits with code **3** on findings at or above a threshold (`critical|high|medium|low`); new README "CI integration" section.
 - 🔄 **Scan diff vs baseline (`--diff-against PATH`)**: writes **`diff/diff_report.json`** + a Markdown sibling with **new / fixed / persistent** buckets, before the CI gate.
 
