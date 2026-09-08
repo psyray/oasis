@@ -80,6 +80,14 @@ Model backends / providers (see ``oasis/backends/``):
 - ``OASIS_OPENAI_CTX_TOKENS``
 - ``OASIS_OPENAI_HTTP_TIMEOUT_SEC``
 - ``OASIS_OPENAI_STRUCTURED_OUTPUT`` (``auto`` | ``on`` | ``off``)
+- ``OASIS_EMBED_PROVIDER`` (``ollama`` | ``openai``) — embedding backend, resolved
+  independently from the chat backend (local Ollama by default), so chat and
+  embedding workloads can be routed to separate servers (e.g. a dedicated RAG server)
+- ``OASIS_EMBED_OPENAI_BASE_URL`` / ``OASIS_EMBED_OPENAI_API_KEY`` — embedding
+  server settings when ``OASIS_EMBED_PROVIDER=openai``
+- ``OASIS_WEB_EMBED_PROVIDER`` / ``OASIS_WEB_EMBED_OPENAI_BASE_URL`` /
+  ``OASIS_WEB_EMBED_OPENAI_API_KEY`` — dashboard assistant RAG embeddings
+  (fall back to the scan-side embedding backend)
 
 Static lists (extensions, models, languages, …) follow those sections.
 """
@@ -322,6 +330,14 @@ LLM_PROVIDER_ENV: Optional[str] = os.environ.get("OASIS_LLM_PROVIDER", "").strip
 OPENAI_COMPAT_BASE_URL = os.environ.get("OASIS_OPENAI_BASE_URL", "").strip() or "http://localhost:8000/v1"
 # Local servers commonly ignore auth (vLLM accepts any bearer); keep a stable dummy.
 OPENAI_COMPAT_API_KEY = os.environ.get("OASIS_OPENAI_API_KEY", "").strip() or "local"
+
+# Embedding backend — resolved independently from the chat backend (local by
+# default, even when the chat backend targets an OpenAI-compatible server), so
+# chat and embedding workloads can be routed to separate servers.
+EMBED_PROVIDER_ENV: Optional[str] = os.environ.get("OASIS_EMBED_PROVIDER", "").strip().lower() or None
+# Empty string means "inherit the shared OpenAI-compatible default at factory time".
+EMBED_OPENAI_BASE_URL = os.environ.get("OASIS_EMBED_OPENAI_BASE_URL", "").strip() or None
+EMBED_OPENAI_API_KEY = os.environ.get("OASIS_EMBED_OPENAI_API_KEY", "").strip() or None
 
 # OpenAI-compatible servers do not expose per-model context windows over the
 # protocol; deployments declare the value here (0 = unknown, fallbacks apply).

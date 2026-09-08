@@ -29,7 +29,7 @@ _OLLAMA_CONTEXT_ERROR_FRAGMENTS = (
 )
 
 # Import from other modules
-from .backends import create_model_manager, ModelBackend
+from .backends import create_embed_model_manager, ModelBackend
 from .ollama_manager import OllamaManager
 from .schemas.function_extract import FunctionExtractResponse
 from .tools import create_cache_dir, logger, chunk_content, sanitize_name, open_file
@@ -151,10 +151,10 @@ class EmbeddingManager:
                 embed_model=self.embedding_model,
                 chunk_size=self.chunk_size,
                 analyze_by_function=self.analyze_by_function,
-                api_url=self.ollama_manager.api_url,
-                provider=getattr(self.ollama_manager, "provider", None),
-                api_base=getattr(self.ollama_manager, "api_base", None),
-                api_key=getattr(self.ollama_manager, "api_key", None),
+                ollama_url=getattr(self.ollama_manager, "api_url", None),
+                embed_provider=getattr(self.ollama_manager, "provider", None),
+                embed_api_base=getattr(self.ollama_manager, "api_base", None),
+                embed_api_key=getattr(self.ollama_manager, "api_key", None),
             )
             for file_path in files
             if self.analyze_by_function or str(file_path) not in self.code_base
@@ -1005,8 +1005,8 @@ def process_file_parallel(args: tuple) -> Tuple[str, str, List[float], bool, Opt
         Tuple of (file_path, content, embedding, is_function_analysis, function_embeddings)
     """
     try:
-        # Create a new backend client for each process
-        ollama_manager = create_model_manager(args)
+        # Create a new embedding backend for each process
+        ollama_manager = create_embed_model_manager(args)
 
         # Read file content
         if not (content := open_file(args.input_path)):

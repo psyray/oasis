@@ -18,6 +18,16 @@ from oasis.config import OLLAMA_URL
 from oasis.report import Report
 from oasis.web import WebServer
 
+# Environment values neutralized when asserting the RAG embed resolution chain.
+_NEUTRALIZED_EMBED_ENV = {
+    "OASIS_WEB_EMBED_PROVIDER": "",
+    "OASIS_WEB_EMBED_OPENAI_BASE_URL": "",
+    "OASIS_WEB_EMBED_OPENAI_API_KEY": "",
+    "OASIS_EMBED_PROVIDER": "",
+    "OASIS_EMBED_OPENAI_BASE_URL": "",
+    "OASIS_EMBED_OPENAI_API_KEY": "",
+}
+
 
 class TestWebAssistantRoutes(unittest.TestCase):
     @staticmethod
@@ -1666,6 +1676,99 @@ class TestResolveAssistantOllamaUrl(unittest.TestCase):
         server._default_ollama_url = "   "
         with patch.dict(os.environ, {"OASIS_WEB_OLLAMA_URL": " \n "}):
             self.assertEqual(server._resolve_assistant_ollama_url(), str(OLLAMA_URL).strip())
+
+
+class TestResolveEmbedBackend(unittest.TestCase):
+    """RAG embedding backend resolution: independent from the chat backend."""
+
+    def _server(self, **kwargs):
+        server = WebServer.__new__(WebServer)
+        server.web_embed_provider = kwargs.get("web_embed_provider")
+        server.web_embed_api_base = kwargs.get("web_embed_api_base")
+        server.web_embed_api_key = kwargs.get("web_embed_api_key")
+        server._default_embed_provider = kwargs.get("default_embed_provider")
+        server._default_embed_api_base = kwargs.get("default_embed_api_base")
+        server._default_embed_api_key = kwargs.get("default_embed_api_key")
+        server.web_ollama_url = kwargs.get("web_ollama_url")
+        server._default_ollama_url = kwargs.get("default_ollama_url", "http://127.0.0.1:11434")
+        server.web_provider = kwargs.get("web_provider")
+        server.web_api_base = kwargs.get("web_api_base")
+        server._default_provider = kwargs.get("default_provider")
+        server._default_api_base = kwargs.get("default_api_base")
+        server._default_api_key = kwargs.get("default_api_key")
+        server._assistant_ollama_manager = None
+        server._embed_ollama_manager = None
+        return server
+
+    def test_default_is_local_ollama_even_when_chat_backend_is_openai(self):
+        server = self._server(default_provider="openai", default_api_base="https://llm.example.com/v1")
+        with patch.dict(os.environ, dict(_NEUTRALIZED_EMBED_ENV)):
+            self.assertEqual(server._resolve_embed_provider(), "ollama")
+
+    def test_scan_side_embed_defaults_cascade(self):
+        server = self._server(
+            default_embed_provider="openai",
+            default_embed_api_base="http://127.0.0.1:9999/v1",
+            default_embed_api_key="k-scan",
+        )
+        with patch.dict(os.environ, dict(_NEUTRALIZED_EMBED_ENV)):
+            self.assertEqual(server._resolve_embed_provider(), "openai")
+            self.assertEqual(server._resolve_embed_api_base(), "http://127.0.0.1:9999/v1")
+            self.assertEqual(server._resolve_embed_api_key(), "k-scan")
+
+    def test_web_embed_flags_win(self):
+        server = self._server(
+            web_embed_provider="openai",
+            web_embed_api_base="http://127.0.0.1:9998/v1",
+            web_embed_api_key="k-web",
+            default_embed_provider="openai",
+            default_embed_api_base="http://127.0.0.1:9999/v1",
+            default_embed_api_key="k-scan",
+        )
+        with patch.dict(os.environ, dict(_NEUTRALIZED_EMBED_ENV)):
+            self.assertEqual(server._resolve_embed_provider(), "openai")
+            self.assertEqual(server._resolve_embed_api_base(), "http://127.0.0.1:9998/v1")
+            self.assertEqual(server._resolve_embed_api_key(), "k-web")
+
+    def test_env_cascade_falls_back_to_scan_side_env(self):
+        server = self._server()
+        with patch.dict(
+            os.environ,
+            {"OASIS_EMBED_PROVIDER": "openai", "OASIS_EMBED_OPENAI_BASE_URL": "http://env-embed/v1"},
+        ):
+            self.assertEqual(server._resolve_embed_provider(), "openai")
+            self.assertEqual(server._resolve_embed_api_base(), "http://env-embed/v1")
+
+    def test_web_embed_env_wins_over_scan_side_env(self):
+        server = self._server()
+        with patch.dict(
+            os.environ,
+            {
+                "OASIS_WEB_EMBED_PROVIDER": "openai",
+                "OASIS_WEB_EMBED_OPENAI_BASE_URL": "http://web-embed/v1",
+                "OASIS_EMBED_PROVIDER": "ollama",
+                "OASIS_EMBED_OPENAI_BASE_URL": "http://scan-embed/v1",
+            },
+        ):
+            self.assertEqual(server._resolve_embed_provider(), "openai")
+            self.assertEqual(server._resolve_embed_api_base(), "http://web-embed/v1")
+
+    def test_embed_manager_built_with_resolved_values(self):
+        server = self._server(
+            default_embed_provider="openai",
+            default_embed_api_base="http://127.0.0.1:9999/v1",
+            default_embed_api_key="k-scan",
+        )
+        with patch.dict(os.environ, dict(_NEUTRALIZED_EMBED_ENV)), patch(
+            "oasis.web.create_embed_model_manager", return_value="fake-embed"
+        ) as factory:
+            self.assertEqual(server._get_embed_ollama_manager(), "fake-embed")
+        factory.assert_called_once_with(
+            provider="openai",
+            ollama_url="http://127.0.0.1:11434",
+            api_base="http://127.0.0.1:9999/v1",
+            api_key="k-scan",
+        )
 
 
 class TestAssistantRagRootResolution(unittest.TestCase):

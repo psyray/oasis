@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 
 from oasis import config
-from oasis.backends import create_model_manager, resolve_provider_choice
+from oasis.backends import create_embed_model_manager, create_model_manager, resolve_provider_choice
 from oasis.backends.ollama_backend import OllamaManager
 from oasis.backends.openai_compat import OpenAICompatClient, OpenAICompatManager
 
@@ -99,6 +99,80 @@ class TestProviderResolution(unittest.TestCase):
         manager = OpenAICompatManager(api_base="https://llm.example.com/v1")
         self.assertEqual(manager.api_url, "https://llm.example.com/v1")
         self.assertEqual(manager.provider, "openai")
+
+
+class TestEmbedBackendFactory(unittest.TestCase):
+    """Embedding backend resolution: independent from the chat backend (local by default)."""
+
+    def test_embed_factory_defaults_to_local_ollama_even_when_chat_is_openai(self):
+        args = type(
+            "Args",
+            (),
+            {
+                "provider": "openai",
+                "api_base": "https://llm.example.com/v1",
+            },
+        )()
+        manager = create_embed_model_manager(args)
+        self.assertIsInstance(manager, OllamaManager)
+        self.assertEqual(manager.api_url, "http://localhost:11434")
+
+    def test_embed_factory_provider_from_args(self):
+        args = type(
+            "Args",
+            (),
+            {"embed_provider": "openai", "embed_api_base": "http://localhost:8000/v1"},
+        )()
+        manager = create_embed_model_manager(args)
+        self.assertIsInstance(manager, OpenAICompatManager)
+        self.assertEqual(manager.api_base, "http://localhost:8000/v1")
+
+    def test_embed_factory_env_provider(self):
+        with patch.object(config, "EMBED_PROVIDER_ENV", "openai"):
+            manager = create_embed_model_manager()
+        self.assertIsInstance(manager, OpenAICompatManager)
+
+    def test_embed_factory_api_base_implies_openai(self):
+        args = type("Args", (), {"embed_api_base": "http://127.0.0.1:9999/v1"})()
+        manager = create_embed_model_manager(args)
+        self.assertIsInstance(manager, OpenAICompatManager)
+        self.assertEqual(manager.api_base, "http://127.0.0.1:9999/v1")
+
+    def test_embed_factory_env_base_url_implies_openai(self):
+        with patch.object(config, "EMBED_OPENAI_BASE_URL", "http://127.0.0.1:9999/v1"):
+            manager = create_embed_model_manager()
+        self.assertIsInstance(manager, OpenAICompatManager)
+
+    def test_embed_factory_api_key_alone_does_not_switch_provider(self):
+        args = type("Args", (), {"embed_api_key": "secret"})()
+        manager = create_embed_model_manager(args)
+        self.assertIsInstance(manager, OllamaManager)
+
+    def test_embed_factory_explicit_kwargs_beat_args(self):
+        args = type("Args", (), {"embed_api_base": "http://args-host/v1"})()
+        manager = create_embed_model_manager(
+            args,
+            provider="openai",
+            api_base="http://kwarg-host/v1",
+            api_key="k",
+        )
+        self.assertIsInstance(manager, OpenAICompatManager)
+        self.assertEqual(manager.api_base, "http://kwarg-host/v1")
+        self.assertEqual(manager.api_key, "k")
+
+    def test_embed_factory_env_key_fallback(self):
+        with patch.object(config, "EMBED_OPENAI_BASE_URL", "http://127.0.0.1:9999/v1"), patch.object(
+            config, "EMBED_OPENAI_API_KEY", "sk-embed"
+        ):
+            manager = create_embed_model_manager()
+        self.assertIsInstance(manager, OpenAICompatManager)
+        self.assertEqual(manager.api_key, "sk-embed")
+
+    def test_embed_factory_ollama_url_fallback(self):
+        args = type("Args", (), {"ollama_url": "http://127.0.0.1:11434"})()
+        manager = create_embed_model_manager(args)
+        self.assertIsInstance(manager, OllamaManager)
+        self.assertEqual(manager.api_url, "http://127.0.0.1:11434")
 
 
 class TestOpenAICompatChat(unittest.TestCase):

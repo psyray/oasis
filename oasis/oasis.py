@@ -24,7 +24,7 @@ from .config import (
 
 # Import from other modules
 from .tools import generate_timestamp, setup_logging, logger, display_logo, get_vulnerability_mapping
-from .backends import create_model_manager
+from .backends import create_embed_model_manager, create_model_manager
 from .ollama_manager import OllamaManager  # noqa: F401  (compat: tests patch this symbol)
 from .embedding import EmbeddingManager
 from .analyze import SecurityAnalyzer, EmbeddingAnalyzer
@@ -161,7 +161,7 @@ class OasisScanner:
     ) -> int:
         effective_fallback_chunk_size = self._resolve_chunk_size_fallback(configured_chunk_size)
         try:
-            detected_chunk_size = self.ollama_manager.detect_optimal_chunk_size(embed_model)
+            detected_chunk_size = self.embed_model_manager.detect_optimal_chunk_size(embed_model)
         except Exception as exc:
             self._log_chunk_size_fallback(
                 embed_model,
@@ -541,6 +541,41 @@ class OasisScanner:
             metavar='KEY',
             help='API key for the OpenAI-compatible server (default: env OASIS_OPENAI_API_KEY, else "local")',
         )
+        model_group.add_argument(
+            '--embed-provider',
+            dest='embed_provider',
+            choices=LLM_PROVIDER_CHOICES,
+            default=None,
+            metavar='{ollama,openai}',
+            help=(
+                'Embedding backend, resolved independently from --provider (chat): "ollama" '
+                '(native Ollama API, default) or "openai" (OpenAI-compatible embedding server: '
+                'vLLM, llama.cpp, LiteLLM...), so chat and embedding workloads can run on '
+                'separate servers (env OASIS_EMBED_PROVIDER)'
+            ),
+        )
+        model_group.add_argument(
+            '--embed-api-base',
+            dest='embed_api_base',
+            type=str,
+            default=None,
+            metavar='URL',
+            help=(
+                'Base URL of the OpenAI-compatible embedding server, e.g. http://localhost:8000/v1 '
+                '(default: env OASIS_EMBED_OPENAI_BASE_URL)'
+            ),
+        )
+        model_group.add_argument(
+            '--embed-api-key',
+            dest='embed_api_key',
+            type=str,
+            default=None,
+            metavar='KEY',
+            help=(
+                'API key for the OpenAI-compatible embedding server '
+                '(default: env OASIS_EMBED_OPENAI_API_KEY, else "local")'
+            ),
+        )
         
         # Cache Management
         cache_group = parser.add_argument_group('Cache Management', 'Options for managing cache files')
@@ -593,6 +628,30 @@ class OasisScanner:
             default=None,
             metavar='KEY',
             help='API key for the dashboard assistant backend (default: same as --api-key)',
+        )
+        web_group.add_argument(
+            '--web-embed-provider',
+            dest='web_embed_provider',
+            choices=LLM_PROVIDER_CHOICES,
+            default=None,
+            metavar='{ollama,openai}',
+            help='Embedding backend for assistant RAG queries (default: same as --embed-provider)',
+        )
+        web_group.add_argument(
+            '--web-embed-api-base',
+            dest='web_embed_api_base',
+            type=str,
+            default=None,
+            metavar='URL',
+            help='OpenAI-compatible base URL for assistant RAG embeddings (default: same as --embed-api-base)',
+        )
+        web_group.add_argument(
+            '--web-embed-api-key',
+            dest='web_embed_api_key',
+            type=str,
+            default=None,
+            metavar='KEY',
+            help='API key for assistant RAG embeddings (default: same as --embed-api-key)',
         )
         web_group.add_argument(
             '--web-embed-model',
@@ -780,7 +839,7 @@ class OasisScanner:
             models=embed_models,
             project_name=getattr(self.args, "project_name", None),
         )
-        base_embedding_manager = EmbeddingManager(self.args, self.ollama_manager)
+        base_embedding_manager = EmbeddingManager(self.args, self.embed_model_manager)
         prepared_input_files = base_embedding_manager.prepare_input_files(
             self.args,
             files_to_analyze=self.valid_input_files,
@@ -828,7 +887,7 @@ class OasisScanner:
             model_args = deepcopy(self.args)
             model_args.embed_model = embed_model
             model_args.chunk_size = audit_chunk_size
-            model_embedding_manager = EmbeddingManager(model_args, self.ollama_manager)
+            model_embedding_manager = EmbeddingManager(model_args, self.embed_model_manager)
             model_embedding_manager.process_input_files(
                 model_args,
                 files_to_analyze=prepared_input_files,
@@ -918,11 +977,17 @@ class OasisScanner:
                 web_api_base=getattr(self.args, "web_api_base", None),
                 web_api_key=getattr(self.args, "web_api_key", None),
                 web_embed_model=getattr(self.args, "web_embed_model", None),
+                web_embed_provider=getattr(self.args, "web_embed_provider", None),
+                web_embed_api_base=getattr(self.args, "web_embed_api_base", None),
+                web_embed_api_key=getattr(self.args, "web_embed_api_key", None),
                 web_assistant_rag=bool(getattr(self.args, "web_assistant_rag", True)),
                 default_ollama_url=getattr(self.args, "ollama_url", None),
                 default_provider=getattr(self.args, "provider", None),
                 default_api_base=getattr(self.args, "api_base", None),
                 default_api_key=getattr(self.args, "api_key", None),
+                default_embed_provider=getattr(self.args, "embed_provider", None),
+                default_embed_api_base=getattr(self.args, "embed_api_base", None),
+                default_embed_api_key=getattr(self.args, "embed_api_key", None),
             )
             self.report.set_progress_notifier(web_server.emit_scan_progress)
 
@@ -1068,10 +1133,24 @@ class OasisScanner:
         Returns:
             True if Ollama is running and connected, False otherwise
         """
-        # Initialize model backend (Ollama native or OpenAI-compatible server)
+        # Initialize model backends: chat (scan/deep) and embedding, independently routed.
+        # Embeddings default to the local Ollama backend even when chat targets an
+        # OpenAI-compatible server, so both workloads can live on separate servers.
         if ollama_url is None:
             ollama_url = self.args.ollama_url
         self.ollama_manager = create_model_manager(self.args, ollama_url=ollama_url)
+        self.embed_model_manager = create_embed_model_manager(self.args, ollama_url=ollama_url)
+
+        chat_target = str(
+            getattr(self.ollama_manager, "api_url", None) or getattr(self.ollama_manager, "api_base", "") or ""
+        )
+        embed_target = str(
+            getattr(self.embed_model_manager, "api_url", None) or getattr(self.embed_model_manager, "api_base", "") or ""
+        )
+        logger.info(
+            f"{MODEL_EMOJIS['default']}Chat backend: {cli_bold(chat_target)} | "
+            f"Embedding backend: {cli_bold(embed_target)} (independently routed)"
+        )
 
         try:
             client_ready = self.ollama_manager.get_client() is not None
@@ -1079,8 +1158,19 @@ class OasisScanner:
             client_ready = False
         if not client_ready:
             logger.error(
-                "LLM backend is not reachable (%s). Please start it and try again.",
-                getattr(self.ollama_manager, "api_url", None) or getattr(self.ollama_manager, "api_base", ""),
+                "Chat backend is not reachable (%s). Please start it and try again.",
+                chat_target or "unknown",
+            )
+            return False
+
+        try:
+            embed_client_ready = self.embed_model_manager.get_client() is not None
+        except ConnectionError:
+            embed_client_ready = False
+        if not embed_client_ready:
+            logger.error(
+                "Embedding backend is not reachable (%s). Please start it and try again.",
+                embed_target or "unknown",
             )
             return False
 
@@ -1103,7 +1193,7 @@ class OasisScanner:
             self.embed_models = list(embed_models)
             self.primary_embed_model = primary_embed_model
         for embed_model in embed_models:
-            if not self.ollama_manager.ensure_model_available(embed_model):
+            if not self.embed_model_manager.ensure_model_available(embed_model):
                 return False
 
         # Apply the class chunk-size strategy (documented above ``_resolve_chunk_size_fallback``).
@@ -1128,8 +1218,8 @@ class OasisScanner:
             logger, "📂", "Source index & embeddings", "parse tree, cache, vectorize new files"
         )
 
-        # Initialize embedding manager
-        self.embedding_manager = EmbeddingManager(self.args, self.ollama_manager)
+        # Initialize embedding manager (embedding backend, independently routed)
+        self.embedding_manager = EmbeddingManager(self.args, self.embed_model_manager)
         self.report.embed_model = getattr(self.embedding_manager, "embedding_model", None)
         self.report.set_executive_summary_models(
             embedding_model=getattr(self.embedding_manager, "embedding_model", None)

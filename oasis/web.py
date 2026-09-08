@@ -79,7 +79,7 @@ from .helpers.dashboard import (
 )
 from .helpers.progress import SCAN_PROGRESS_EXTENDED_KEYS, coerce_scan_progress_event_version
 from .report import Report, executive_summary_progress_sidecar_path, is_executive_summary_progress_sidecar
-from .backends import create_model_manager, resolve_provider_choice, ModelBackend
+from .backends import create_embed_model_manager, create_model_manager, resolve_provider_choice, ModelBackend
 from .config import LLM_PROVIDER_OLLAMA, LLM_PROVIDER_OPENAI
 from .helpers.analysis_root_path import (
     CODEBASE_UNAVAILABLE_DETAIL,
@@ -299,11 +299,17 @@ class WebServer:
         web_api_base=None,
         web_api_key=None,
         web_embed_model=None,
+        web_embed_provider=None,
+        web_embed_api_base=None,
+        web_embed_api_key=None,
         web_assistant_rag=True,
         default_ollama_url=None,
         default_provider=None,
         default_api_base=None,
         default_api_key=None,
+        default_embed_provider=None,
+        default_embed_api_base=None,
+        default_embed_api_key=None,
     ):
         """Initialize a dashboard server bound to a single runtime session.
 
@@ -321,12 +327,19 @@ class WebServer:
         self.web_api_base = web_api_base
         self.web_api_key = web_api_key
         self.web_embed_model = web_embed_model
+        self.web_embed_provider = web_embed_provider
+        self.web_embed_api_base = web_embed_api_base
+        self.web_embed_api_key = web_embed_api_key
         self.web_assistant_rag = bool(web_assistant_rag)
         self._default_ollama_url = default_ollama_url or OLLAMA_URL
         self._default_provider = default_provider
         self._default_api_base = default_api_base
         self._default_api_key = default_api_key
+        self._default_embed_provider = default_embed_provider
+        self._default_embed_api_base = default_embed_api_base
+        self._default_embed_api_key = default_embed_api_key
         self._assistant_ollama_manager: Optional[ModelBackend] = None
+        self._embed_ollama_manager: Optional[ModelBackend] = None
         self.report_data = None
         self.global_stats: Optional[Dict[str, Any]] = None
         self.socketio = None
@@ -781,6 +794,64 @@ class WebServer:
             )
         return self._assistant_ollama_manager
 
+    def _resolve_embed_provider(self) -> str:
+        """RAG embedding provider: ``--web-embed-provider`` → env → embedding backend → local Ollama.
+
+        The embedding backend is resolved independently from the chat backend
+        (local Ollama by default), so RAG embeddings can target a dedicated server.
+        """
+        for raw in (
+            self.web_embed_provider,
+            os.environ.get("OASIS_WEB_EMBED_PROVIDER"),
+            self._default_embed_provider,
+            os.environ.get("OASIS_EMBED_PROVIDER"),
+        ):
+            resolved = resolve_provider_choice(raw)
+            if resolved:
+                return resolved
+        if self._resolve_embed_api_base():
+            return LLM_PROVIDER_OPENAI
+        return LLM_PROVIDER_OLLAMA
+
+    def _resolve_embed_api_base(self) -> str:
+        """OpenAI-compatible base URL for RAG embeddings (empty string when unset)."""
+        for raw in (
+            self.web_embed_api_base,
+            os.environ.get("OASIS_WEB_EMBED_OPENAI_BASE_URL"),
+            self._default_embed_api_base,
+            os.environ.get("OASIS_EMBED_OPENAI_BASE_URL"),
+        ):
+            if raw is None:
+                continue
+            if candidate := str(raw).strip():
+                return candidate
+        return ""
+
+    def _resolve_embed_api_key(self) -> str:
+        """API key for RAG embeddings (empty string falls back to config default)."""
+        for raw in (
+            self.web_embed_api_key,
+            os.environ.get("OASIS_WEB_EMBED_OPENAI_API_KEY"),
+            self._default_embed_api_key,
+            os.environ.get("OASIS_EMBED_OPENAI_API_KEY"),
+        ):
+            if raw is None:
+                continue
+            if candidate := str(raw).strip():
+                return candidate
+        return ""
+
+    def _get_embed_ollama_manager(self) -> ModelBackend:
+        """Backend used for assistant RAG query embeddings (independent from chat)."""
+        if self._embed_ollama_manager is None:
+            self._embed_ollama_manager = create_embed_model_manager(
+                provider=self._resolve_embed_provider(),
+                ollama_url=self._resolve_assistant_ollama_url(),
+                api_base=self._resolve_embed_api_base() or None,
+                api_key=self._resolve_embed_api_key() or None,
+            )
+        return self._embed_ollama_manager
+
     def _embed_model_for_assistant(self, report_payload: Optional[Dict[str, Any]]) -> str:
         if self.web_embed_model and str(self.web_embed_model).strip():
             return str(self.web_embed_model).strip()
@@ -841,7 +912,7 @@ class WebServer:
             return "", False
 
         try:
-            client = self._get_assistant_ollama_manager().get_client()
+            client = self._get_embed_ollama_manager().get_client()
             er = client.embeddings(model=em_model, prompt=last_user[:8000])
         except Exception as exc:
             logger.warning(

@@ -181,6 +181,44 @@ class TestOasisCliParsing(unittest.TestCase):
         finally:
             shutil.rmtree(td)
 
+    def test_embed_backend_flags_parse(self):
+        scanner = OasisScanner()
+        parser = scanner.setup_argument_parser()
+        td = tempfile.mkdtemp()
+        try:
+            ns = self._parse_cli_args(
+                parser,
+                td,
+                "--embed-provider",
+                "openai",
+                "--embed-api-base",
+                "http://127.0.0.1:9999/v1",
+                "--embed-api-key",
+                "k1",
+            )
+            self.assertEqual(ns.embed_provider, "openai")
+            self.assertEqual(ns.embed_api_base, "http://127.0.0.1:9999/v1")
+            self.assertEqual(ns.embed_api_key, "k1")
+            self.assertIsNone(ns.web_embed_provider)
+            self.assertIsNone(ns.web_embed_api_base)
+            self.assertIsNone(ns.web_embed_api_key)
+
+            ns2 = self._parse_cli_args(
+                parser,
+                td,
+                "--web-embed-provider",
+                "openai",
+                "--web-embed-api-base",
+                "http://127.0.0.1:9998/v1",
+                "--web-embed-api-key",
+                "k2",
+            )
+            self.assertEqual(ns2.web_embed_provider, "openai")
+            self.assertEqual(ns2.web_embed_api_base, "http://127.0.0.1:9998/v1")
+            self.assertEqual(ns2.web_embed_api_key, "k2")
+        finally:
+            shutil.rmtree(td)
+
     def test_validate_findings_narrative_flag_default_off_and_opt_in(self):
         scanner = OasisScanner()
         parser = scanner.setup_argument_parser()
@@ -378,6 +416,7 @@ class TestOasisAuditMode(unittest.TestCase):
             project_name="my_proj",
         )
         scanner.ollama_manager = MagicMock()
+        scanner.embed_model_manager = MagicMock()
         scanner.report = MagicMock()
         vuln_mapping = {"xss": {"name": "XSS"}}
 
@@ -424,7 +463,9 @@ class TestOasisAuditMode(unittest.TestCase):
             chunk_size=None,
         )
         scanner.ollama_manager = MagicMock()
+        scanner.embed_model_manager = MagicMock()
         scanner.ollama_manager.detect_optimal_chunk_size.return_value = 1024
+        scanner.embed_model_manager.detect_optimal_chunk_size.return_value = 1024
         scanner.report = MagicMock()
         vuln_mapping = {"xss": {"name": "XSS"}}
 
@@ -447,7 +488,7 @@ class TestOasisAuditMode(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(
-            scanner.ollama_manager.detect_optimal_chunk_size.call_args_list,
+            scanner.embed_model_manager.detect_optimal_chunk_size.call_args_list,
             [unittest.mock.call("embed-a")],
         )
         first_model_args = manager_cls.call_args_list[1].args[0]
@@ -465,7 +506,9 @@ class TestOasisAuditMode(unittest.TestCase):
             chunk_size=7372,
         )
         scanner.ollama_manager = MagicMock()
+        scanner.embed_model_manager = MagicMock()
         scanner.ollama_manager.detect_optimal_chunk_size.return_value = 1536
+        scanner.embed_model_manager.detect_optimal_chunk_size.return_value = 1536
         scanner.report = MagicMock()
         vuln_mapping = {"xss": {"name": "XSS"}}
 
@@ -488,7 +531,7 @@ class TestOasisAuditMode(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(
-            scanner.ollama_manager.detect_optimal_chunk_size.call_args_list,
+            scanner.embed_model_manager.detect_optimal_chunk_size.call_args_list,
             [unittest.mock.call("embed-a")],
         )
 
@@ -501,7 +544,9 @@ class TestOasisAuditMode(unittest.TestCase):
             chunk_size=None,
         )
         scanner.ollama_manager = MagicMock()
+        scanner.embed_model_manager = MagicMock()
         scanner.ollama_manager.detect_optimal_chunk_size.return_value = None
+        scanner.embed_model_manager.detect_optimal_chunk_size.return_value = None
         scanner.report = MagicMock()
         vuln_mapping = {"xss": {"name": "XSS"}}
 
@@ -537,7 +582,9 @@ class TestOasisAuditMode(unittest.TestCase):
             chunk_size=None,
         )
         scanner.ollama_manager = MagicMock()
+        scanner.embed_model_manager = MagicMock()
         scanner.ollama_manager.detect_optimal_chunk_size.side_effect = RuntimeError("boom")
+        scanner.embed_model_manager.detect_optimal_chunk_size.side_effect = RuntimeError("boom")
         scanner.report = MagicMock()
         vuln_mapping = {"xss": {"name": "XSS"}}
 
@@ -571,6 +618,7 @@ class TestOasisAuditMode(unittest.TestCase):
             chunk_size=0,
         )
         scanner.ollama_manager = MagicMock()
+        scanner.embed_model_manager = MagicMock()
         scanner.report = MagicMock()
         vuln_mapping = {"xss": {"name": "XSS"}}
 
@@ -596,7 +644,7 @@ class TestOasisAuditMode(unittest.TestCase):
             any("Invalid manual --chunk-size" in m for m in messages),
             f"Expected invalid chunk-size warning in {messages!r}",
         )
-        scanner.ollama_manager.detect_optimal_chunk_size.assert_not_called()
+        scanner.embed_model_manager.detect_optimal_chunk_size.assert_not_called()
         first_model_args = manager_cls.call_args_list[1].args[0]
         self.assertEqual(first_model_args.chunk_size, MAX_CHUNK_SIZE)
 
@@ -608,6 +656,7 @@ class TestOasisAuditMode(unittest.TestCase):
             input_path="/tmp/project",
         )
         scanner.ollama_manager = MagicMock()
+        scanner.embed_model_manager = MagicMock()
         scanner.report = MagicMock()
         vuln_mapping = {"xss": {"name": "XSS"}}
 
@@ -639,7 +688,9 @@ class TestOllamaInitOrdering(unittest.TestCase):
         fake_manager.ensure_model_available.return_value = True
         fake_manager.detect_optimal_chunk_size.return_value = 36864
 
-        with patch("oasis.oasis.create_model_manager", return_value=fake_manager):
+        with patch("oasis.oasis.create_model_manager", return_value=fake_manager), patch(
+            "oasis.oasis.create_embed_model_manager", return_value=fake_manager
+        ):
             result = scanner._init_ollama()
 
         self.assertTrue(result)
@@ -669,7 +720,9 @@ class TestOllamaInitOrdering(unittest.TestCase):
         fake_manager.check_connection.return_value = True
         fake_manager.ensure_model_available.return_value = False
 
-        with patch("oasis.oasis.create_model_manager", return_value=fake_manager):
+        with patch("oasis.oasis.create_model_manager", return_value=fake_manager), patch(
+            "oasis.oasis.create_embed_model_manager", return_value=fake_manager
+        ):
             result = scanner._init_ollama()
 
         self.assertFalse(result)
