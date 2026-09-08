@@ -2288,6 +2288,10 @@ class WebServer:
                         "" if codebase_ok else CODEBASE_UNAVAILABLE_DETAIL
                     ),
                     "active_severity_filter": [tier.capitalize() for tier in severity_tiers],
+                    # Assistant panel is mounted next to the preview in the dashboard;
+                    # exported/saved reports do not carry the flag so Ask-AI buttons
+                    # stay dashboard-only.
+                    "assistant_enabled": True,
                     # Internal-only context for executive-summary detail link fallback.
                     "_security_root": security_root,
                     "_current_report_path": resolved_path,

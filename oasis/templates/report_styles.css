@@ -463,6 +463,23 @@ h2.report-toc-title {
     transform: rotate(90deg);
 }
 
+.report-finding-ask-ai {
+    margin-left: 0.5rem;
+    padding: 0.05rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid rgba(64, 180, 196, 0.55);
+    background: rgba(64, 180, 196, 0.12);
+    color: var(--dark-blue-2, #0e1f2b);
+    font-size: 0.68rem;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.report-finding-ask-ai:hover {
+    background: rgba(64, 180, 196, 0.25);
+}
+
 .report-finding-body {
     margin-top: 0.5rem;
     padding-left: 0.5rem;

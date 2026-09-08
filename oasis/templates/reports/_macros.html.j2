@@ -117,7 +117,7 @@
 <pre>{{ chunk.notes | e }}</pre>
 {%- endmacro %}
 
-{% macro render_finding(finding, file_index, finding_index) -%}
+{% macro render_finding(finding, file_index, finding_index, chunk_index=None, preview=None) -%}
 <details class="report-finding-details">
 {% set sev_raw = (finding.severity | default('unknown', true) | string | lower) %}
 {% set sev = sev_raw if sev_raw in ['critical', 'high', 'medium', 'low'] else 'unknown' %}
@@ -136,6 +136,13 @@
   <span class="validation">
     <span class="report-validation-badge report-validation-badge--{{ val }}" title="Deterministic finding validation">{{ finding.validation.status | e }}</span>
   </span>
+  {% endif %}
+  {% if preview and preview.assistant_enabled and chunk_index is not none %}
+  <button type="button" class="report-finding-ask-ai"
+          data-oasis-fi="{{ file_index - 1 }}"
+          data-oasis-ci="{{ chunk_index - 1 }}"
+          data-oasis-gi="{{ finding_index - 1 }}"
+          title="Show this finding in the assistant panel and chat about it">💬 Ask AI</button>
   {% endif %}
 </summary>
 <div class="report-finding-body">

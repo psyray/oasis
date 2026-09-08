@@ -92,6 +92,55 @@ DashboardApp._gatherAssistantFindingIndices = function (panelRoot) {
     };
 };
 
+/**
+ * "Ask AI" buttons rendered per finding inside the report HTML preview
+ * (``render_finding`` macro, dashboard-only via ``preview.assistant_enabled``).
+ * One delegated listener on ``document``: the preview HTML is regenerated on
+ * every modal open, so individual listeners would leak. Selecting a finding
+ * through the flat picker reveals the scan-time verdict and focuses the chat.
+ */
+DashboardApp._bindAssistantAskAiButtons = function () {
+    if (DashboardApp._oasisAskAiBound) {
+        return;
+    }
+    DashboardApp._oasisAskAiBound = true;
+    document.addEventListener('click', function (ev) {
+        const btn =
+            ev.target && typeof ev.target.closest === 'function'
+                ? ev.target.closest('.report-finding-ask-ai')
+                : null;
+        if (!btn) {
+            return;
+        }
+        // Keep the <details> toggle of the finding summary closed.
+        ev.preventDefault();
+        ev.stopPropagation();
+        const fi = Number(btn.dataset.oasisFi);
+        const ci = Number(btn.dataset.oasisCi);
+        const gi = Number(btn.dataset.oasisGi);
+        if (![fi, ci, gi].every(Number.isFinite) || fi < 0 || ci < 0 || gi < 0) {
+            return;
+        }
+        const panel = document.querySelector('.oasis-assistant-panel');
+        if (
+            !panel ||
+            typeof panel._oasisAssistantSetFindingIndices !== 'function'
+        ) {
+            return;
+        }
+        panel._oasisAssistantSetFindingIndices(fi, ci, gi);
+        try {
+            panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } catch (e) {
+            /* scrollIntoView unsupported: ignore */
+        }
+        const input = panel.querySelector('#oasis-assistant-input');
+        if (input && typeof input.focus === 'function') {
+            input.focus();
+        }
+    });
+};
+
 /** Human-readable pills for the selected finding (Validate row); uses dashboard charter pills. */
 DashboardApp.updateAssistantValidateTargetSummary = function (panel, txt) {
     const el = panel && panel.querySelector('#oasis-assistant-validate-target');
@@ -933,6 +982,60 @@ DashboardApp.populateAssistantFindingSelectorsFromPayload = function (panelRoot,
         opt.textContent = DashboardApp._truncateAssistantLabel(fp, 72);
         selFi.appendChild(opt);
     });
+    // Flat finding picker (one interaction instead of File → Chunk → Finding):
+    // optgroup per file, one option per finding carrying "fi|ci|gi".
+    const picker = panelRoot.querySelector('#oasis-assistant-finding-picker');
+    if (!picker) {
+        return;
+    }
+    DashboardApp._clearElement(picker);
+    const noneOpt = document.createElement('option');
+    noneOpt.value = '';
+    noneOpt.textContent = noneText;
+    picker.appendChild(noneOpt);
+    let total = 0;
+    files.forEach(function (f, fi) {
+        const chunks = f && Array.isArray(f.chunk_analyses) ? f.chunk_analyses : [];
+        const fp = f && typeof f.file_path === 'string' ? f.file_path : '(' + (fi + 1) + ')';
+        const group = document.createElement('optgroup');
+        group.label = DashboardApp._truncateAssistantLabel(fp, 60);
+        chunks.forEach(function (ch, ci) {
+            const findings = ch && Array.isArray(ch.findings) ? ch.findings : [];
+            findings.forEach(function (fd, gi) {
+                const title =
+                    fd && typeof fd.title === 'string' && fd.title.trim()
+                        ? fd.title.trim()
+                        : 'Finding ' + (gi + 1);
+                const severity = fd && typeof fd.severity === 'string' ? fd.severity.trim() : '';
+                const line =
+                    fd && typeof fd.snippet_start_line === 'number' && fd.snippet_start_line > 0
+                        ? fd.snippet_start_line
+                        : ch && typeof ch.start_line === 'number' && ch.start_line > 0
+                        ? ch.start_line
+                        : null;
+                const opt = document.createElement('option');
+                opt.value = fi + '|' + ci + '|' + gi;
+                opt.textContent = DashboardApp._truncateAssistantLabel(
+                    (fi + 1) + '.' + (ci + 1) + '.' + (gi + 1) + ' · ' + title +
+                    (severity ? ' (' + severity + ')' : '') +
+                    (line ? ' · line ' + line : ''),
+                    110
+                );
+                group.appendChild(opt);
+                total += 1;
+            });
+        });
+        if (group.children.length) {
+            picker.appendChild(group);
+        }
+    });
+    if (!total) {
+        const emptyOpt = document.createElement('option');
+        emptyOpt.value = '';
+        emptyOpt.textContent = txt('findingPickerEmpty', 'No findings in this report');
+        emptyOpt.disabled = true;
+        picker.appendChild(emptyOpt);
+    }
 };
 
 /** Wire cascading file/chunk/finding changes once per panel. */
@@ -1044,6 +1147,74 @@ DashboardApp._assistantBindFindingSelectorEvents = function (panelRoot, txt) {
         notifyFindingSelection();
     });
     selGi.addEventListener('change', notifyFindingSelection);
+
+    // Programmatic selection used by the flat picker and the per-finding
+    // "Ask AI" buttons: keep the legacy cascading selects as the source of
+    // truth, then notify once (panel pills + verdict panel refresh).
+    const setFindingIndices = function (fi, ci, gi) {
+        const files = panelRoot._oasisAssistantFiles || [];
+        const picker = panelRoot.querySelector('#oasis-assistant-finding-picker');
+        if (
+            !Number.isFinite(fi) || fi < 0 || fi >= files.length ||
+            !Number.isFinite(ci) || ci < 0 ||
+            !Number.isFinite(gi) || gi < 0
+        ) {
+            resetSelect(selFi);
+            resetSelect(selCi);
+            resetSelect(selGi);
+            if (picker) {
+                picker.value = '';
+            }
+            notifyFindingSelection();
+            return;
+        }
+        selFi.value = String(fi);
+        renderChunksForFile(files, fi);
+        const chunks = files[fi] && Array.isArray(files[fi].chunk_analyses) ? files[fi].chunk_analyses : [];
+        if (ci >= chunks.length) {
+            resetSelect(selCi);
+            resetSelect(selGi);
+            if (picker) {
+                picker.value = '';
+            }
+            notifyFindingSelection();
+            return;
+        }
+        selCi.value = String(ci);
+        renderFindingsForChunk(files, fi, ci);
+        const findings = chunks[ci].findings || [];
+        if (gi >= findings.length) {
+            resetSelect(selGi);
+            if (picker) {
+                picker.value = '';
+            }
+            notifyFindingSelection();
+            return;
+        }
+        selGi.value = String(gi);
+        if (picker) {
+            picker.value = fi + '|' + ci + '|' + gi;
+        }
+        notifyFindingSelection();
+    };
+    panelRoot._oasisAssistantSetFindingIndices = setFindingIndices;
+
+    const picker = panelRoot.querySelector('#oasis-assistant-finding-picker');
+    if (picker) {
+        picker.addEventListener('change', function () {
+            const parts = String(picker.value || '')
+                .split('|')
+                .map(function (n) {
+                    return Number(n);
+                });
+            if (parts.length !== 3 || !parts.every(function (n) {
+                return Number.isFinite(n) && n >= 0;
+            })) {
+                return;
+            }
+            setFindingIndices(parts[0], parts[1], parts[2]);
+        });
+    }
 };
 
 /**
@@ -1247,17 +1418,22 @@ DashboardApp.mountReportAssistantPanel = function () {
                 </label>
                 <div class="oasis-assistant-finding-ref${findingHiddenClass}">
                     <span class="oasis-assistant-finding-ref-intro">${DashboardApp._escapeHtml(txt('findingRefIntro', ''))}</span>
+                    <label class="oasis-assistant-finding-field oasis-assistant-finding-picker-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingPickerLabel', 'Finding'))}</span>
+                        <select id="oasis-assistant-finding-picker" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingPicker', 'Finding picker'))}"></select>
+                    </label>
                     <div class="oasis-assistant-finding-selects">
                         ${viRowHtml}
-                        <label class="oasis-assistant-finding-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingFileLabel', 'File'))}</span>
-                            <select id="oasis-assistant-fi" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingFile', 'File'))}"></select>
-                        </label>
-                        <label class="oasis-assistant-finding-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingChunkLabel', 'Chunk'))}</span>
-                            <select id="oasis-assistant-ci" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingChunk', 'Chunk'))}"></select>
-                        </label>
-                        <label class="oasis-assistant-finding-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingFindingLabel', 'Finding'))}</span>
-                            <select id="oasis-assistant-gi" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingFinding', 'Finding'))}"></select>
-                        </label>
+                        <div class="oasis-assistant-finding-legacy" hidden>
+                            <label class="oasis-assistant-finding-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingFileLabel', 'File'))}</span>
+                                <select id="oasis-assistant-fi" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingFile', 'File'))}"></select>
+                            </label>
+                            <label class="oasis-assistant-finding-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingChunkLabel', 'Chunk'))}</span>
+                                <select id="oasis-assistant-ci" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingChunk', 'Chunk'))}"></select>
+                            </label>
+                            <label class="oasis-assistant-finding-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingFindingLabel', 'Finding'))}</span>
+                                <select id="oasis-assistant-gi" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingFinding', 'Finding'))}"></select>
+                            </label>
+                        </div>
                     </div>
                 </div>
                 <div class="oasis-assistant-validate-row">
@@ -1326,6 +1502,7 @@ DashboardApp.mountReportAssistantPanel = function () {
         return DashboardApp.refreshAssistantVerdictPanelFromSession(panel, txt);
     };
     panel._oasisAssistantFindingSelectionCallback = refreshFindingUi;
+    DashboardApp._bindAssistantAskAiButtons();
 
     /* report_template.html puts .report-footer before the injected assistant in DOM order; relocate below the panel. */
     wrapper.querySelectorAll('footer.report-footer').forEach(function (footer) {

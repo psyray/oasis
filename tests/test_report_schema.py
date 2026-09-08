@@ -852,6 +852,51 @@ class TestReportSchema(unittest.TestCase):
         self.assertNotIn('<span class="report-validation-badge', html_plain)
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_render_report_html_from_json_payload_ask_ai_button_dashboard_only(self):
+        """Per-finding Ask AI buttons carry 0-based indices in dashboard previews
+        only (exported/saved reports stay button-free)."""
+        report = Report(input_path=".", output_format=["md"])
+        finding = {
+            "title": "SQLi via search",
+            "severity": "High",
+            "explanation": "e",
+        }
+        payload = {
+            "report_type": "vulnerability",
+            "schema_version": 6,
+            "title": "Ask AI",
+            "generated_at": "2026-01-01",
+            "model_name": "m1",
+            "vulnerability_name": "SQL Injection",
+            "vulnerability": {"name": "SQL Injection"},
+            "files": [
+                {
+                    "file_path": "app.py",
+                    "similarity_score": 0.9,
+                    "chunk_analyses": [
+                        {"start_line": 1, "findings": [finding]},
+                        {"start_line": 20, "findings": [dict(finding)]},
+                    ],
+                }
+            ],
+            "stats": {"total_findings": 2, "files_analyzed": 1},
+        }
+
+        # Exported/saved reports: no assistant mounted, no button.
+        html_export = report.render_report_html_from_json_payload(payload)
+        self.assertNotIn("data-oasis-fi=", html_export)
+        self.assertNotIn('<button type="button" class="report-finding-ask-ai"', html_export)
+
+        # Dashboard preview: button with 0-based indices (file 0, chunk 1, finding 0).
+        html_dash = report.render_report_html_from_json_payload(
+            payload, preview_context={"assistant_enabled": True}
+        )
+        self.assertIn('data-oasis-fi="0"', html_dash)
+        self.assertIn('data-oasis-ci="1"', html_dash)
+        self.assertIn('data-oasis-gi="0"', html_dash)
+        self.assertIn("report-finding-ask-ai", html_dash)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_render_report_html_from_json_payload_whitelists_severity_css_suffix(self):
         report = Report(input_path=".", output_format=["md"])
         template = report.template_env.get_template("reports/vulnerability_from_json.html.j2")

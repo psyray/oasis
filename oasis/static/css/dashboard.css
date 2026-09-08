@@ -2455,6 +2455,13 @@ body.modal-open {
     font-size: 0.85rem;
     box-sizing: border-box;
 }
+.oasis-assistant-finding-picker-field {
+    flex: 1 1 100%;
+}
+.oasis-assistant-finding-picker-field select {
+    width: 100%;
+    max-width: none;
+}
 .oasis-assistant-chips {
     display: flex;
     flex-wrap: wrap;
