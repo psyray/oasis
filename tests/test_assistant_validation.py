@@ -186,7 +186,24 @@ class TestCatalogLanguageCoverage(unittest.TestCase):
             self.assertTrue(entry_points[framework])
 
     def test_patterns_version_bumped_with_language_support(self) -> None:
-        self.assertGreaterEqual(PATTERNS_VERSION, 3)
+        self.assertGreaterEqual(PATTERNS_VERSION, 4)
+
+    def test_refinement_patterns_registered(self) -> None:
+        groups = all_pattern_groups()
+        sources = groups["sources"]["http_params"]
+        sinks = groups["sinks"]
+        mitigations = groups["mitigations"]["sql_parameterized"]
+        self.assertIn(r"\bcall\.parameters\s*\[", sources)
+        self.assertIn(r"\bcall\.receive\s*[<(]", sources)
+        self.assertIn(r"\brequest\.getQueryString\s*\(", sources)
+        self.assertIn(r"\bvars\s*\[", sources)
+        self.assertIn(r"\bchi\.URLParam\s*\(", sources)
+        self.assertIn(
+            r"\.(?:QueryRowx|Queryx|NamedExec|NamedQuery)\s*\(", sinks["sql_execute"]
+        )
+        self.assertIn(r"\.(?:get_results?|get_result)\b", sinks["sql_execute"])
+        self.assertIn(r"\brender\s+inline:", sinks["html_render"])
+        self.assertTrue(any(r"\$\d+" in p for p in mitigations))
 
 
 class TestGoSupport(unittest.TestCase):
@@ -246,6 +263,60 @@ class TestGoSupport(unittest.TestCase):
             compiled = compile_groups({"sql_execute": SINKS["sql_execute"]})
             hits = scan_patterns_best_effort(p.parent, compiled)
             self.assertTrue(any(h.pattern_key == "sql_execute" for h in hits))
+
+    def test_go_sqlx_gorm_sinks_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "store.go",
+                "func load(id string) {\n"
+                '    row := db.QueryRowx("SELECT name FROM u WHERE id = " + id)\n'
+                "}\n",
+            )
+            compiled = compile_groups({"sql_execute": SINKS["sql_execute"]})
+            hits = scan_patterns_best_effort(p.parent, compiled)
+            self.assertTrue(any(h.pattern_key == "sql_execute" for h in hits))
+
+    def test_go_ordinal_placeholder_nullifies(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            _write(
+                Path(td),
+                "store.go",
+                "func load(id string) {\n"
+                '    row := db.QueryRow("SELECT * FROM u WHERE id = $1", id)\n'
+                "}\n",
+            )
+            hits = find_mitigations_in_root(Path(td), ["sql_parameterized"])
+            self.assertTrue(any(h.nullifies for h in hits))
+
+    def test_currency_amount_not_treated_as_placeholder(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            _write(
+                Path(td),
+                "pricing.go",
+                "func describe(total int) string {\n"
+                '    return fmt.Sprintf("You earned $100 this month", total)\n'
+                "}\n",
+            )
+            hits = find_mitigations_in_root(Path(td), ["sql_parameterized"])
+            self.assertFalse(hits)
+
+    def test_taint_flow_gorilla_vars_to_sql_sink(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "handler.go",
+                "func userHandler(w http.ResponseWriter, r *http.Request) {\n"
+                '    id := vars["id"]\n'
+                '    db.QueryRow("SELECT name FROM u WHERE id = " + id)\n'
+                "}\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 3, ("sql_execute",), ("http_params",)
+            )
+            self.assertTrue(flows)
+            self.assertEqual(flows[0].source_kind, "http_params")
+            self.assertEqual(flows[0].sink_kind, "sql_execute")
 
 
 class TestJavaSupport(unittest.TestCase):
@@ -360,6 +431,22 @@ class TestRubySupport(unittest.TestCase):
             hits = find_mitigations_in_root(Path(td), ["sql_parameterized"])
             self.assertTrue(any(h.nullifies for h in hits))
 
+    def test_rails_render_inline_sink_with_taint(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "comments.rb",
+                "def render_comment\n"
+                '  render inline: "Hello #{params[:name]}"\n'
+                "end\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 2, ("html_render",), ("http_params",)
+            )
+            self.assertTrue(flows)
+            self.assertEqual(flows[0].source_kind, "http_params")
+            self.assertEqual(flows[0].sink_kind, "html_render")
+
 
 class TestRustSupport(unittest.TestCase):
     def test_enclosing_symbol_rust_fn(self) -> None:
@@ -408,6 +495,20 @@ class TestRustSupport(unittest.TestCase):
             grouped = discover_entry_points(root)
             self.assertIn("rust", grouped)
 
+    def test_rust_diesel_sql_sink_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "users.rs",
+                "fn list_users(conn: &PgConnection) {\n"
+                '    let rows = diesel::sql_query("SELECT * FROM users")\n'
+                "        .get_results::<User>(conn);\n"
+                "}\n",
+            )
+            compiled = compile_groups({"sql_execute": SINKS["sql_execute"]})
+            hits = scan_patterns_best_effort(p.parent, compiled)
+            self.assertTrue(any(h.pattern_key == "sql_execute" for h in hits))
+
 
 class TestKotlinScalaEntryPoints(unittest.TestCase):
     def test_ktor_route_detected(self) -> None:
@@ -437,6 +538,57 @@ class TestKotlinScalaEntryPoints(unittest.TestCase):
             )
             grouped = discover_entry_points(root)
             self.assertIn("scala", grouped)
+
+    def test_taint_flow_ktor_parameters_to_execute_query(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "Users.kt",
+                "fun handle(call: ApplicationCall, st: Statement) {\n"
+                '    val id = call.parameters["id"]\n'
+                '    st.executeQuery("SELECT * FROM u WHERE id = " + id)\n'
+                "}\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 3, ("sql_execute",), ("http_params",)
+            )
+            self.assertTrue(flows)
+            self.assertEqual(flows[0].source_kind, "http_params")
+            self.assertEqual(flows[0].sink_kind, "sql_execute")
+
+    def test_taint_flow_ktor_receive_to_execute_query(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "Search.kt",
+                "suspend fun handle(call: ApplicationCall, st: Statement) {\n"
+                "    val q = call.receive<String>()\n"
+                '    st.executeQuery("SELECT * FROM u WHERE n = " + q)\n'
+                "}\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 3, ("sql_execute",), ("http_params",)
+            )
+            self.assertTrue(flows)
+            self.assertEqual(flows[0].source_kind, "http_params")
+            self.assertEqual(flows[0].sink_kind, "sql_execute")
+
+    def test_taint_flow_play_query_string_to_execute_query(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "Search.scala",
+                "def search = Action { implicit request =>\n"
+                '    val name = request.getQueryString("name")\n'
+                '    stmt.executeQuery("SELECT * FROM u WHERE n = " + name)\n'
+                "}\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 3, ("sql_execute",), ("http_params",)
+            )
+            self.assertTrue(flows)
+            self.assertEqual(flows[0].source_kind, "http_params")
+            self.assertEqual(flows[0].sink_kind, "sql_execute")
 
 
 class TestCrossLanguageSinks(unittest.TestCase):

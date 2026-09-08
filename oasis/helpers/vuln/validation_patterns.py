@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
-PATTERNS_VERSION = 3
+PATTERNS_VERSION = 4
 
 
 # --------------------------------------------------------------------------- #
@@ -156,6 +156,15 @@ SOURCES: Dict[str, List[str]] = {
         r"\brequest\.getParameter\s*\(",
         r"@Request(?:Param|Body|Part)\b",
         r"@(?:Path|Query|Form|Matrix)Param\b",
+        # Kotlin (ktor request contexts)
+        r"\bcall\.parameters\s*\[",
+        r"\bcall\.receive\s*[<(]",
+        r"\bcall\.request\.queryParameters\b",
+        # Scala (Play)
+        r"\brequest\.getQueryString\s*\(",
+        # Go (gorilla/mux, chi route params)
+        r"\bvars\s*\[",
+        r"\bchi\.URLParam\s*\(",
         # Rust (axum / actix extractors)
         r"\b(?:Query|Path|Form|Json|Payload)<",
         r"\bweb::(?:Query|Path|Form|Json|Payload)\b",
@@ -236,9 +245,15 @@ SINKS: Dict[str, List[str]] = {
         r"\b(?:new\s+)?(?:PDO|SQLite3)\b",
         # Go database/sql
         r"\.(?:Exec|ExecContext|QueryRow|QueryRowContext|QueryContext)\s*\(",
+        # Go sqlx / GORM raw SQL
+        r"\.(?:QueryRowx|Queryx|NamedExec|NamedQuery)\s*\(",
+        r"\.Raw\s*\(",
         # Java JDBC / JPA
         r"\.(?:executeQuery|executeUpdate|executeBatch|executeLargeUpdate|executeLargeBatch)\s*\(",
         r"\.(?:createQuery|createNativeQuery|createSQLQuery)\s*\(",
+        # Rust diesel query builders (turbofish-safe: .get_results::<User>())
+        r"\.(?:get_results?|get_result)\b",
+        r"\bdiesel::",
         # Ruby / Rails raw SQL
         r"\bfind_by_sql\s*\(",
         r"\.where\s*\(\s*['\"][^'\"]*#\{",
@@ -309,6 +324,8 @@ SINKS: Dict[str, List[str]] = {
         # Ruby ERB / Rails raw output
         r"\bERB\.new\s*\(",
         r"\braw\s*\(",
+        # Rails inline template rendering
+        r"\brender\s+inline:",
     ],
     "innerHTML_write": [
         r"\.innerHTML\s*=",
@@ -502,10 +519,13 @@ MITIGATIONS: Dict[str, List[str]] = {
         r"\?\s*,\s*[\(\[]",
         # JDBC prepared-statement setters
         r"\.(?:setString|setInt|setLong|setDouble|setFloat|setObject|setDate|setTimestamp|setBigDecimal)\s*\(",
-        # Rails / gorm placeholders and Rails hash conditions
+        # Rails / gorm SQL placeholders and Rails hash conditions
         r"\.where\s*\(\s*['\"][^'\"]*\?",
         r"\.Where\s*\(\s*['\"][^'\"]*\?",
         r"\.where\s*\(\s*[a-z_]\w*\s*:",
+        # PostgreSQL / Go ordinal placeholders ("WHERE id = $1") — require SQL
+        # keywords on the same line to avoid currency strings like "$100".
+        r"['\"][^'\"]*(?i:SELECT|INSERT|UPDATE|DELETE|WHERE|VALUES)[^'\"]*\$\d+",
     ],
     "orm_query": [
         r"\b(?:Model|session|db|objects)\.(?:filter|filter_by|query|all|first|get)\s*\(",
