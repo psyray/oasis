@@ -510,6 +510,53 @@ class TestRustSupport(unittest.TestCase):
             self.assertTrue(any(h.pattern_key == "sql_execute" for h in hits))
 
 
+class TestNodeSqlAndExecSupport(unittest.TestCase):
+    """Node.js sinks surfaced by the E2E fixture run (sqlite3, child_process)."""
+
+    def test_taint_flow_sqlite_db_all(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "feedback.js",
+                "app.get('/feedback/search', (req, res) => {\n"
+                "    const q = req.query.q || '';\n"
+                "    db.all(\"SELECT * FROM feedback WHERE body LIKE '%\" + q + \"%'\", cb);\n"
+                "});\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 3, ("sql_execute",), ("http_params",)
+            )
+            self.assertTrue(flows)
+            self.assertEqual(flows[0].source_kind, "http_params")
+            self.assertEqual(flows[0].sink_kind, "sql_execute")
+
+    def test_taint_flow_child_process_exec(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "ping.js",
+                "app.post('/ping', (req, res) => {\n"
+                "    const host = req.query.host || '';\n"
+                "    child_process.exec('ping -c 1 ' + host, cb);\n"
+                "});\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 3, ("os_exec",), ("http_params",)
+            )
+            self.assertTrue(flows)
+            self.assertEqual(flows[0].source_kind, "http_params")
+            self.assertEqual(flows[0].sink_kind, "os_exec")
+
+    def test_node_sink_patterns_registered(self) -> None:
+        groups = all_pattern_groups()
+        self.assertTrue(
+            any("pool|client" in p for p in groups["sinks"]["sql_execute"])
+        )
+        self.assertTrue(
+            any("child_process" in p for p in groups["sinks"]["os_exec"])
+        )
+
+
 class TestKotlinScalaEntryPoints(unittest.TestCase):
     def test_ktor_route_detected(self) -> None:
         with tempfile.TemporaryDirectory() as td:

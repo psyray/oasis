@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
-PATTERNS_VERSION = 4
+PATTERNS_VERSION = 5
 
 
 # --------------------------------------------------------------------------- #
@@ -257,6 +257,8 @@ SINKS: Dict[str, List[str]] = {
         # Ruby / Rails raw SQL
         r"\bfind_by_sql\s*\(",
         r"\.where\s*\(\s*['\"][^'\"]*#\{",
+        # Node.js sqlite3 / better-sqlite3 / mysql2 / pg (object-qualified calls)
+        r"\b(?:db|database|conn|connection|pool|client)\.(?:all|get|run|each|exec|query)\s*\(",
     ],
     "os_exec": [
         r"\bsubprocess\.(?:call|run|Popen|check_output|check_call)\s*\(",
@@ -282,6 +284,9 @@ SINKS: Dict[str, List[str]] = {
         r"\bIO\.popen\s*\(",
         r"%x\(",
         r"`[^`]*(?:\$\{|#\{)[^`]*`",
+        # Node.js child_process
+        r"\bchild_process\.(?:exec|execSync|execFile|execFileSync|spawn|spawnSync)\s*\(",
+        r"\b(?:execSync|spawnSync)\s*\(",
     ],
     "shell_exec": [
         r"\bshell\s*=\s*True\b",
