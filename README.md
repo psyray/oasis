@@ -383,6 +383,18 @@ Combine `--fail-on` with the SARIF export (`-of sarif` or `all`) and upload the 
 
 > The scan step uses `continue-on-error` so the SARIF upload still happens when the gate trips (exit 3); the job result then reflects the OASIS exit code.
 
+### E2E fixture checks (manual/dev)
+
+`scripts/e2e_fixture_scan.py` runs the CLI against the bundled realistic fixtures (`test_files/realistic_app/`, 5 languages) on a reduced vulnerability set (default: the Injection family — SQL Injection, Command Injection, XSS) and prints a per-(language, vulnerability) pass/fail table from the canonical JSON reports, scan-time verdicts included. It needs a live LLM server, so it stays a manual/dev gate rather than a CI test:
+
+```bash
+python scripts/e2e_fixture_scan.py \
+  --provider openai --api-base http://llm.example.com/v1 \
+  --model Qwen/Qwen2.5-Coder-32B-Instruct --embed-model bge-m3
+```
+
+See `test_files/realistic_app/README.md` for fixture details and expectations.
+
 <p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
 
 <a id="readme-model-providers"></a>

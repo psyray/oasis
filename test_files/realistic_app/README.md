@@ -79,3 +79,22 @@ listed above. Safe variants did not generate findings except for
 
 If a previous run cached old findings, delete `.oasis_cache/` inside the
 fixture directory before re-scanning after fixture changes.
+
+## Automated E2E check
+
+`scripts/e2e_fixture_scan.py` (repo root) runs the CLI on each fixture language
+directory with a reduced vulnerability set (default: the Injection family —
+SQL Injection, Command Injection, XSS) and checks the canonical JSON reports
+for the expected detections and scan-time verdicts:
+
+```bash
+python scripts/e2e_fixture_scan.py \
+  --provider openai --api-base http://llm.example.com/v1 \
+  --model Qwen/Qwen2.5-Coder-32B-Instruct \
+  --embed-model bge-m3
+```
+
+It prints a per-(language, vulnerability) pass/fail table and exits non-zero
+when an expected detection is missing. Run outputs are kept in a temp directory
+(override with `--output-dir`). It requires a live LLM server, so it is a
+manual/dev tool, not a CI test.
