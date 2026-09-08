@@ -29,6 +29,7 @@ from .config import (
 from .ollama_manager import OllamaManager
 from .backends import create_model_manager, ModelBackend
 from .helpers.misc import absolute_snippet_lines_in_file
+from .helpers.findings_dedupe import deduplicate_rows_findings
 from .tools import chunk_content_with_spans, logger, calculate_similarity, sanitize_name
 from .report import (
     Report,
@@ -1507,6 +1508,18 @@ FINDINGS SUMMARY (valid JSON envelope; ``truncated_for_llm_prompt_budget`` may b
 
                 # Store results for this vulnerability
                 all_results[vuln_name] = detailed_results
+
+                # Transverse dedup: same file + identical snippet or overlapping
+                # resolved lines → keep the best finding of each cluster (runs
+                # before validation/report so all consumers see the deduped list)
+                if detailed_results:
+                    dedupe_stats = deduplicate_rows_findings(detailed_results, vuln_name)
+                    if dedupe_stats.get("duplicates_removed"):
+                        logger.info(
+                            "🧹 Finding dedup · %s · %d duplicate(s) removed",
+                            cli_bold(vuln_name),
+                            dedupe_stats["duplicates_removed"],
+                        )
 
                 # Scan-time deterministic validation (verdicts embedded in reports)
                 scan_validation_results: Optional[Dict[str, Dict[str, Any]]] = None

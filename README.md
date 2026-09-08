@@ -466,7 +466,7 @@ Analysis is orchestrated by a single **LangGraph** pipeline:
 3. **Expand** — widen suspicious chunk context within budget (retries capped by **`--langgraph-max-expand`**)  
 4. **Deep** — `ChunkDeepAnalysis` for flagged chunks  
 5. **Verify** — schema consistency; may loop back to **Expand** when retries remain  
-6. **Report** — vulnerability reports + executive summary; with **`--validate-findings`** (default: on) each finding is deterministically validated right before its report is written (verdicts embedded in the reports and visible as badges)  
+6. **Report** — vulnerability reports + executive summary; duplicate findings from the deep pass (same file + identical snippet fingerprint or overlapping resolved lines) are **merged automatically** beforehand — the best finding of each cluster (highest severity, then longest snippet) is kept at its original position and duplicates are dropped **before** validation and report writing, so every artifact (canonical JSON, stats, exports, sidecar, diff baseline) sees the deduplicated list; with **`--validate-findings`** (default: on) each finding is deterministically validated right before its report is written (verdicts embedded in the reports and visible as badges)  
 7. **PoC stage (optional)** — **`--poc-hints`** (hint bullets from findings) and/or **`--poc-assist`** (LLM-produced executable PoC text, not run by OASIS)
 
 Within each run you still choose a **scan model** (`-sm`) and **deep model(s)** (`-m`) as before.
