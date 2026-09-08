@@ -75,6 +75,10 @@ DashboardApp.ASSISTANT_UI = {
         'The scanned codebase directory could not be resolved or read at the expected location relative to security_reports. Move or restore security_reports and .oasis_cache alongside the scanned project folder (same parent layout as when the scan ran). Until then, assistant and RAG cannot reliably use source files and embeddings.',
     validateTargetScopeLabel: 'Report',
     validateTargetIncomplete: 'Select file, chunk, and finding for validation scope.',
+    validateScanTimeOrigin: 'Scan-time',
+    validateScanTimeTitle: 'Deterministic validation computed automatically during the scan.',
+    validateGenerateNarrative: 'Generate narrative with AI',
+    validateGenerating: 'Generating…',
 };
 
 /** CSS suffixes for ``oasis-assistant-validate-sev--*`` (must match ``ConfigFinding.severity`` in ``oasis/schemas/analysis.py``). */

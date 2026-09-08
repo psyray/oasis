@@ -263,6 +263,8 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
     - function (**EXPERIMENTAL**): Splits the file into individual functions for analysis, allowing for more precise detection of issues within specific code blocks but with less contextual linkage across functions.  
 
 - **`--langgraph-max-expand`** `N`: Maximum **context-expand** retries after verify detects structured-output problems (default: **2**).
+- **`--validate-findings`** / **`--no-validate-findings`**: Run the deterministic finding validation **automatically during the scan** and embed the verdicts in the reports (default: **on**). Findings are validated per `(file, line)` anchor with verdict deduplication; the dashboard can still run a live investigation per finding for full evidence.
+- **`--validate-findings-budget`** `SEC`: Total wall-clock budget (seconds) for scan-time finding validation per scan (default: **120**). Findings past the budget stay unannotated and remain validatable on demand from the dashboard.
 - **`--poc-hints`**: Log optional high-level PoC hint bullets from structured findings only (**no** extra LLM call; **does not** run code).
 - **`--poc-assist`**: Ask the deep model for a standalone executable PoC (script or commands) from findings; **logged only** — OASIS does not run generated code.
 - **`--custom-instructions`**: Extra text appended to deep-analysis and **`--poc-assist`** prompts (merged with the file variant below; does **not** inject into the dashboard assistant system prompt—the assistant uses the canonical report JSON and optional RAG).
@@ -630,6 +632,14 @@ The finding-validation flow is designed so the **verdict stays deterministic**, 
 
 5. **Optional LLM narrative with no-invention guardrails**  
    When synthesis is enabled (`synthesize_narrative`, default `true`) and a chat model is available, the API may return `narrative_markdown`. That narrative is secondary, must not contradict the deterministic verdict, is focused with the same sink anchor (`scope_focus`), and must not invent files, paths, call chains, or evidence absent from the deterministic JSON.
+
+6. **Scan-time validation is automatic**  
+   The same deterministic validator runs **during the scan** (after each vulnerability type's deep pass) and embeds a compact verdict (`status`, `confidence`, `summary`, backend) in the canonical reports (`files[].chunk_analyses[].findings[].validation`), also rendered in the HTML/Markdown exports with a color-coded **status badge** next to the severity pill in each finding summary (dashboard modal and saved HTML/PDF reports). Verdicts are deduplicated per `(file, line)` anchor and gated by `--validate-findings-budget`; findings past the budget stay unannotated and can still be validated on demand from the dashboard, where the full evidence (entry points, call chains, taint flows) is returned.
+
+7. **Full scan-time evidence in the assistant panel**  
+   The scan also persists every full investigation payload beside the report as a **`finding_validations.json` sidecar** (same stable finding keys as chat sessions). Selecting **File / Chunk / Finding** in the assistant panel shows the complete scan-time verdict — scope, entry points, taint flows, call chains, mitigations — even before any chat session exists (a **Scan-time** pill marks the origin). The chat system prompt (`FINDING_VALIDATION_JSON`) falls back to the sidecar too, so the assistant can discuss the verdict from the first message; a session validation (manual *Validate findings*, with LLM narrative) always wins over the sidecar, and a **Generate narrative** button on scan-time panels triggers a live re-validation that persists the narrated result into the active session.
+
+**Language coverage**: the deterministic catalog (`oasis/helpers/vuln/validation_patterns.py`) provides entry points, taint sources, sinks and mitigations for Python (Flask/Django/FastAPI/CLI), JavaScript/Node (Express), PHP (superglobals/Laravel), Ruby (Rails), Java (Servlet/Spring/JDBC/JPA), C#/.NET (ASP.NET Core, Razor, Blazor, desktop), Go (net/http/gin/echo/fiber), Kotlin (ktor) and Rust (axum/actix/rocket/warp). Adding support for a new framework only touches that catalog file.
 
 <p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
 

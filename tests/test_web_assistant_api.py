@@ -479,6 +479,139 @@ class TestWebAssistantRoutes(unittest.TestCase):
             self.assertIn("FINDING_VALIDATION_JSON", system_prompt)
             self.assertIn("confirmed_exploitable", system_prompt)
 
+    def test_assistant_chat_falls_back_to_scan_sidecar_validation(self):
+        """With no chat session carrying the verdict, the scan-time sidecar feeds
+        FINDING_VALIDATION_JSON so the assistant can discuss it right away."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            rel = "rep_scan_sidecar.json"
+            payload = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "t",
+                "generated_at": "2026-01-01",
+                "model_name": "m1",
+                "vulnerability_name": "SQL Injection",
+                "files": [],
+                "stats": {"total_findings": 0},
+            }
+            resolved_report = (sec / rel)
+            resolved_report.write_text(json.dumps(payload), encoding="utf-8")
+
+            from oasis.helpers.assistant.web.persistence import (
+                merge_scan_finding_validations_sidecar,
+            )
+
+            merge_scan_finding_validations_sidecar(
+                resolved_report.resolve(),
+                "SQL Injection",
+                {
+                    '{"ci":0,"fi":0,"gi":0,"s":""}': {
+                        "vulnerability_name": "SQL Injection",
+                        "family": "flow",
+                        "status": "confirmed_exploitable",
+                        "confidence": 0.9,
+                        "summary": "scan-time deterministic verdict",
+                    }
+                },
+            )
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            mock_om = server._get_assistant_ollama_manager()
+            resp = client.post(
+                "/api/assistant/chat",
+                data=json.dumps(
+                    {
+                        "messages": [{"role": "user", "content": "PoC?"}],
+                        "report_path": rel,
+                        "model": "m1",
+                        "file_index": 0,
+                        "chunk_index": 0,
+                        "finding_index": 0,
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            mock_om.chat.assert_called()
+            full_messages = mock_om.chat.call_args[0][1]
+            system_prompt = full_messages[0]["content"]
+            self.assertIn("FINDING_VALIDATION_JSON", system_prompt)
+            self.assertIn("confirmed_exploitable", system_prompt)
+
+    def test_assistant_finding_validations_endpoint(self):
+        """The sidecar endpoint returns scan-time payloads and guards the paths."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            rel = "rep_fv.json"
+            (sec / rel).write_text(json.dumps({"title": "t"}), encoding="utf-8")
+            scope_rel = "scope_vuln.json"
+            (sec / scope_rel).write_text(json.dumps({"title": "s"}), encoding="utf-8")
+
+            from oasis.helpers.assistant.web.persistence import (
+                merge_scan_finding_validations_sidecar,
+            )
+
+            fk = '{"ci":0,"fi":0,"gi":0,"s":""}'
+            merge_scan_finding_validations_sidecar(
+                (sec / rel).resolve(),
+                "SQL Injection",
+                {fk: {"status": "confirmed_exploitable"}},
+            )
+            merge_scan_finding_validations_sidecar(
+                (sec / scope_rel).resolve(),
+                "XSS",
+                {fk: {"status": "likely_exploitable"}},
+            )
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+
+            resp = client.get(f"/api/assistant/finding-validations?report_path={rel}")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.get_json()
+            self.assertEqual(data["vulnerability_name"], "SQL Injection")
+            self.assertIn(fk, data["validations"])
+            self.assertEqual(data["validations"][fk]["status"], "confirmed_exploitable")
+
+            # Executive aggregate mode: the scope report's own sidecar wins.
+            resp_scope = client.get(
+                f"/api/assistant/finding-validations?report_path={rel}"
+                f"&finding_scope_report_path={scope_rel}"
+            )
+            self.assertEqual(resp_scope.status_code, 200)
+            data_scope = resp_scope.get_json()
+            self.assertEqual(data_scope["vulnerability_name"], "XSS")
+            self.assertEqual(data_scope["validations"][fk]["status"], "likely_exploitable")
+
+            # No sidecar yet -> empty map, still 200 so the UI can fall back silently.
+            (sec / "no_sidecar.json").write_text("{}", encoding="utf-8")
+            resp_empty = client.get(
+                "/api/assistant/finding-validations?report_path=no_sidecar.json"
+            )
+            self.assertEqual(resp_empty.status_code, 200)
+            self.assertEqual(resp_empty.get_json()["validations"], {})
+
+            # Guards.
+            self.assertEqual(
+                client.get("/api/assistant/finding-validations").status_code, 400
+            )
+            self.assertEqual(
+                client.get(
+                    "/api/assistant/finding-validations?report_path=missing.json"
+                ).status_code,
+                404,
+            )
+
     def test_assistant_chat_survives_validation_context_builder_failure(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)

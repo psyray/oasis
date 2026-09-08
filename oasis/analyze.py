@@ -43,6 +43,7 @@ from .helpers import (
 from .helpers.langgraph_cli import (
     LG_DEBUG_SEPARATOR,
     LG_DEEP_VULN_FINISHED,
+    LG_FINDING_VALIDATION,
     LG_LLM_SELECTED,
     LG_SCAN_TASK_COMPLETE,
     cli_bold,
@@ -1507,13 +1508,27 @@ FINDINGS SUMMARY (valid JSON envelope; ``truncated_for_llm_prompt_budget`` may b
                 # Store results for this vulnerability
                 all_results[vuln_name] = detailed_results
 
+                # Scan-time deterministic validation (verdicts embedded in reports)
+                scan_validation_results: Optional[Dict[str, Dict[str, Any]]] = None
+                if detailed_results and getattr(args, "validate_findings", True):
+                    scan_validation_results = self._validate_findings_for_report(
+                        vuln_name, detailed_results, args, pbar=deep_vuln_pbar
+                    )
+
                 # Generate vulnerability report
                 if detailed_results:
-                    report.generate_vulnerability_report(
+                    written = report.generate_vulnerability_report(
                         vulnerability=vuln,
                         results=detailed_results,
                         model_name=self.llm_model,
                     )
+                    json_path = (
+                        written.get("json") if isinstance(written, dict) else None
+                    )
+                    if scan_validation_results and json_path:
+                        self._write_scan_finding_validations_sidecar(
+                            json_path, vuln_name, scan_validation_results
+                        )
                 else:
                     logger.info(f"No suspicious code found for {cli_bold(vuln_name)}")
 
@@ -1539,7 +1554,75 @@ FINDINGS SUMMARY (valid JSON envelope; ``truncated_for_llm_prompt_budget`` may b
                     main_pbar.update(1)
 
         return all_results
-    
+
+    def _validate_findings_for_report(
+        self,
+        vuln_name: str,
+        detailed_results: List[Dict[str, Any]],
+        args: Any,
+        pbar=None,
+    ) -> Optional[Dict[str, Dict[str, Any]]]:
+        """Run scan-time deterministic validation and annotate findings in place.
+
+        Verdicts land in ``finding.validation`` so the canonical reports embed
+        them; the full investigation payloads are returned keyed by the stable
+        session storage key for the sidecar writer. Failures are logged and
+        never abort the deep pass.
+        """
+        try:
+            from oasis.helpers.assistant.batch import (
+                annotate_rows_with_validation,
+                summarize_validation_stats,
+            )
+
+            stats = annotate_rows_with_validation(
+                detailed_results,
+                vulnerability_name=vuln_name,
+                scan_root=Path(self.embedding_manager.input_path).resolve(),
+                total_budget_seconds=float(
+                    getattr(args, "validate_findings_budget", 120.0) or 120.0
+                ),
+            )
+        except Exception:
+            logger.warning("Scan-time finding validation failed for %s", vuln_name, exc_info=True)
+            return None
+        if stats.get("validated"):
+            langgraph_emit(
+                logger,
+                logging.INFO,
+                LG_FINDING_VALIDATION,
+                cli_bold(vuln_name),
+                summarize_validation_stats(vuln_name, stats),
+                pbar=pbar,
+            )
+        results_by_key = stats.get("results_by_key")
+        return results_by_key if isinstance(results_by_key, dict) else None
+
+    def _write_scan_finding_validations_sidecar(
+        self,
+        json_path: Any,
+        vuln_name: str,
+        results_by_key: Dict[str, Dict[str, Any]],
+    ) -> None:
+        """Persist full scan-time validation results beside the report JSON."""
+        try:
+            from oasis.helpers.assistant.web.persistence import (
+                merge_scan_finding_validations_sidecar,
+            )
+
+            written = merge_scan_finding_validations_sidecar(
+                Path(json_path).resolve(), vuln_name, results_by_key
+            )
+        except Exception:
+            logger.warning(
+                "Scan-time finding validations sidecar failed for %s", vuln_name, exc_info=True
+            )
+            return
+        if written:
+            logger.info(
+                "🛡️ Finding validations sidecar · %s · %d verdict(s)", cli_bold(vuln_name), written
+            )
+
     def _analyze_vulnerability_deep(self, vuln, vuln_name, all_suspicious_chunks, silent=False):
         """
         Perform deep analysis for a specific vulnerability across all files

@@ -148,11 +148,14 @@ from .helpers.assistant.web.persistence import (
     ensure_session_views,
     finding_validation_storage_key,
     get_finding_validation_for_branch,
+    get_scan_finding_validation,
+    load_finding_validations_sidecar,
     list_chat_sessions,
     load_chat_session,
     merge_finding_validation_into_session,
     new_session_id,
     normalize_validated_messages_for_storage,
+    resolve_report_json,
     save_chat_session,
     save_session_branch_messages,
     utc_now_iso,
@@ -961,17 +964,52 @@ class WebServer:
                 loaded_sess = load_chat_session(
                     self.security_dir, report_rel, sid_ctx.strip()
                 )
-                return get_finding_validation_for_branch(
+                persisted = get_finding_validation_for_branch(
                     loaded_sess,
                     chat_model,
                     finding_key_for_prompt,
                 )
+                if persisted is not None:
+                    return persisted
         except Exception:
             logger.warning(
                 'Assistant chat context build failed; continuing without persisted finding validation',
                 exc_info=True,
             )
-        return None
+        # Fallback: scan-time sidecar (finding_validations.json) — the session wins
+        # when it carries a manual validation; otherwise the deterministic scan-time
+        # verdict feeds FINDING_VALIDATION_JSON even before any chat session exists.
+        try:
+            return self._assistant_load_scan_finding_validation(data, report_rel)
+        except Exception:
+            logger.warning(
+                'Assistant scan finding-validation fallback failed; continuing without it',
+                exc_info=True,
+            )
+            return None
+
+    def _assistant_load_scan_finding_validation(
+        self,
+        data: Dict[str, Any],
+        report_rel: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Load the scan-time sidecar verdict for the selected finding (no session needed)."""
+        fi, ci, gi = coerce_finding_indices(data)
+        if fi is None or ci is None or gi is None:
+            return None
+        scope_raw = data.get('finding_scope_report_path')
+        target_rel = (
+            scope_raw.strip()
+            if isinstance(scope_raw, str) and scope_raw.strip()
+            else report_rel
+        )
+        resolved = resolve_report_json(self.security_dir, target_rel)
+        if resolved is None:
+            return None
+        # Sidecar keys never carry the executive scope (they live beside the
+        # vulnerability report itself), so look up with an empty scope prefix.
+        scan_key = finding_validation_storage_key('', fi, ci, gi)
+        return get_scan_finding_validation(resolved, scan_key)
 
     def _assistant_diagnose_runtime_ctx_budget(
         self,
@@ -1783,6 +1821,44 @@ class WebServer:
             if isinstance(prep, AssistantChatPrepError):
                 return jsonify(prep.body), prep.status
             return self._stream_assistant_chat_response(prep)
+
+        @app.route('/api/assistant/finding-validations', methods=['GET'])
+        @login_required
+        def assistant_finding_validations():
+            """Scan-time validation sidecar (full verdict payloads) for one report.
+
+            When ``finding_scope_report_path`` is provided (executive aggregate mode),
+            the sidecar of the targeted vulnerability report is returned instead.
+            """
+            report_rel = normalize_report_rel_query_arg(request.args.get('report_path'))
+            if not report_rel:
+                return jsonify({'error': 'report_path required'}), 400
+            scope_rel = normalize_report_rel_query_arg(
+                request.args.get('finding_scope_report_path')
+            )
+            target_resolved = resolve_report_json(
+                self.security_dir, scope_rel or report_rel
+            )
+            if target_resolved is None:
+                return jsonify({'error': 'report not found'}), 404
+            doc = load_finding_validations_sidecar(target_resolved)
+            if not doc:
+                return jsonify(
+                    {
+                        'generated_at': None,
+                        'vulnerability_name': '',
+                        'validations': {},
+                    }
+                )
+            validations = doc.get('validations')
+            return jsonify(
+                {
+                    'schema_version': doc.get('schema_version'),
+                    'generated_at': doc.get('generated_at'),
+                    'vulnerability_name': doc.get('vulnerability_name') or '',
+                    'validations': validations if isinstance(validations, dict) else {},
+                }
+            )
 
         @app.route('/api/assistant/investigate', methods=['POST'])
         @login_required

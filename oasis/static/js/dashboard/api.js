@@ -792,6 +792,32 @@ DashboardApp.postAssistantInvestigate = function (payload) {
     });
 };
 
+DashboardApp.fetchAssistantScanValidations = function (reportPath, scopePath) {
+    const rel = String(reportPath || '').trim();
+    if (!rel) {
+        return Promise.reject(new Error('missing report path'));
+    }
+    const params = new URLSearchParams();
+    params.append('report_path', rel);
+    const scope = String(scopePath || '').trim();
+    if (scope) {
+        params.append('finding_scope_report_path', scope);
+    }
+    const url = DashboardApp.urlWithActiveFilters(
+        `/api/assistant/finding-validations?${params.toString()}`
+    );
+    return fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } }).then(
+        async function (response) {
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                const err = data && data.error ? data.error : `HTTP ${response.status}`;
+                throw new Error(err);
+            }
+            return data && typeof data === 'object' ? data : {};
+        }
+    );
+};
+
 DashboardApp.deleteAllAssistantSessions = function (reportPath) {
     return fetch('/api/assistant/sessions', {
         method: 'DELETE',

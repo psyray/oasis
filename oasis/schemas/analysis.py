@@ -11,7 +11,22 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 # Bump when changing chunk or report shapes (cache invalidation).
-ANALYSIS_SCHEMA_VERSION = 5
+ANALYSIS_SCHEMA_VERSION = 6
+
+
+class FindingValidationSummary(BaseModel):
+    """Compact deterministic verdict embedded per finding at scan time.
+
+    Produced by the scan-time finding validator (``oasis.helpers.assistant.batch``);
+    the full investigation evidence stays available on demand through the
+    dashboard ``/api/assistant/investigate`` endpoint.
+    """
+
+    status: str = Field(description="Deterministic verdict status (e.g. confirmed_exploitable)")
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    summary: str = ""
+    family: str = Field(default="", description="Validation family (flow/access/config)")
+    validation_backend: str = Field(default="", description="Validator backend (graph/sequential)")
 
 
 class ScanVerdict(BaseModel):
@@ -64,6 +79,10 @@ class VulnerabilityFinding(BaseModel):
             "Optional raw HTTP request lines for Burp Suite / OWASP ZAP repeater "
             "(one full request per string when applicable)"
         ),
+    )
+    validation: Optional[FindingValidationSummary] = Field(
+        default=None,
+        description="Deterministic scan-time validation verdict, when the finding validator ran",
     )
 
 
@@ -298,11 +317,28 @@ class AssistantInvestigationResult(BaseModel):
     )
 
 
+class FindingValidationsSidecar(BaseModel):
+    """On-disk scan-time finding validations (sibling of a vulnerability report JSON).
+
+    Lives at ``<report_dir>/<stem>/finding_validations.json`` (next to the per-report
+    chat directory) and maps the same stable ``finding_validation_storage_key`` keys
+    used by chat sessions to full ``AssistantInvestigationResult`` payloads produced
+    by the scan-time batch validation.
+    """
+
+    schema_version: int = Field(default=ANALYSIS_SCHEMA_VERSION)
+    report_type: Literal["finding_validations"] = "finding_validations"
+    generated_at: str
+    vulnerability_name: str = ""
+    validations: Dict[str, AssistantInvestigationResult] = Field(default_factory=dict)
+
+
 ScanVerdict.model_rebuild()
 VulnerabilityFinding.model_rebuild()
 ChunkDeepAnalysis.model_rebuild()
 FileReportEntry.model_rebuild()
 VulnerabilityReportDocument.model_rebuild()
+FindingValidationsSidecar.model_rebuild()
 Citation.model_rebuild()
 EntryPointHit.model_rebuild()
 CallHop.model_rebuild()

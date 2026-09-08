@@ -2877,6 +2877,26 @@ pre.http-raw {
     overflow: hidden;
     text-overflow: ellipsis;
 }
+.oasis-assistant-validate-origin {
+    display: inline-block;
+    padding: 0.12rem 0.45rem;
+    border-radius: 10px;
+    background: rgba(64, 180, 196, 0.14);
+    color: var(--turquoise);
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+.oasis-assistant-validate-narrative-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0.55rem;
+}
+.oasis-assistant-validate-narrative-btn {
+    font-size: 0.8rem;
+}
 .oasis-assistant-validate-status {
     display: inline-block;
     padding: 0.2rem 0.55rem;

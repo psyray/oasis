@@ -42,6 +42,8 @@ _FUNCTION_DEF_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("ruby_def", re.compile(r"^\s*def\s+(?:self\.)?(\w+)")),
     ("php_function", re.compile(r"^\s*(?:public|private|protected)?\s*function\s+(\w+)\s*\(")),
     ("java_method", re.compile(r"^\s*(?:public|private|protected|static|\s)+[\w<>\[\]]+\s+(\w+)\s*\([^)]*\)\s*\{")),
+    ("kotlin_fun", re.compile(r"^\s*(?:private\s+|public\s+|internal\s+|protected\s+)?(?:suspend\s+)?fun\s+(\w+)\s*\(")),
+    ("rust_fn", re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:\(|<)")),
 )
 
 

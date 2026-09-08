@@ -178,19 +178,56 @@ DashboardApp.refreshAssistantVerdictPanelFromSession = function (panel, txt) {
     const chatModelSelect = panel && panel.querySelector('#oasis-assistant-chat-model');
     const cm = chatModelSelect && chatModelSelect.value ? String(chatModelSelect.value).trim() : '';
     const validatePanel = panel && panel.querySelector('#oasis-assistant-validate-panel');
-    if (!panel || !reportPath || !sid || !cm || !validatePanel) {
+    if (!panel || !reportPath || !validatePanel) {
         return Promise.resolve();
     }
-    const fk = DashboardApp.findingValidationStorageKey(DashboardApp._gatherAssistantFindingIndices(panel));
+    const indices = DashboardApp._gatherAssistantFindingIndices(panel);
+    const fk = DashboardApp.findingValidationStorageKey(indices);
     if (!fk) {
         validatePanel.hidden = true;
         DashboardApp._clearElement(validatePanel);
         return Promise.resolve();
     }
+    const hidePanel = function () {
+        validatePanel.hidden = true;
+        DashboardApp._clearElement(validatePanel);
+    };
+    const showScanTimeFallback = function () {
+        // Scan-time verdicts live in the finding_validations.json sidecar —
+        // deterministic and model-independent, so no chat session is required.
+        const scopePath = indices.finding_scope_report_path;
+        const fkScan = DashboardApp.findingValidationStorageKey(
+            Object.assign({}, indices, { finding_scope_report_path: '' })
+        );
+        if (!fkScan || typeof DashboardApp.fetchAssistantScanValidations !== 'function') {
+            hidePanel();
+            return Promise.resolve();
+        }
+        return DashboardApp.fetchAssistantScanValidations(reportPath, scopePath)
+            .then(function (doc) {
+                const map = doc && typeof doc.validations === 'object' ? doc.validations : {};
+                const fv = typeof map[fkScan] === 'object' && map[fkScan] ? map[fkScan] : null;
+                if (fv) {
+                    validatePanel.hidden = false;
+                    DashboardApp.renderAssistantVerdictPanel(validatePanel, fv, txt, {
+                        origin: 'scan',
+                    });
+                } else {
+                    hidePanel();
+                }
+            })
+            .catch(function () {
+                hidePanel();
+            });
+    };
+    if (!sid || !cm) {
+        // No chat session/model yet: the scan-time sidecar is still usable.
+        return showScanTimeFallback();
+    }
     return DashboardApp.fetchAssistantSession(reportPath, sid)
         .then(function (doc) {
             if (!doc || typeof doc !== 'object') {
-                return;
+                return showScanTimeFallback();
             }
             const branches =
                 doc.model_branches && typeof doc.model_branches === 'object' ? doc.model_branches : {};
@@ -202,14 +239,15 @@ DashboardApp.refreshAssistantVerdictPanelFromSession = function (panel, txt) {
                     : null;
             if (fv) {
                 validatePanel.hidden = false;
-                DashboardApp.renderAssistantVerdictPanel(validatePanel, fv, txt);
-            } else {
-                validatePanel.hidden = true;
-                DashboardApp._clearElement(validatePanel);
+                DashboardApp.renderAssistantVerdictPanel(validatePanel, fv, txt, {
+                    origin: 'session',
+                });
+                return Promise.resolve();
             }
+            return showScanTimeFallback();
         })
         .catch(function () {
-            /* ignore */
+            return showScanTimeFallback();
         });
 };
 
@@ -220,10 +258,11 @@ DashboardApp.refreshAssistantVerdictPanelFromSession = function (panel, txt) {
  * and the entry-points list is rendered inside a bounded, scrollable
  * container so every hit stays reachable regardless of volume.
  */
-DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
+DashboardApp.renderAssistantVerdictPanel = function (container, result, txt, opts) {
     if (!container) {
         return;
     }
+    const panelOpts = opts && typeof opts === 'object' ? opts : {};
     const esc = DashboardApp._escapeHtml || function (s) {
         return String(s == null ? '' : s);
     };
@@ -268,6 +307,16 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
         vname.className = 'oasis-assistant-validate-vuln';
         vname.textContent = vulnName;
         headLeft.appendChild(vname);
+    }
+    if (panelOpts.origin === 'scan') {
+        const originPill = document.createElement('span');
+        originPill.className = 'oasis-assistant-validate-origin';
+        originPill.title = label(
+            'validateScanTimeTitle',
+            'Deterministic validation computed automatically during the scan.'
+        );
+        originPill.textContent = label('validateScanTimeOrigin', 'Scan-time');
+        headLeft.appendChild(originPill);
     }
     head.appendChild(headLeft);
 
@@ -365,6 +414,40 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
             label('validateSynthesisErrorPrefix', 'Narrative synthesis: ') +
             synthesisErrorText;
         container.appendChild(synErr);
+    }
+    // Scan-time verdicts carry no LLM narrative — offer one on demand (the
+    // re-validation also persists the result into the active chat session).
+    const revalidateFn =
+        typeof panelOpts.onRevalidate === 'function'
+            ? panelOpts.onRevalidate
+            : typeof container._oasisAssistantRevalidate === 'function'
+            ? container._oasisAssistantRevalidate
+            : null;
+    if (!llmMd && revalidateFn) {
+        const narrativeRow = document.createElement('div');
+        narrativeRow.className = 'oasis-assistant-validate-narrative-row';
+        const narrativeBtn = document.createElement('button');
+        narrativeBtn.type = 'button';
+        narrativeBtn.className = 'btn btn-secondary oasis-assistant-validate-narrative-btn';
+        narrativeBtn.textContent = label(
+            'validateGenerateNarrative',
+            'Generate narrative with AI'
+        );
+        narrativeBtn.addEventListener('click', function () {
+            narrativeBtn.disabled = true;
+            narrativeBtn.textContent = label('validateGenerating', 'Generating…');
+            try {
+                revalidateFn();
+            } finally {
+                narrativeBtn.disabled = false;
+                narrativeBtn.textContent = label(
+                    'validateGenerateNarrative',
+                    'Generate narrative with AI'
+                );
+            }
+        });
+        narrativeRow.appendChild(narrativeBtn);
+        container.appendChild(narrativeRow);
     }
 
     // Scope card — compact mono-space with truncation hint for long paths.
@@ -1985,8 +2068,7 @@ DashboardApp.mountReportAssistantPanel = function () {
 
     const validateBtn = panel.querySelector('#oasis-assistant-validate-btn');
     const validatePanel = panel.querySelector('#oasis-assistant-validate-panel');
-    if (validateBtn && validatePanel) {
-        validateBtn.addEventListener('click', function () {
+    const runInvestigation = function () {
             const indices = DashboardApp._gatherAssistantFindingIndices(panel);
             // Resolve the selected file/chunk/finding locally so the request
             // is self-contained (visible in Network tab) and the server can
@@ -2070,7 +2152,10 @@ DashboardApp.mountReportAssistantPanel = function () {
             validatePanel.textContent = txt('validateRunning', 'Validating…');
             DashboardApp.postAssistantInvestigate(validatePayload)
                 .then(function (result) {
-                    DashboardApp.renderAssistantVerdictPanel(validatePanel, result, txt);
+                    DashboardApp.renderAssistantVerdictPanel(validatePanel, result, txt, {
+                        origin: 'session',
+                        onRevalidate: runInvestigation,
+                    });
                     const anchor =
                         'OASIS finding validation finished for the selected finding. The full structured verdict (status, evidence, narrative) is stored for this chat model — ask for a PoC, clarifications, or next steps.';
                     const nowIso = new Date().toISOString();
@@ -2114,7 +2199,12 @@ DashboardApp.mountReportAssistantPanel = function () {
                     validateBtn.disabled = false;
                     validateBtn.textContent = originalLabel;
                 });
-        });
+    };
+    if (validateBtn && validatePanel) {
+        validateBtn.addEventListener('click', runInvestigation);
+        // Expose the handler so scan-time verdict panels can trigger a live
+        // re-validation ("Generate narrative") without a session round-trip.
+        validatePanel._oasisAssistantRevalidate = runInvestigation;
     }
 
     const sendQuestion = function (text) {

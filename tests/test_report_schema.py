@@ -36,6 +36,7 @@ try:
         ChunkDeepAnalysis,
         DashboardStats,
         FileReportEntry,
+        FindingValidationSummary,
         MediumRiskAnalysis,
         ScanVerdict,
         VulnerabilityFinding,
@@ -319,6 +320,69 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(len(restored.files), 1)
         self.assertEqual(restored.schema_version, doc.schema_version)
         self.assertEqual(restored.stats.files_analyzed, doc.stats.files_analyzed)
+
+    def test_finding_validation_summary_roundtrip(self):
+        """Scan-time verdicts survive the canonical JSON round-trip."""
+        validation = FindingValidationSummary(
+            status="confirmed_exploitable",
+            confidence=0.9,
+            summary="User input reaches the vulnerable sink",
+            family="flow",
+            validation_backend="graph",
+        )
+        doc = VulnerabilityReportDocument(
+            title="SQL Injection Security Analysis",
+            generated_at="2026-01-01 12:00:00",
+            model_name="test-model",
+            vulnerability_name="SQL Injection",
+            vulnerability={"name": "SQL Injection"},
+            files=[
+                FileReportEntry(
+                    file_path="app.py",
+                    similarity_score=0.85,
+                    chunk_analyses=[
+                        ChunkDeepAnalysis(
+                            findings=[
+                                VulnerabilityFinding(
+                                    title="SQLi",
+                                    snippet_start_line=6,
+                                    validation=validation,
+                                )
+                            ]
+                        )
+                    ],
+                )
+            ],
+            stats=DashboardStats(files_analyzed=1),
+        )
+        restored = VulnerabilityReportDocument.model_validate_json(doc.model_dump_json())
+        embedded = restored.files[0].chunk_analyses[0].findings[0].validation
+        self.assertIsNotNone(embedded)
+        self.assertEqual(embedded.status, "confirmed_exploitable")
+        self.assertEqual(embedded.confidence, 0.9)
+        self.assertEqual(embedded.validation_backend, "graph")
+
+    def test_finding_validation_defaults_to_none_for_legacy_payloads(self):
+        """Reports written before scan-time validation still validate cleanly."""
+        doc = VulnerabilityReportDocument.model_validate(
+            {
+                "title": "Legacy",
+                "generated_at": "2026-01-01 12:00:00",
+                "model_name": "m",
+                "vulnerability_name": "XSS",
+                "vulnerability": {"name": "XSS"},
+                "files": [
+                    {
+                        "file_path": "app.py",
+                        "similarity_score": 0.5,
+                        "chunk_analyses": [{"findings": [{"title": "f"}]}],
+                    }
+                ],
+                "stats": {"files_analyzed": 1},
+            }
+        )
+        finding = doc.files[0].chunk_analyses[0].findings[0]
+        self.assertIsNone(finding.validation)
 
     def test_audit_report_document_roundtrip(self):
         doc = AuditReportDocument(
@@ -722,6 +786,70 @@ class TestReportSchema(unittest.TestCase):
         self.assertIn("File 2: test_files/safe.java", html)
         self.assertIn("&lt;/code&gt;&lt;/li&gt;&lt;/ul&gt;&lt;code&gt;", html)
         self.assertNotIn("</code></li></ul><code>", html)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_render_report_html_from_json_payload_renders_validation_badge(self):
+        """Scan-time verdicts render as a status badge (summary + body) in the modal HTML."""
+        report = Report(input_path=".", output_format=["md"])
+        payload = {
+            "report_type": "vulnerability",
+            "schema_version": 6,
+            "title": "Badge Rendering",
+            "generated_at": "2026-01-01",
+            "model_name": "m1",
+            "vulnerability_name": "SQL Injection",
+            "vulnerability": {"name": "SQL Injection"},
+            "files": [
+                {
+                    "file_path": "app.py",
+                    "similarity_score": 0.9,
+                    "chunk_analyses": [
+                        {
+                            "start_line": 1,
+                            "findings": [
+                                {
+                                    "title": "Confirmed finding",
+                                    "severity": "High",
+                                    "explanation": "e",
+                                    "validation": {
+                                        "status": "confirmed_exploitable",
+                                        "confidence": 0.9,
+                                        "summary": "Reachable <script>alert(1)</script>",
+                                        "family": "flow",
+                                        "validation_backend": "graph",
+                                    },
+                                },
+                                {
+                                    "title": "Unknown status finding",
+                                    "severity": "Low",
+                                    "explanation": "e",
+                                    "validation": {"status": "weird_status", "confidence": 0.1},
+                                },
+                                {
+                                    "title": "Unvalidated finding",
+                                    "severity": "Medium",
+                                    "explanation": "e",
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "stats": {"total_findings": 3, "files_analyzed": 1},
+        }
+
+        html = report.render_report_html_from_json_payload(payload)
+        self.assertIn("report-validation-badge--confirmed_exploitable", html)
+        self.assertIn("report-validation-badge--unknown", html)
+        self.assertIn("confidence 0.90", html)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+        self.assertNotIn("<script>alert(1)</script>", html)
+
+        # Findings without a scan-time verdict render no badge markup.
+        for finding in payload["files"][0]["chunk_analyses"][0]["findings"]:
+            finding.pop("validation", None)
+        html_plain = report.render_report_html_from_json_payload(payload)
+        self.assertNotIn('<span class="report-validation-badge', html_plain)
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_render_report_html_from_json_payload_whitelists_severity_css_suffix(self):

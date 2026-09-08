@@ -17,6 +17,10 @@ from oasis.helpers.assistant.authz.authz import (
     authz_hits_in_root,
     evaluate_required_controls,
 )
+from oasis.helpers.assistant.batch import (
+    annotate_rows_with_validation,
+    summarize_validation_stats,
+)
 from oasis.helpers.assistant.scan.config_audit import run_config_audit
 from oasis.helpers.assistant.scan.crypto_scan import run_crypto_scan
 from oasis.helpers.assistant.scan.entrypoints import discover_entry_points
@@ -40,7 +44,15 @@ from oasis.helpers.assistant.web.sink_resolution import (
     coerce_positive_int_line,
     resolve_sink_from_finding_indices,
 )
-from oasis.helpers.vuln.validation_patterns import PATTERNS_VERSION
+from oasis.helpers.assistant.scan.scan_utils import (
+    compile_groups,
+    scan_patterns_best_effort,
+)
+from oasis.helpers.vuln.validation_patterns import (
+    PATTERNS_VERSION,
+    SINKS,
+    all_pattern_groups,
+)
 from oasis.helpers.vuln.taxonomy import (
     ALL_VULN_NAMES,
     VulnFamily,
@@ -50,6 +62,7 @@ from oasis.schemas.analysis import (
     AssistantInvestigationResult,
     AuthzCheckHit,
     CallHop,
+    ChunkDeepAnalysis,
     Citation,
     ConfigFinding,
     ControlCheck,
@@ -58,6 +71,7 @@ from oasis.schemas.analysis import (
     InvestigationScope,
     MitigationHit,
     TaintFlow,
+    VulnerabilityFinding,
 )
 
 
@@ -161,6 +175,307 @@ class TestDotNetSinks(unittest.TestCase):
             hits = scan_patterns_best_effort(p.parent, compiled)
             kinds = {h.pattern_key for h in hits}
             self.assertIn("sql_execute", kinds)
+
+
+class TestCatalogLanguageCoverage(unittest.TestCase):
+    def test_new_language_frameworks_registered(self) -> None:
+        groups = all_pattern_groups()
+        entry_points = groups["entry_points"]
+        for framework in ("go", "rust", "kotlin", "scala"):
+            self.assertIn(framework, entry_points)
+            self.assertTrue(entry_points[framework])
+
+    def test_patterns_version_bumped_with_language_support(self) -> None:
+        self.assertGreaterEqual(PATTERNS_VERSION, 3)
+
+
+class TestGoSupport(unittest.TestCase):
+    def test_go_entry_points_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write(
+                root,
+                "main.go",
+                "package main\n\n"
+                "func setup() {\n"
+                '    r.GET("/ping", pingHandler)\n'
+                '    http.HandleFunc("/debug", debugHandler)\n'
+                "}\n",
+            )
+            grouped = discover_entry_points(root)
+            self.assertIn("go", grouped)
+
+    def test_taint_flow_go_form_value_to_exec_command(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "handler.go",
+                "func handler(w http.ResponseWriter, r *http.Request) {\n"
+                '    cmd := r.FormValue("cmd")\n'
+                '    exec.Command("sh", "-c", cmd).Run()\n'
+                "}\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 3, ("os_exec",), ("http_params",)
+            )
+            self.assertTrue(flows)
+            self.assertEqual(flows[0].source_kind, "http_params")
+            self.assertEqual(flows[0].sink_kind, "os_exec")
+
+    def test_go_gorm_placeholder_nullifying(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            _write(
+                Path(td),
+                "gorm.go",
+                "func q(name string) {\n"
+                '    db.Where("name = ?", name).First(&u)\n'
+                "}\n",
+            )
+            hits = find_mitigations_in_root(Path(td), ["sql_parameterized"])
+            self.assertTrue(any(h.nullifies for h in hits))
+
+    def test_go_query_row_sql_sink(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "store.go",
+                "func load(id string) {\n"
+                '    row := db.QueryRow("SELECT name FROM u WHERE id = " + id)\n'
+                "}\n",
+            )
+            compiled = compile_groups({"sql_execute": SINKS["sql_execute"]})
+            hits = scan_patterns_best_effort(p.parent, compiled)
+            self.assertTrue(any(h.pattern_key == "sql_execute" for h in hits))
+
+
+class TestJavaSupport(unittest.TestCase):
+    def test_taint_flow_get_parameter_to_execute_query(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "List.java",
+                "void list(HttpServletRequest request) throws Exception {\n"
+                '    String name = request.getParameter("name");\n'
+                '    st.executeQuery("SELECT * FROM u WHERE n=\'" + name + "\'");\n'
+                "}\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 3, ("sql_execute",), ("http_params",)
+            )
+            self.assertTrue(flows)
+            self.assertEqual(flows[0].source_kind, "http_params")
+            self.assertEqual(flows[0].sink_kind, "sql_execute")
+
+    def test_jdbc_setter_parameterized_nullifies(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            _write(
+                Path(td),
+                "Dao.java",
+                'PreparedStatement ps = conn.prepareStatement("SELECT * FROM u WHERE n = ?");\n'
+                "ps.setString(1, name);\n",
+            )
+            hits = find_mitigations_in_root(Path(td), ["sql_parameterized"])
+            self.assertTrue(any(h.nullifies for h in hits))
+
+    def test_process_builder_sink_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "Run.java",
+                'void run(String input) {\n'
+                '    new ProcessBuilder("/bin/sh", "-c", input).start();\n'
+                "}\n",
+            )
+            compiled = compile_groups({"os_exec": SINKS["os_exec"]})
+            hits = scan_patterns_best_effort(p.parent, compiled)
+            self.assertTrue(any(h.pattern_key == "os_exec" for h in hits))
+
+    def test_spring_preauthorize_control_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            _write(
+                Path(td),
+                "Api.java",
+                "@PreAuthorize(\"hasRole('ADMIN')\")\n"
+                "public Data get(Long id) { return repo.findById(id); }\n",
+            )
+            hits = authz_hits_in_root(Path(td), ["login_required"])
+            self.assertTrue(any(h.kind == "login_required" for h in hits))
+
+
+class TestRubySupport(unittest.TestCase):
+    def test_taint_flow_params_to_find_by_sql(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "user.rb",
+                "def show\n"
+                "  id = params[:id]\n"
+                '  User.find_by_sql("SELECT * FROM users WHERE id = #{id}")\n'
+                "end\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 3, ("sql_execute",), ("http_params",)
+            )
+            self.assertTrue(flows)
+            self.assertEqual(flows[0].source_kind, "http_params")
+            self.assertEqual(flows[0].sink_kind, "sql_execute")
+
+    def test_ruby_redirect_to_sink(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "session.rb",
+                "def after_login\n"
+                "  redirect_to params[:return_to]\n"
+                "end\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 2, ("redirect_call",), ("http_params",)
+            )
+            self.assertTrue(flows)
+            self.assertEqual(flows[0].sink_kind, "redirect_call")
+
+    def test_ruby_strong_params_soft_mitigation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            _write(
+                Path(td),
+                "ctrl.rb",
+                "def create\n"
+                "  User.create(params.require(:user).permit(:name))\n"
+                "end\n",
+            )
+            hits = find_mitigations_in_root(Path(td), ["schema_validate"])
+            self.assertTrue(hits)
+            self.assertFalse(any(h.nullifies for h in hits))
+
+    def test_rails_placeholder_nullifying(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            _write(
+                Path(td),
+                "user.rb",
+                "def q(name)\n"
+                '  User.where("name = ?", name)\n'
+                "end\n",
+            )
+            hits = find_mitigations_in_root(Path(td), ["sql_parameterized"])
+            self.assertTrue(any(h.nullifies for h in hits))
+
+
+class TestRustSupport(unittest.TestCase):
+    def test_enclosing_symbol_rust_fn(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(Path(td), "main.rs", "fn run(cmd: String) {\n    let x = 1;\n}\n")
+            self.assertEqual(enclosing_symbol(p, 2), "run")
+
+    def test_taint_flow_axum_query_to_command(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "handler.rs",
+                "async fn handle(Query(q): Query<HashMap<String, String>>) {\n"
+                '    Command::new("sh").arg(q).output();\n'
+                "}\n",
+            )
+            flows = assistant_taint.detect_flows_for_descriptor(
+                p, 2, ("os_exec",), ("http_params",)
+            )
+            self.assertTrue(flows)
+            self.assertEqual(flows[0].source_kind, "http_params")
+            self.assertEqual(flows[0].sink_kind, "os_exec")
+
+    def test_rust_reqwest_sink_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "fetch.rs",
+                "async fn go(u: &str) {\n"
+                "    let resp = reqwest::get(u).await;\n"
+                "}\n",
+            )
+            compiled = compile_groups({"url_fetch": SINKS["url_fetch"]})
+            hits = scan_patterns_best_effort(p.parent, compiled)
+            self.assertTrue(any(h.pattern_key == "url_fetch" for h in hits))
+
+    def test_rust_axum_entry_point_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write(
+                root,
+                "app.rs",
+                "let app = Router::new()\n"
+                '    .route("/users", get(list_users));\n',
+            )
+            grouped = discover_entry_points(root)
+            self.assertIn("rust", grouped)
+
+
+class TestKotlinScalaEntryPoints(unittest.TestCase):
+    def test_ktor_route_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write(
+                root,
+                "Server.kt",
+                "fun Application.module() {\n"
+                "    routing {\n"
+                '        get("/users") { call.respond(users) }\n'
+                "    }\n"
+                "}\n",
+            )
+            grouped = discover_entry_points(root)
+            self.assertIn("kotlin", grouped)
+
+    def test_play_action_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write(
+                root,
+                "Home.scala",
+                "class HomeController extends AbstractController(cc) {\n"
+                "  def index = Action { Ok(views.html.index()) }\n"
+                "}\n",
+            )
+            grouped = discover_entry_points(root)
+            self.assertIn("scala", grouped)
+
+
+class TestCrossLanguageSinks(unittest.TestCase):
+    def test_csharp_http_client_and_redirect(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "Fetch.cs",
+                "public async Task Go(string url) {\n"
+                "    var client = new HttpClient();\n"
+                "    var body = await client.GetStringAsync(url);\n"
+                "    Response.Redirect(body);\n"
+                "}\n",
+            )
+            compiled = compile_groups(
+                {
+                    "url_fetch": SINKS["url_fetch"],
+                    "redirect_call": SINKS["redirect_call"],
+                }
+            )
+            hits = scan_patterns_best_effort(p.parent, compiled)
+            kinds = {h.pattern_key for h in hits}
+            self.assertIn("url_fetch", kinds)
+            self.assertIn("redirect_call", kinds)
+
+    def test_js_template_render_sink(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = _write(
+                Path(td),
+                "app.js",
+                "app.get('/profile', (req, res) => {\n"
+                "  res.render('profile', { name: req.query.name });\n"
+                "});\n",
+            )
+            compiled = compile_groups({"html_render": SINKS["html_render"]})
+            hits = scan_patterns_best_effort(p.parent, compiled)
+            self.assertTrue(
+                any("res.render" in h.line_text for h in hits if h.pattern_key == "html_render")
+            )
 
 
 class TestTraceAndTaint(unittest.TestCase):
@@ -1095,6 +1410,163 @@ class TestScopeFocusInLLMPayload(unittest.TestCase):
         focus = payload["scope_focus"]
         self.assertEqual(focus["sink_file"], "src/real.py")
         self.assertEqual(focus["sink_line"], 42)
+
+
+class TestBatchFindingValidation(unittest.TestCase):
+    """Scan-time batch validation (oasis.helpers.assistant.batch)."""
+
+    @staticmethod
+    def _sqli_fixture(root: Path) -> Path:
+        return _write(
+            root,
+            "app.py",
+            "from flask import Flask, request\n"
+            "app = Flask(__name__)\n"
+            "@app.route('/q')\n"
+            "def handler():\n"
+            "    q = request.args.get('q')\n"
+            "    cursor.execute('SELECT * FROM t WHERE x = ' + q)\n"
+            "    return 'ok'\n",
+        )
+
+    @staticmethod
+    def _model_row(app_path: Path, line: int) -> dict:
+        return {
+            "file_path": str(app_path),
+            "similarity_score": 0.9,
+            "structured_chunks": [
+                ChunkDeepAnalysis(
+                    findings=[VulnerabilityFinding(title="SQLi", snippet_start_line=line)],
+                    start_line=max(1, line - 1),
+                    end_line=line + 1,
+                )
+            ],
+        }
+
+    def test_annotate_rows_embeds_verdicts_on_model_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            app = self._sqli_fixture(root)
+            rows = [self._model_row(app, 6)]
+            stats = annotate_rows_with_validation(
+                rows,
+                vulnerability_name="SQL Injection",
+                scan_root=root,
+                total_budget_seconds=60.0,
+            )
+            self.assertEqual(stats["validated"], 1)
+            self.assertEqual(stats["statuses"], {"confirmed_exploitable": 1})
+            self.assertFalse(stats["budget_exhausted"])
+            finding = rows[0]["structured_chunks"][0].findings[0]
+            self.assertIsNotNone(finding.validation)
+            self.assertEqual(finding.validation.status, "confirmed_exploitable")
+            self.assertEqual(finding.validation.family, "flow")
+
+    def test_annotate_rows_returns_full_results_by_key(self) -> None:
+        """Sidecar payloads: full results keyed by the stable session storage key."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            app = self._sqli_fixture(root)
+            rows = [self._model_row(app, 6)]
+            stats = annotate_rows_with_validation(
+                rows,
+                vulnerability_name="SQL Injection",
+                scan_root=root,
+                total_budget_seconds=60.0,
+            )
+            by_key = stats["results_by_key"]
+            fk = '{"ci":0,"fi":0,"gi":0,"s":""}'
+            self.assertIn(fk, by_key)
+            result = by_key[fk]
+            self.assertEqual(result["status"], "confirmed_exploitable")
+            self.assertEqual(result["scope"]["sink_file"], "app.py")
+            self.assertEqual(result["scope"]["sink_line"], 6)
+            self.assertEqual(result["scope"]["vulnerability_name"], "SQL Injection")
+            self.assertTrue(result["entry_points"])
+
+    def test_annotate_rows_dict_shape_and_dedupe(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._sqli_fixture(root)
+            row = {
+                "file_path": "app.py",
+                "structured_chunks": [
+                    {
+                        "findings": [
+                            {"title": "A", "snippet_start_line": 6},
+                            {"title": "B", "snippet_start_line": 6},
+                        ],
+                        "start_line": 4,
+                    }
+                ],
+            }
+            stats = annotate_rows_with_validation(
+                [row],
+                vulnerability_name="SQL Injection",
+                scan_root=root,
+                total_budget_seconds=60.0,
+            )
+            self.assertEqual(stats["validated"], 2)
+            self.assertEqual(stats["cached"], 1)
+            findings = row["structured_chunks"][0]["findings"]
+            self.assertEqual(findings[0]["validation"]["status"], "confirmed_exploitable")
+            self.assertEqual(
+                findings[1]["validation"]["confidence"],
+                findings[0]["validation"]["confidence"],
+            )
+            # Both findings share the same anchor verdict but carry distinct fk keys.
+            by_key = stats["results_by_key"]
+            self.assertIn('{"ci":0,"fi":0,"gi":0,"s":""}', by_key)
+            self.assertIn('{"ci":0,"fi":0,"gi":1,"s":""}', by_key)
+            self.assertEqual(
+                by_key['{"ci":0,"fi":0,"gi":0,"s":""}']["status"],
+                by_key['{"ci":0,"fi":0,"gi":1,"s":""}']["status"],
+            )
+
+    def test_annotate_rows_skips_unresolvable_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            row = {
+                "file_path": "missing/app.py",
+                "structured_chunks": [{"findings": [{"title": "X"}], "start_line": 1}],
+            }
+            stats = annotate_rows_with_validation(
+                [row],
+                vulnerability_name="SQL Injection",
+                scan_root=Path(td),
+                total_budget_seconds=60.0,
+            )
+            self.assertEqual(stats["skipped_no_anchor"], 1)
+            self.assertEqual(stats["validated"], 0)
+            self.assertIsNone(row["structured_chunks"][0]["findings"][0].get("validation"))
+
+    def test_annotate_rows_budget_exhaustion_leaves_findings_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            app = self._sqli_fixture(root)
+            rows = [self._model_row(app, 6)]
+            stats = annotate_rows_with_validation(
+                rows,
+                vulnerability_name="SQL Injection",
+                scan_root=root,
+                total_budget_seconds=0.0,
+            )
+            self.assertEqual(stats["validated"], 0)
+            self.assertTrue(stats["budget_exhausted"])
+            finding = rows[0]["structured_chunks"][0].findings[0]
+            self.assertIsNone(finding.validation)
+
+    def test_summarize_validation_stats(self) -> None:
+        stats = {
+            "validated": 2,
+            "cached": 1,
+            "skipped_no_anchor": 0,
+            "statuses": {"confirmed_exploitable": 2},
+            "budget_exhausted": False,
+        }
+        text = summarize_validation_stats("XSS", stats)
+        self.assertIn("validated=2", text)
+        self.assertIn("cached=1", text)
+        self.assertIn("confirmed_exploitable=2", text)
 
 
 if __name__ == "__main__":

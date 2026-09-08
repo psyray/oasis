@@ -55,10 +55,14 @@ class TestOasisCliParsing(unittest.TestCase):
         max_expand: int,
         poc_hints: bool,
         poc_assist: bool,
+        validate_findings: bool = True,
+        validate_findings_budget: float = 120.0,
     ):
         self.assertEqual(namespace.langgraph_max_expand_iterations, max_expand)
         self.assertEqual(namespace.poc_hints, poc_hints)
         self.assertEqual(namespace.poc_assist, poc_assist)
+        self.assertIs(namespace.validate_findings, validate_findings)
+        self.assertEqual(namespace.validate_findings_budget, validate_findings_budget)
 
     def test_parse_yes_no_accepts_yes_no(self):
         self.assertTrue(OasisScanner._parse_yes_no_flag("yes"))
@@ -94,6 +98,38 @@ class TestOasisCliParsing(unittest.TestCase):
             self._assert_langgraph_flags(ns, max_expand=4, poc_hints=True, poc_assist=True)
             ns2 = self._parse_cli_args(parser, td)
             self._assert_langgraph_flags(ns2, max_expand=2, poc_hints=False, poc_assist=False)
+        finally:
+            shutil.rmtree(td)
+
+    def test_validate_findings_flags_disable_and_budget(self):
+        scanner = OasisScanner()
+        parser = scanner.setup_argument_parser()
+        td = tempfile.mkdtemp()
+        try:
+            ns = self._parse_cli_args(
+                parser,
+                td,
+                "--no-validate-findings",
+                "--validate-findings-budget",
+                "30",
+            )
+            self._assert_langgraph_flags(
+                ns,
+                max_expand=2,
+                poc_hints=False,
+                poc_assist=False,
+                validate_findings=False,
+                validate_findings_budget=30.0,
+            )
+            ns2 = self._parse_cli_args(parser, td, "--validate-findings", "--validate-findings-budget", "45.5")
+            self._assert_langgraph_flags(
+                ns2,
+                max_expand=2,
+                poc_hints=False,
+                poc_assist=False,
+                validate_findings=True,
+                validate_findings_budget=45.5,
+            )
         finally:
             shutil.rmtree(td)
 

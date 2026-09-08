@@ -349,6 +349,30 @@ class OasisScanner:
             help='Maximum context-expand retries after verify detects structured-output issues (default: 2)',
         )
         analysis_group.add_argument(
+            '--validate-findings',
+            dest='validate_findings',
+            action='store_true',
+            default=True,
+            help=(
+                'Run deterministic finding validation during the scan and embed verdicts '
+                'in the reports (default: on)'
+            ),
+        )
+        analysis_group.add_argument(
+            '--no-validate-findings',
+            dest='validate_findings',
+            action='store_false',
+            help='Skip scan-time finding validation (verdicts stay on-demand from the dashboard)',
+        )
+        analysis_group.add_argument(
+            '--validate-findings-budget',
+            dest='validate_findings_budget',
+            type=float,
+            default=120.0,
+            metavar='SEC',
+            help='Total wall-clock budget (seconds) for scan-time finding validation per scan (default: 120)',
+        )
+        analysis_group.add_argument(
             '--poc-hints',
             dest='poc_hints',
             action='store_true',

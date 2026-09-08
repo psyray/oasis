@@ -253,6 +253,57 @@
     background: #64748b;
 }
 
+#report-modal-content .html-content-container .report-finding-summary .validation {
+    margin-left: 0.4rem;
+    display: inline-flex;
+    align-items: center;
+}
+
+#report-modal-content .html-content-container .report-validation-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.02rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    white-space: nowrap;
+    color: #64748b;
+    border: 1px solid rgba(100, 116, 139, 0.5);
+    background: rgba(100, 116, 139, 0.12);
+}
+
+#report-modal-content .html-content-container .report-validation-badge--confirmed_exploitable {
+    color: #ef4444;
+    border-color: rgba(239, 68, 68, 0.55);
+    background: rgba(239, 68, 68, 0.12);
+}
+
+#report-modal-content .html-content-container .report-validation-badge--likely_exploitable {
+    color: #f97316;
+    border-color: rgba(249, 115, 22, 0.55);
+    background: rgba(249, 115, 22, 0.12);
+}
+
+#report-modal-content .html-content-container .report-validation-badge--partial_mitigation {
+    color: #d97706;
+    border-color: rgba(245, 158, 11, 0.55);
+    background: rgba(245, 158, 11, 0.12);
+}
+
+#report-modal-content .html-content-container .report-validation-badge--fully_mitigated {
+    color: #16a34a;
+    border-color: rgba(34, 197, 94, 0.55);
+    background: rgba(34, 197, 94, 0.12);
+}
+
+#report-modal-content .html-content-container .report-validation-badge--unreachable,
+#report-modal-content .html-content-container .report-validation-badge--insufficient_signal,
+#report-modal-content .html-content-container .report-validation-badge--error {
+    color: #64748b;
+    border-color: rgba(100, 116, 139, 0.5);
+    background: rgba(100, 116, 139, 0.12);
+}
+
 #report-modal-content .html-content-container .report-finding-summary::-webkit-details-marker {
     display: none;
 }
