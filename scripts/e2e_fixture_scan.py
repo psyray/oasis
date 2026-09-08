@@ -10,7 +10,8 @@ canonical JSON reports for the expected detections and scan-time verdicts.
 Examples:
     python scripts/e2e_fixture_scan.py \
         --provider openai --api-base https://llm.example.com/v1 \
-        --model Qwen/Qwen2.5-Coder-32B-Instruct --embed-model nomic-embed-text
+        --model Qwen/Qwen2.5-Coder-32B-Instruct --embed-model nomic-embed-text \
+        --scan-model Qwen/Qwen2.5-Coder-7B-Instruct
 
     python scripts/e2e_fixture_scan.py --model qwen2.5-coder:32b --embed-model nomic-embed-text
 
@@ -47,6 +48,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--api-key", default=None, help="Optional API key (never logged)")
     parser.add_argument("--model", required=True, help="Deep/scan model id served by the backend")
+    parser.add_argument(
+        "--scan-model",
+        default=None,
+        help="Optional lighter scan model (CLI -sm); defaults to --model for both phases",
+    )
     parser.add_argument("--embed-model", required=True, help="Embedding model id served by the backend")
     parser.add_argument(
         "--fixtures-dir",
@@ -79,6 +85,8 @@ def build_cli_command(args: argparse.Namespace, fixture_dir: Path) -> List[str]:
         "-pn", "e2e-fixtures",
         "--validate-findings",
     ]
+    if args.scan_model:
+        command += ["-sm", args.scan_model]
     if args.provider == "openai":
         command += ["--provider", "openai"]
         if args.api_base:
