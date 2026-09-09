@@ -25,6 +25,7 @@ from .config import (
 # Import from other modules
 from .tools import generate_timestamp, setup_logging, logger, display_logo, get_vulnerability_mapping
 from .backends import create_embed_model_manager, create_model_manager
+from .helpers.report_consolidation import write_consolidated_report
 from .ollama_manager import OllamaManager  # noqa: F401  (compat: tests patch this symbol)
 from .embedding import EmbeddingManager
 from .analyze import SecurityAnalyzer, EmbeddingAnalyzer
@@ -574,6 +575,19 @@ class OasisScanner:
             help=(
                 'API key for the OpenAI-compatible embedding server '
                 '(default: env OASIS_EMBED_OPENAI_API_KEY, else "local")'
+            ),
+        )
+        model_group.add_argument(
+            '-rm',
+            '--report-model',
+            dest='report_model',
+            type=str,
+            default=None,
+            metavar='MODEL',
+            help=(
+                'Consolidation model: after a multi-model run (-m a,b) merge the per-model '
+                'findings into one consolidated report (deterministic fingerprint groups; '
+                'the model synthesizes the narrative; default: off)'
             ),
         )
         
@@ -1196,6 +1210,10 @@ class OasisScanner:
             if not self.embed_model_manager.ensure_model_available(embed_model):
                 return False
 
+        report_model = getattr(self.args, "report_model", None)
+        if report_model and not self.ollama_manager.ensure_model_available(report_model):
+            return False
+
         # Apply the class chunk-size strategy (documented above ``_resolve_chunk_size_fallback``).
         self.args.chunk_size = self._resolve_effective_chunk_size_for_model(
             primary_embed_model,
@@ -1349,6 +1367,31 @@ class OasisScanner:
                     "Suppressed findings in this run: %d (exported with SARIF suppressions)",
                     suppressed_count,
                 )
+
+        # Consolidated multi-model report (issue #60): merge per-model findings
+        # across the run and synthesize a narrative with the report model.
+        if getattr(self.args, "report_model", None):
+            try:
+                consolidated_doc = write_consolidated_report(
+                    Path(self.report.output_dir),
+                    source_models=main_models,
+                    backend=self.ollama_manager,
+                    report_model=self.args.report_model,
+                )
+            except OSError as exc:
+                logger.warning("Consolidated report generation failed: %s", exc)
+            else:
+                if consolidated_doc:
+                    consolidated_counts = consolidated_doc.get("counts") or {}
+                    logger.info(
+                        "Consolidated report: %s group(s) across %s model(s) "
+                        "(all=%s several=%s single=%s)",
+                        consolidated_counts.get("total_groups"),
+                        len(main_models),
+                        consolidated_counts.get("confirmed_by_all"),
+                        consolidated_counts.get("confirmed_by_several"),
+                        consolidated_counts.get("single_model"),
+                    )
 
         # Baseline diff report (when requested) — written before the CI gate so
         # an exit-3 threshold run still produces the diff artifacts.

@@ -219,6 +219,18 @@ class TestOasisCliParsing(unittest.TestCase):
         finally:
             shutil.rmtree(td)
 
+    def test_report_model_flag_parse(self):
+        scanner = OasisScanner()
+        parser = scanner.setup_argument_parser()
+        td = tempfile.mkdtemp()
+        try:
+            ns = self._parse_cli_args(parser, td)
+            self.assertIsNone(ns.report_model)
+            ns2 = self._parse_cli_args(parser, td, "-rm", "qwen2.5-coder:7b")
+            self.assertEqual(ns2.report_model, "qwen2.5-coder:7b")
+        finally:
+            shutil.rmtree(td)
+
     def test_validate_findings_narrative_flag_default_off_and_opt_in(self):
         scanner = OasisScanner()
         parser = scanner.setup_argument_parser()

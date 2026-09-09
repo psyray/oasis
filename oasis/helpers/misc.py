@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import zlib
-from typing import Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
 from ..config import (
     STRUCTURED_OUTPUT_DEGENERACY_COMPRESSION_RATIO_MAX,
@@ -16,6 +18,21 @@ from ..config import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MAX_JSON_DOCUMENT_BYTES = 64 * 1024 * 1024
+
+
+def load_json_document(path: Path, *, max_bytes: int = _MAX_JSON_DOCUMENT_BYTES) -> Optional[Dict[str, Any]]:
+    """Load one JSON object document, failing open (warn + ``None``) on errors."""
+    try:
+        if path.stat().st_size > max_bytes:
+            logger.warning("Skipping oversized JSON document: %s", path)
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.warning("Skipping unreadable JSON document %s: %s", path, exc)
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _normalized_zlib_compress_level() -> int:

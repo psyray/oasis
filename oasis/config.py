@@ -88,6 +88,8 @@ Model backends / providers (see ``oasis/backends/``):
 - ``OASIS_WEB_EMBED_PROVIDER`` / ``OASIS_WEB_EMBED_OPENAI_BASE_URL`` /
   ``OASIS_WEB_EMBED_OPENAI_API_KEY`` — dashboard assistant RAG embeddings
   (fall back to the scan-side embedding backend)
+- ``OASIS_REPORT_CONSOLIDATION_DIGEST_MAX_CHARS`` — character budget of the
+  compact digest fed to the consolidation model (``--report-model``, issue #60)
 
 Static lists (extensions, models, languages, …) follow those sections.
 """
@@ -338,6 +340,12 @@ EMBED_PROVIDER_ENV: Optional[str] = os.environ.get("OASIS_EMBED_PROVIDER", "").s
 # Empty string means "inherit the shared OpenAI-compatible default at factory time".
 EMBED_OPENAI_BASE_URL = os.environ.get("OASIS_EMBED_OPENAI_BASE_URL", "").strip() or None
 EMBED_OPENAI_API_KEY = os.environ.get("OASIS_EMBED_OPENAI_API_KEY", "").strip() or None
+
+# Consolidated multi-model report: character budget for the compact digest fed
+# to the consolidation model (issue #60).
+REPORT_CONSOLIDATION_DIGEST_MAX_CHARS = _parse_env_int(
+    "OASIS_REPORT_CONSOLIDATION_DIGEST_MAX_CHARS", 24000, minimum=1000
+)
 
 # OpenAI-compatible servers do not expose per-model context windows over the
 # protocol; deployments declare the value here (0 = unknown, fallbacks apply).

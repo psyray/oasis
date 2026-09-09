@@ -58,6 +58,7 @@
 | [Suppression registry](#readme-suppressions) | Fingerprint registry, SARIF suppressions, candidates |
 | [Inline ignore markers](#readme-inline-ignore) | `#oasisignore` / `#noqa`-style source markers dropped before reports |
 | [Scan diff](#readme-scan-diff) | `--diff-against` baseline comparison, new/fixed/persistent |
+| [Consolidated report](#readme-consolidated) | `-rm` multi-model merge, fingerprint groups, LLM narrative |
 | [Web Interface](#readme-web) | `--web`, security |
 | [Changelog](#readme-changelog) | Release notes |
 | [Contributing](#readme-contributing) | PRs and issues |
@@ -296,6 +297,7 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 - **`--embed-provider`**: Embedding backend, resolved independently from `--provider` (chat) — `ollama` (native API, default) or `openai` (OpenAI-compatible embedding server: vLLM, llama.cpp, LiteLLM...), so chat and embedding workloads can run on separate servers (env `OASIS_EMBED_PROVIDER`). See [Model providers](#readme-model-providers).
 - **`--embed-api-base`**: Base URL of the OpenAI-compatible embedding server (default: `http://localhost:8000/v1`, env `OASIS_EMBED_OPENAI_BASE_URL`).
 - **`--embed-api-key`**: API key for the OpenAI-compatible embedding server (default: env `OASIS_EMBED_OPENAI_API_KEY`, else `local`; never logged).
+- **`--report-model`** `-rm`: Consolidation model — after a multi-model run, merge the per-model findings into one consolidated report (deterministic fingerprint groups; the model synthesizes the narrative). See [Consolidated multi-model report](#readme-consolidated).
 
 See [Model providers](#readme-model-providers) for details and per-server examples.
 
@@ -910,6 +912,26 @@ oasis -i ./my-project -pn my-project -m qwen2.5-coder:14b \
 
 The baseline `PATH` accepts a **run directory** (`security_reports/<project>/<timestamp>`), a **model directory** (containing `json/`), a `json` directory, or a **single canonical JSON file**. Executive-summary, audit, and progress documents are ignored; only `report_type: "vulnerability"` documents participate. A per-run log line summarizes the buckets, e.g. `Scan diff vs baseline: new=1 fixed=2 persistent=9 severity_changes=1`.
 
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-consolidated"></a>
+
+## 🧩 Consolidated multi-model report
+
+When several deep models run in the same pass (`-m model-a,model-b`), each model writes its own report subtree. Pass **`-rm/--report-model MODEL`** to merge all per-model findings of the run into one **consolidated report**:
+
+- **`consolidated/consolidated_report.json`** — canonical document (`report_type: "consolidated"`, schema `ConsolidatedReportDocument`)
+- **`consolidated/consolidated_report.md`** — human-readable Markdown sibling
+
+The merge is **deterministic**: findings are grouped by the same stable fingerprint as the scan diff (file + vulnerability type + normalized snippet) and bucketed by confirmation — *confirmed by all models*, *confirmed by several models*, *single-model findings* — with per-model severities kept side by side. The report model is then asked **only to narrate** an executive overview, a prioritized action list and remediation guidance from a compact digest of the groups (structured output; it never re-detects findings). An LLM failure degrades to a narrative-less document — the grouping still stands on its own.
+
+```bash
+# Two deep models + a third model for the consolidated narrative
+oasis -i ./my-project -m qwen2.5-coder:32b,deepseek-r1:32b -rm qwen2.5-coder:14b
+# → consolidated/consolidated_report.json + .md in the run output
+```
+
+Runs with a single model skip the feature (a log line explains it). The digest sent to the model is capped by **`OASIS_REPORT_CONSOLIDATION_DIGEST_MAX_CHARS`** (default 24000, best-confirmed groups kept first). The per-model reports stay untouched — the consolidated document is an additive, cross-model view.
 
 <p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
 
