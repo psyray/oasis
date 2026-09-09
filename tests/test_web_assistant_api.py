@@ -1693,6 +1693,7 @@ class TestResolveEmbedBackend(unittest.TestCase):
         server._default_ollama_url = kwargs.get("default_ollama_url", "http://127.0.0.1:11434")
         server.web_provider = kwargs.get("web_provider")
         server.web_api_base = kwargs.get("web_api_base")
+        server.web_api_key = kwargs.get("web_api_key")
         server._default_provider = kwargs.get("default_provider")
         server._default_api_base = kwargs.get("default_api_base")
         server._default_api_key = kwargs.get("default_api_key")
@@ -1700,9 +1701,44 @@ class TestResolveEmbedBackend(unittest.TestCase):
         server._embed_ollama_manager = None
         return server
 
-    def test_default_is_local_ollama_even_when_chat_backend_is_openai(self):
-        server = self._server(default_provider="openai", default_api_base="https://llm.example.com/v1")
-        with patch.dict(os.environ, dict(_NEUTRALIZED_EMBED_ENV)):
+    def test_embed_provider_inherits_chat_backend_when_no_embed_config(self):
+        server = self._server(
+            default_provider="openai",
+            default_api_base="https://llm.example.com/v1",
+            default_api_key="k-chat",
+        )
+        env = dict(_NEUTRALIZED_EMBED_ENV)
+        env["OASIS_WEB_LLM_PROVIDER"] = ""
+        env["OASIS_WEB_OPENAI_BASE_URL"] = ""
+        env["OASIS_WEB_OPENAI_API_KEY"] = ""
+        with patch.dict(os.environ, env):
+            self.assertEqual(server._resolve_embed_provider(), "openai")
+            self.assertEqual(server._resolve_embed_api_base(), "https://llm.example.com/v1")
+            self.assertEqual(server._resolve_embed_api_key(), "k-chat")
+
+    def test_embed_provider_inherits_web_chat_flags(self):
+        server = self._server(
+            web_provider="openai",
+            web_api_base="http://web-chat/v1",
+            web_api_key="k-web-chat",
+        )
+        env = dict(_NEUTRALIZED_EMBED_ENV)
+        env["OASIS_WEB_LLM_PROVIDER"] = ""
+        env["OASIS_WEB_OPENAI_BASE_URL"] = ""
+        env["OASIS_WEB_OPENAI_API_KEY"] = ""
+        with patch.dict(os.environ, env):
+            self.assertEqual(server._resolve_embed_provider(), "openai")
+            self.assertEqual(server._resolve_embed_api_base(), "http://web-chat/v1")
+            self.assertEqual(server._resolve_embed_api_key(), "k-web-chat")
+
+    def test_embed_provider_defaults_to_local_ollama_when_nothing_configured(self):
+        server = self._server()
+        env = dict(_NEUTRALIZED_EMBED_ENV)
+        env["OASIS_WEB_LLM_PROVIDER"] = ""
+        env["OASIS_LLM_PROVIDER"] = ""
+        env["OASIS_WEB_OPENAI_BASE_URL"] = ""
+        env["OASIS_WEB_OPENAI_API_KEY"] = ""
+        with patch.dict(os.environ, env):
             self.assertEqual(server._resolve_embed_provider(), "ollama")
 
     def test_scan_side_embed_defaults_cascade(self):

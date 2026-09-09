@@ -801,10 +801,11 @@ class WebServer:
         return self._assistant_ollama_manager
 
     def _resolve_embed_provider(self) -> str:
-        """RAG embedding provider: ``--web-embed-provider`` → env → embedding backend → local Ollama.
+        """RAG embedding provider: ``--web-embed-provider`` → env → embedding backend → chat backend.
 
-        The embedding backend is resolved independently from the chat backend
-        (local Ollama by default), so RAG embeddings can target a dedicated server.
+        Embedding-specific configuration wins; when none is set, the chat backend
+        configuration is inherited (itself falling back to local Ollama), so RAG
+        embeddings can still target a dedicated server via ``--web-embed-*``.
         """
         for raw in (
             self.web_embed_provider,
@@ -817,7 +818,7 @@ class WebServer:
                 return resolved
         if self._resolve_embed_api_base():
             return LLM_PROVIDER_OPENAI
-        return LLM_PROVIDER_OLLAMA
+        return self._resolve_assistant_provider()
 
     def _resolve_embed_api_base(self) -> str:
         """OpenAI-compatible base URL for RAG embeddings (empty string when unset)."""
@@ -826,6 +827,7 @@ class WebServer:
             os.environ.get("OASIS_WEB_EMBED_OPENAI_BASE_URL"),
             self._default_embed_api_base,
             os.environ.get("OASIS_EMBED_OPENAI_BASE_URL"),
+            self._resolve_assistant_api_base(),
         ):
             if raw is None:
                 continue
@@ -840,6 +842,7 @@ class WebServer:
             os.environ.get("OASIS_WEB_EMBED_OPENAI_API_KEY"),
             self._default_embed_api_key,
             os.environ.get("OASIS_EMBED_OPENAI_API_KEY"),
+            self._resolve_assistant_api_key(),
         ):
             if raw is None:
                 continue

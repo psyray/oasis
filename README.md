@@ -294,9 +294,9 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 - **`--provider`**: Model backend — `ollama` (native API, auto-pull) or `openai` (OpenAI-compatible server: vLLM, LM Studio, llama.cpp, LocalAI...) (default: `ollama`, env `OASIS_LLM_PROVIDER`)
 - **`--api-base`**: Base URL of the OpenAI-compatible server, e.g. `https://llm.example.com/v1` (default: `http://localhost:8000/v1`, env `OASIS_OPENAI_BASE_URL`)
 - **`--api-key`**: API key for the OpenAI-compatible server (default: env `OASIS_OPENAI_API_KEY`, else `local`; never logged).
-- **`--embed-provider`**: Embedding backend, resolved independently from `--provider` (chat) — `ollama` (native API, default) or `openai` (OpenAI-compatible embedding server: vLLM, llama.cpp, LiteLLM...), so chat and embedding workloads can run on separate servers (env `OASIS_EMBED_PROVIDER`). See [Model providers](#readme-model-providers).
-- **`--embed-api-base`**: Base URL of the OpenAI-compatible embedding server (default: `http://localhost:8000/v1`, env `OASIS_EMBED_OPENAI_BASE_URL`).
-- **`--embed-api-key`**: API key for the OpenAI-compatible embedding server (default: env `OASIS_EMBED_OPENAI_API_KEY`, else `local`; never logged).
+- **`--embed-provider`**: Embedding backend — `ollama` (native API) or `openai` (OpenAI-compatible embedding server: vLLM, llama.cpp, LiteLLM...). Default: **inherits the chat backend** (`--provider`), so chat and embedding workloads can still be routed to separate servers with an explicit flag (env `OASIS_EMBED_PROVIDER`). See [Model providers](#readme-model-providers).
+- **`--embed-api-base`**: Base URL of the OpenAI-compatible embedding server (default: inherited from `--api-base`; env `OASIS_EMBED_OPENAI_BASE_URL`).
+- **`--embed-api-key`**: API key for the OpenAI-compatible embedding server (default: inherited from `--api-key`; env `OASIS_EMBED_OPENAI_API_KEY`; never logged).
 - **`--report-model`** `-rm`: Consolidation model — after a multi-model run, merge the per-model findings into one consolidated report (deterministic fingerprint groups; the model synthesizes the narrative). See [Consolidated multi-model report](#readme-consolidated).
 
 See [Model providers](#readme-model-providers) for details and per-server examples.
@@ -316,9 +316,9 @@ See [Model providers](#readme-model-providers) for details and per-server exampl
 - **`--web-api-base`**: OpenAI-compatible base URL for the dashboard assistant (default: same as `--api-base`, env `OASIS_WEB_OPENAI_BASE_URL`).
 - **`--web-api-key`**: API key for the dashboard assistant backend (default: same as `--api-key`, env `OASIS_WEB_OPENAI_API_KEY`).
 - **`--web-embed-model`**: Embedding model for optional RAG over the local `.oasis_cache` pickle (defaults to the report’s `embed_model` or `nomic-embed-text`).
-- **`--web-embed-provider`**: Embedding backend for assistant RAG queries (default: same as `--embed-provider`, env `OASIS_WEB_EMBED_PROVIDER`).
-- **`--web-embed-api-base`**: OpenAI-compatible base URL for assistant RAG embeddings (default: same as `--embed-api-base`, env `OASIS_WEB_EMBED_OPENAI_BASE_URL`).
-- **`--web-embed-api-key`**: API key for assistant RAG embeddings (default: same as `--embed-api-key`, env `OASIS_WEB_EMBED_OPENAI_API_KEY`).
+- **`--web-embed-provider`**: Embedding backend for assistant RAG queries (default: same as `--embed-provider`, else the chat backend; env `OASIS_WEB_EMBED_PROVIDER`).
+- **`--web-embed-api-base`**: OpenAI-compatible base URL for assistant RAG embeddings (default: same as `--embed-api-base`, else the chat `--web-api-base`; env `OASIS_WEB_EMBED_OPENAI_BASE_URL`).
+- **`--web-embed-api-key`**: API key for assistant RAG embeddings (default: same as `--embed-api-key`, else the chat `--web-api-key`; env `OASIS_WEB_EMBED_OPENAI_API_KEY`).
 - **`--web-assistant-rag` / `--no-web-assistant-rag`**: Use embedding-cache retrieval in assistant answers (default: on).
 
 For **JSON** reports, the dashboard modal includes an **Assistant** panel (triage, codebase context). Optional 0-based file/chunk/finding indices focus the model on one structured finding; RAG uses the same project root and cache file as the scan when available.
@@ -346,9 +346,9 @@ Optional **`OASIS_*`** variables tune timeouts and heuristic budgets without edi
 - **`OASIS_OPENAI_CTX_TOKENS`** — declared context window (tokens) of OpenAI-compatible models; used for chunk sizing and assistant budget (the OpenAI protocol does not expose it).
 - **`OASIS_OPENAI_STRUCTURED_OUTPUT`** — `auto` (default: send `response_format` JSON schema, fall back to schema-in-prompt on HTTP 4xx), `on` (always send, surface errors), `off` (schema-in-prompt only).
 - **`OASIS_OPENAI_THINKING_KWARGS`** — `auto` (default: translate the `-mt`/`-smt` thinking flags into vLLM-style `chat_template_kwargs.enable_thinking`, retry without it on HTTP 4xx), `on` (always translate, surface errors), `off` (never send — strict servers).
-- **`OASIS_EMBED_PROVIDER`** — embedding backend (`ollama` | `openai`), resolved independently from the chat backend (local Ollama by default).
+- **`OASIS_EMBED_PROVIDER`** — embedding backend (`ollama` | `openai`); defaults to the chat backend configuration when unset.
 - **`OASIS_EMBED_OPENAI_BASE_URL`** / **`OASIS_EMBED_OPENAI_API_KEY`** — embedding server settings when the embedding provider is `openai`.
-- **`OASIS_WEB_EMBED_PROVIDER`** / **`OASIS_WEB_EMBED_OPENAI_BASE_URL`** / **`OASIS_WEB_EMBED_OPENAI_API_KEY`** — dashboard assistant RAG embeddings (fall back to the scan-side embedding backend).
+- **`OASIS_WEB_EMBED_PROVIDER`** / **`OASIS_WEB_EMBED_OPENAI_BASE_URL`** / **`OASIS_WEB_EMBED_OPENAI_API_KEY`** — dashboard assistant RAG embeddings (fall back to the scan-side embedding backend, then the chat backend).
 - **`OASIS_WEB_OLLAMA_URL`** — Ollama base URL for the dashboard assistant when `--web-ollama-url` is not set.
 - **`OASIS_CHUNK_ANALYZE_TIMEOUT_SEC`** — server-side deadline for one Ollama generate call (seconds).
 - **`OASIS_CHUNK_DEEP_NUM_PREDICT`** — cap on structured deep output tokens (`num_predict`).
@@ -450,11 +450,11 @@ Chat (scan / deep / assistant) and **embedding** are two different LLM workloads
 | Workload | Flags | Default |
 |----------|-------|---------|
 | Chat (scan/deep) | `--provider`, `--api-base`, `--api-key` | Ollama (`--ollama-url`) |
-| Embeddings | `--embed-provider`, `--embed-api-base`, `--embed-api-key` | **Local Ollama** (`--ollama-url`), even when chat targets an OpenAI-compatible server |
-| Assistant RAG embeddings | `--web-embed-provider`, `--web-embed-api-base`, `--web-embed-api-key` | Same as the scan-side embedding backend |
+| Embeddings | `--embed-provider`, `--embed-api-base`, `--embed-api-key` | **Inherited from the chat backend** (same provider / base URL / API key); explicit `--embed-*` flags override |
+| Assistant RAG embeddings | `--web-embed-provider`, `--web-embed-api-base`, `--web-embed-api-key` | Same as the scan-side embedding backend, then the chat backend |
 
 ```bash
-# Chat models on one OpenAI-compatible server, embeddings on native Ollama (default)
+# Chat models and embeddings on the same OpenAI-compatible server (default inheritance)
 oasis -i ./my-project --provider openai --api-base https://llm.example.com/v1 -m Qwen/Qwen2.5-Coder-32B-Instruct
 
 # Embeddings on a dedicated OpenAI-compatible server instead
@@ -462,7 +462,7 @@ oasis -i ./my-project --provider openai --api-base https://llm.example.com/v1 \
   --embed-provider openai --embed-api-base http://127.0.0.1:9999/v1 -em nomic-embed-text
 ```
 
-Embedding backend precedence: `--embed-provider` → `OASIS_EMBED_PROVIDER` → auto (`openai` when an embedding API base is set) → **local Ollama**. The chat `--provider` is never inherited for embeddings. The dashboard assistant RAG follows the same policy: `--web-embed-*` → `OASIS_WEB_EMBED_*` → the scan-side embedding backend. Both routed backends are logged at startup.
+Embedding backend precedence: `--embed-provider` → `OASIS_EMBED_PROVIDER` → auto (`openai` when an embedding API base is set) → **the chat backend configuration** (`--provider` / `--api-base` / `--api-key`) → local Ollama. The dashboard assistant RAG follows the same policy: `--web-embed-*` → `OASIS_WEB_EMBED_*` → the scan-side embedding backend → the chat backend. Both routed backends are logged at startup, and every embed model must be **available on its backend** (`/v1/models` match for OpenAI-compatible servers, local pull for Ollama) — startup aborts with a clear `Model not available` error otherwise. When the RAG embedding backend fails at query time, the dashboard assistant shows a ⚠️ notice on the affected answer.
 
 <p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
 

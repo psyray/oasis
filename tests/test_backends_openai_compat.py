@@ -102,20 +102,46 @@ class TestProviderResolution(unittest.TestCase):
 
 
 class TestEmbedBackendFactory(unittest.TestCase):
-    """Embedding backend resolution: independent from the chat backend (local by default)."""
+    """Embedding backend resolution: ``--embed-*`` wins, else the chat config is inherited."""
 
-    def test_embed_factory_defaults_to_local_ollama_even_when_chat_is_openai(self):
+    def test_embed_factory_inherits_chat_backend_when_no_embed_config(self):
         args = type(
             "Args",
             (),
             {
                 "provider": "openai",
                 "api_base": "https://llm.example.com/v1",
+                "api_key": "k-chat",
             },
         )()
         manager = create_embed_model_manager(args)
-        self.assertIsInstance(manager, OllamaManager)
-        self.assertEqual(manager.api_url, "http://localhost:11434")
+        self.assertIsInstance(manager, OpenAICompatManager)
+        self.assertEqual(manager.api_base, "https://llm.example.com/v1")
+        self.assertEqual(manager.api_key, "k-chat")
+
+    def test_embed_factory_inherits_chat_env_provider(self):
+        args = type("Args", (), {})()
+        with patch.object(config, "LLM_PROVIDER_ENV", "openai"), patch.object(
+            config, "OPENAI_COMPAT_BASE_URL", "http://127.0.0.1:9999/v1"
+        ):
+            manager = create_embed_model_manager(args)
+        self.assertIsInstance(manager, OpenAICompatManager)
+        self.assertEqual(manager.api_base, "http://127.0.0.1:9999/v1")
+
+    def test_embed_factory_chat_api_base_inherited_when_embed_provider_explicit(self):
+        args = type(
+            "Args",
+            (),
+            {
+                "embed_provider": "openai",
+                "api_base": "https://llm.example.com/v1",
+                "api_key": "k-chat",
+            },
+        )()
+        manager = create_embed_model_manager(args)
+        self.assertIsInstance(manager, OpenAICompatManager)
+        self.assertEqual(manager.api_base, "https://llm.example.com/v1")
+        self.assertEqual(manager.api_key, "k-chat")
 
     def test_embed_factory_provider_from_args(self):
         args = type(

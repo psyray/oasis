@@ -9,6 +9,43 @@ DashboardApp.resetAssistantConversation = function () {
 };
 
 /**
+ * Show/hide the transient "RAG unavailable" warning inside the assistant panel.
+ * Reuses the codebase-warning styles; driven by the ``rag_unavailable`` flag of
+ * the chat response (JSON body or streaming ``done`` event).
+ */
+DashboardApp.setAssistantRagUnavailableNotice = function (panel, unavailable) {
+    if (!panel) {
+        return;
+    }
+    const ui = DashboardApp.ASSISTANT_UI || {};
+    const notice = panel.querySelector('#oasis-assistant-rag-notice');
+    if (!unavailable) {
+        if (notice) {
+            notice.remove();
+        }
+        return;
+    }
+    if (notice) {
+        return;
+    }
+    const title = ui.ragUnavailableTitle || 'RAG unavailable';
+    const detail = typeof ui.ragUnavailableDetail === 'string' ? ui.ragUnavailableDetail : '';
+    const el = document.createElement('div');
+    el.id = 'oasis-assistant-rag-notice';
+    el.className = 'oasis-assistant-codebase-warning';
+    el.setAttribute('role', 'alert');
+    el.innerHTML =
+        '<div class="oasis-assistant-codebase-warning__headline">' +
+        '<span class="oasis-assistant-codebase-warning__emoji" aria-hidden="true">⚠️</span>' +
+        `<strong class="oasis-assistant-codebase-warning__title">${DashboardApp._escapeHtml(title)}</strong>` +
+        '</div>' +
+        (detail
+            ? `<p class="oasis-assistant-codebase-warning__body">${DashboardApp._escapeHtml(detail)}</p>`
+            : '');
+    panel.insertBefore(el, panel.firstChild);
+};
+
+/**
  * Render the ``AssistantInvestigationResult`` payload returned by
  * ``/api/assistant/investigate`` inside a plain container. Layout is
  * intentionally lightweight (dl + lists) so it composes cleanly in both
@@ -2471,6 +2508,7 @@ DashboardApp.mountReportAssistantPanel = function () {
         let streamingErrorShown = false;
 
         const applyFinalReply = function (data) {
+            DashboardApp.setAssistantRagUnavailableNotice(panel, data.rag_unavailable === true);
             if (budgetHintEl) {
                 budgetHintEl.textContent = formatBudgetHint(data.system_budget_chars);
             }

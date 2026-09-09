@@ -1148,8 +1148,8 @@ class OasisScanner:
             True if Ollama is running and connected, False otherwise
         """
         # Initialize model backends: chat (scan/deep) and embedding, independently routed.
-        # Embeddings default to the local Ollama backend even when chat targets an
-        # OpenAI-compatible server, so both workloads can live on separate servers.
+        # Embeddings follow the chat backend by default (--embed-* overrides win), so both
+        # workloads can live on separate servers when explicitly configured.
         if ollama_url is None:
             ollama_url = self.args.ollama_url
         self.ollama_manager = create_model_manager(self.args, ollama_url=ollama_url)
@@ -1208,6 +1208,11 @@ class OasisScanner:
             self.primary_embed_model = primary_embed_model
         for embed_model in embed_models:
             if not self.embed_model_manager.ensure_model_available(embed_model):
+                logger.error(
+                    "Model %r not available on the embedding backend (%s) — aborting.",
+                    embed_model,
+                    embed_target or "unknown",
+                )
                 return False
 
         report_model = getattr(self.args, "report_model", None)

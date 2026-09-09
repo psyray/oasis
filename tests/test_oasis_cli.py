@@ -734,11 +734,13 @@ class TestOllamaInitOrdering(unittest.TestCase):
 
         with patch("oasis.oasis.create_model_manager", return_value=fake_manager), patch(
             "oasis.oasis.create_embed_model_manager", return_value=fake_manager
-        ):
+        ), patch("oasis.oasis.logger") as logger_mock:
             result = scanner._init_ollama()
 
         self.assertFalse(result)
         fake_manager.detect_optimal_chunk_size.assert_not_called()
+        error_texts = " ".join(str(call.args[0]) for call in logger_mock.error.call_args_list)
+        self.assertIn("not available on the embedding backend", error_texts)
 
 
 class TestOasisInitFlow(unittest.TestCase):

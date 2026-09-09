@@ -4,8 +4,9 @@ Public entry points:
 
 - :func:`create_model_manager` — build the chat backend matching CLI args / env;
 - :func:`create_embed_model_manager` — build the embedding backend, resolved
-  independently from the chat backend (local Ollama by default) so chat and
-  embedding workloads can be routed to separate servers (e.g. a dedicated RAG server);
+  independently from the chat backend (``--embed-*`` overrides win, otherwise
+  the chat configuration is inherited) so chat and embedding workloads can be
+  routed to separate servers (e.g. a dedicated RAG server);
 - :class:`ModelBackend` — the backend contract;
 - :class:`OllamaManager` / :class:`OpenAICompatManager` — concrete backends.
 """
@@ -46,6 +47,29 @@ def resolve_provider_choice(raw: Any) -> Optional[str]:
     )
 
 
+def _resolve_chat_provider(
+    args: Optional[Any],
+    provider: Optional[str],
+    api_base: Optional[str],
+) -> str:
+    """Shared chat-provider resolution used by both backend factories.
+
+    Order: explicit ``provider`` argument → ``args.provider`` (``--provider``) →
+    ``OASIS_LLM_PROVIDER`` environment variable → ``"openai"`` when an
+    OpenAI-compatible base URL is provided, else ``"ollama"``.
+    """
+    resolved = resolve_provider_choice(provider)
+    if resolved is None and args is not None:
+        resolved = resolve_provider_choice(getattr(args, "provider", None))
+    if resolved is None:
+        # Read at call time so runtime patches / late env changes are honored.
+        resolved = resolve_provider_choice(config.LLM_PROVIDER_ENV)
+    if resolved is None:
+        arg_api_base = api_base or getattr(args, "api_base", None)
+        resolved = LLM_PROVIDER_OPENAI if arg_api_base else LLM_PROVIDER_OLLAMA
+    return resolved
+
+
 def create_model_manager(
     args: Optional[Any] = None,
     *,
@@ -76,15 +100,7 @@ def create_model_manager(
     Returns:
         ModelBackend: the configured backend instance.
     """
-    resolved = resolve_provider_choice(provider)
-    if resolved is None and args is not None:
-        resolved = resolve_provider_choice(getattr(args, "provider", None))
-    if resolved is None:
-        # Read at call time so runtime patches / late env changes are honored.
-        resolved = resolve_provider_choice(config.LLM_PROVIDER_ENV)
-    if resolved is None:
-        arg_api_base = api_base or getattr(args, "api_base", None)
-        resolved = LLM_PROVIDER_OPENAI if arg_api_base else LLM_PROVIDER_OLLAMA
+    resolved = _resolve_chat_provider(args, provider, api_base)
 
     if resolved == LLM_PROVIDER_OPENAI:
         base = api_base or getattr(args, "api_base", None) or getattr(args, "api_url", None)
@@ -106,9 +122,11 @@ def create_embed_model_manager(
     """
     Build the embedding backend, resolved independently from the chat backend.
 
-    Embeddings default to the native Ollama backend (local by default) even when
-    the chat backend targets an OpenAI-compatible server, so chat and embedding
-    workloads can be routed to separate servers (e.g. a dedicated RAG server).
+    Embedding-specific configuration (``--embed-provider`` / ``--embed-api-base`` /
+    ``--embed-api-key`` or their env equivalents) always wins; when none is set,
+    the embedding backend **inherits the chat backend configuration** (provider,
+    base URL and API key) instead of defaulting to local Ollama — so chat and
+    embedding workloads still can be routed to separate servers explicitly.
 
     Resolution order for the provider:
 
@@ -117,11 +135,14 @@ def create_embed_model_manager(
     3. ``OASIS_EMBED_PROVIDER`` environment variable;
     4. ``"openai"`` when an embedding base URL is provided (``api_base`` argument,
        ``args.embed_api_base`` or ``OASIS_EMBED_OPENAI_BASE_URL``);
-    5. ``"ollama"`` — the local default; the chat ``--provider`` is never inherited.
+    5. the chat backend configuration (``args.provider`` / ``OASIS_LLM_PROVIDER`` /
+       ``args.api_base``);
+    6. ``"ollama"`` — the local default.
 
     Args:
         args: Namespace-like CLI arguments (reads ``embed_provider``,
-            ``embed_api_base``, ``embed_api_key`` and ``ollama_url`` when present).
+            ``embed_api_base``, ``embed_api_key`` and, as inheritance fallback,
+            ``provider`` / ``api_base`` / ``api_key`` / ``ollama_url``).
         provider: Explicit provider override.
         ollama_url: Explicit Ollama URL override (used when provider = ollama).
         api_base: Explicit OpenAI-compatible embedding base URL override.
@@ -138,19 +159,21 @@ def create_embed_model_manager(
         resolved = resolve_provider_choice(config.EMBED_PROVIDER_ENV)
     if resolved is None:
         arg_api_base = api_base or getattr(args, "embed_api_base", None) or config.EMBED_OPENAI_BASE_URL
-        resolved = LLM_PROVIDER_OPENAI if arg_api_base else LLM_PROVIDER_OLLAMA
+        resolved = LLM_PROVIDER_OPENAI if arg_api_base else _resolve_chat_provider(args, None, None)
 
     if resolved == LLM_PROVIDER_OPENAI:
         base = (
             api_base
             or getattr(args, "embed_api_base", None)
             or config.EMBED_OPENAI_BASE_URL
+            or getattr(args, "api_base", None)
             or config.OPENAI_COMPAT_BASE_URL
         )
         key = (
             api_key
             or getattr(args, "embed_api_key", None)
             or config.EMBED_OPENAI_API_KEY
+            or getattr(args, "api_key", None)
             or config.OPENAI_COMPAT_API_KEY
         )
         return OpenAICompatManager(api_base=base, api_key=key)
