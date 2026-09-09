@@ -188,22 +188,32 @@ const DashboardApp = {
     
     // Load all required modules
     loadModules: function() {
+        // Modules ship as ordered `defer` scripts in dashboard.html (marked with
+        // data-oasis-dashboard-module). Defer execution completes before
+        // DOMContentLoaded, so by the time init() runs every module is loaded —
+        // skip the legacy sequential injector in that case.
+        const modules = [
+            'bootstrap.js',
+            'utils.js',
+            'audit-report-paths.js',
+            'filters.js',
+            'views.js',
+            'api.js',
+            'modal.js',
+            'executive-preview.js',
+            'assistant-constants.js',
+            'assistant.js',
+            'interactions.js'
+        ];
+        const shippedModules = document.querySelectorAll('script[data-oasis-dashboard-module]');
+        if (shippedModules.length >= modules.length) {
+            DashboardApp.debug('Modules already loaded via defer scripts, skipping sequential loader');
+            if (typeof DashboardApp.initFormatHelpers === 'function') {
+                DashboardApp.initFormatHelpers();
+            }
+            return Promise.resolve();
+        }
         return new Promise((resolve, reject) => {
-            // Define modules to load in order
-            const modules = [
-                'bootstrap.js',
-                'utils.js',
-                'audit-report-paths.js',
-                'filters.js',
-                'views.js',
-                'api.js',
-                'modal.js',
-                'executive-preview.js',
-                'assistant-constants.js',
-                'assistant.js',
-                'interactions.js'
-            ];
-            
             let loadedCount = 0;
             
             // Function to load a script
@@ -248,7 +258,10 @@ const DashboardApp = {
         // Load templates first
         this.initTemplates()
             .then(() => {
-                // Restore persisted vulnerability filters before first API calls.
+                // Restore persisted filters before first API calls.
+                if (typeof this.loadModelFiltersFromStorage === 'function') {
+                    this.loadModelFiltersFromStorage();
+                }
                 if (typeof this.loadVulnerabilityFiltersFromStorage === 'function') {
                     this.loadVulnerabilityFiltersFromStorage();
                 }
@@ -264,8 +277,20 @@ const DashboardApp = {
 
                 // Initialize the dashboard only after templates are loaded
                 this.initializeFilters();
-                // Match previous startup: stats omit vulnerability in the query so filter options stay complete.
-                this.refreshDashboard({ statsIncludeVulnerability: false, statsIncludeSeverity: false });
+                // First-load stats omit every facet's own filter so the filter option
+                // lists stay complete even when a persisted filter is restored.
+                // No force on first load: the server collected report data at startup
+                // and the progress monitor keeps it fresh (<= 2s old), so the initial
+                // render reads warm in-memory data instead of re-walking the tree.
+                this.refreshDashboard({
+                    force: false,
+                    statsIncludeModel: false,
+                    statsIncludeVulnerability: false,
+                    statsIncludeSeverity: false,
+                    statsIncludeFormat: false,
+                    statsIncludeLanguage: false,
+                    statsIncludeProject: false,
+                });
                 if (typeof this.ensureRealtimeProgress === 'function') {
                     this.ensureRealtimeProgress();
                 } else {
@@ -310,6 +335,9 @@ const DashboardApp = {
                     projects: [],
                     dateRange: null
                 };
+                if (typeof self.clearModelFilterStorage === 'function') {
+                    self.clearModelFilterStorage();
+                }
                 if (typeof self.clearVulnerabilityFilterStorage === 'function') {
                     self.clearVulnerabilityFilterStorage();
                 }

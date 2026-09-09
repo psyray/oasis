@@ -481,125 +481,16 @@ DashboardApp.renderStats = function() {
         console.error("Stats data not available");
         return;
     }
-    const progress = DashboardApp.progressState || {};
-    const hasRun = Boolean(progress.has_progress);
-    const totalVulns = Math.max(0, Number(progress.total_vulnerabilities || 0));
-    const hasProgress = totalVulns > 0;
-    const completedVulns = Math.max(0, Number(progress.completed_vulnerabilities || 0));
-    const progressPct = totalVulns > 0 ? Math.min(100, Math.round((completedVulns / totalVulns) * 100)) : 0;
-    const statusKey = String(progress.status || '').toLowerCase();
-    const isAborted = statusKey === 'aborted';
-    const isFailed = statusKey === 'failed';
-    const isSucceeded = statusKey === 'succeeded';
-    const isFinished = statusKey === 'finished' || statusKey === 'complete' || isSucceeded;
-
-    const progressStatus = (() => {
-        if (isAborted) {
-            return 'Aborted';
-        }
-        if (isFailed) {
-            return 'Failed';
-        }
-        if (!isFinished && progress.is_partial) {
-            return 'In progress';
-        }
-        if (isFinished) {
-            return 'Complete';
-        }
-        return progress.is_partial ? 'In progress' : 'Complete';
-    })();
-
-    const statusBadgeClass = (() => {
-        if (isAborted) {
-            return 'badge-status-aborted';
-        }
-        if (isFailed) {
-            return 'badge-status-failed';
-        }
-        if (!isFinished && progress.is_partial) {
-            return 'badge-status-in-progress';
-        }
-        return 'badge-status-complete';
-    })();
-    const testedVulnerabilities = Array.isArray(progress.tested_vulnerabilities)
-        ? progress.tested_vulnerabilities.filter(Boolean)
-        : [];
-    const testedVulnerabilitiesHtml = testedVulnerabilities.length > 0
-        ? testedVulnerabilities.map(vuln => {
-            const emoji = DashboardApp.getVulnerabilityEmoji(String(vuln).toLowerCase().replace(/ /g, '_')).trim() || '🔒';
-            return `<span class="progress-vuln-emoji" title="${h(vuln)}">${h(emoji)}</span>`;
-        }).join('')
-        : '<span class="progress-vuln-empty">No vulnerabilities completed yet</span>';
-    const currentVulnerabilityRaw = String(progress.current_vulnerability || '').trim();
-    const currentVulnerabilityEmoji = currentVulnerabilityRaw
-        ? (DashboardApp.getVulnerabilityEmoji(currentVulnerabilityRaw.toLowerCase().replace(/ /g, '_')).trim() || '🔒')
-        : (isAborted ? '🛑' : isFailed ? '⚠️' : (hasRun ? '⏳' : '📭'));
-    const currentVulnerabilityText = currentVulnerabilityRaw
-        || (isAborted ? 'Scan aborted by user' : isFailed ? 'Scan failed' : (hasRun ? 'Waiting for first vulnerability' : 'No active scan'));
-
-    const normalizePhaseNumber = DashboardApp.normalizeProgressNumber;
-
-    const phases = Array.isArray(progress.phases) ? progress.phases : [];
-    const phaseRowsHtml = phases
-        .map((p) => {
-            if (!p || typeof p !== 'object') {
-                return '';
-            }
-            const label = String(p.label || p.id || 'Phase');
-            const done = normalizePhaseNumber(p.completed);
-            const tot = normalizePhaseNumber(p.total);
-            if (
-                typeof DashboardApp.shouldHideCompletedProgressPhaseRow === 'function' &&
-                DashboardApp.shouldHideCompletedProgressPhaseRow(p, isFinished, progress.event_version)
-            ) {
-                return '';
-            }
-            const pct = tot > 0 ? Math.min(100, Math.round((done / tot) * 100)) : 0;
-            const st = String(p.status || '').trim();
-            const labelWithStatus =
-                typeof DashboardApp.htmlProgressPhaseLabelWithStatus === 'function'
-                    ? DashboardApp.htmlProgressPhaseLabelWithStatus(h, label, st)
-                    : h(label) + (st ? (' · ' + h(st)) : '');
-            return `<div class="progress-phase-row"><span class="progress-phase-label">${labelWithStatus}</span><span class="progress-phase-count">${done}/${tot} (${pct}%)</span></div>`;
-        })
-        .filter(Boolean)
-        .join('');
-
-    // Keep scan progress high-level only: detailed vuln/file sub-phases are intentionally hidden.
-    const adaptiveHtml = '';
-
-    const activePhaseRaw = String(progress.active_phase || '').trim();
-    const activePhaseHtml = activePhaseRaw
-        ? `<div class="progress-active-phase">Phase: <code>${h(activePhaseRaw)}</code>${progress.scan_mode ? ` · ${h(String(progress.scan_mode))}` : ''}</div>`
-        : '';
-
-    const phasesSection =
-        phaseRowsHtml || adaptiveHtml || activePhaseHtml
-            ? `<div class="progress-phases">${activePhaseHtml}${phaseRowsHtml}${adaptiveHtml ? `<div class="progress-adaptive-wrap">${adaptiveHtml}</div>` : ''}</div>`
-            : '';
-
-    const progressCard = hasProgress
+    const progressCardContent = DashboardApp._progressCardInnerHtml(DashboardApp.buildProgressCardContent());
+    const progressCard = progressCardContent
         ? `
             <div class="card progress-card">
-                <div class="card-title">⏱️ Scan progress</div>
-                <div class="progress-meta">${completedVulns}/${totalVulns} vulnerabilities</div>
-                ${phasesSection}
-                <div class="progress-track">
-                    <div class="progress-fill" style="width: ${progressPct}%;"></div>
-                </div>
-                <div class="progress-current-vulnerability">
-                    <span class="progress-current-emoji">${h(currentVulnerabilityEmoji)}</span>
-                    <span class="progress-current-text">${h(currentVulnerabilityText)}</span>
-                </div>
-                <div class="progress-tested-vulnerabilities">${testedVulnerabilitiesHtml}</div>
-                <div class="progress-footer">
-                    <span class="badge ${statusBadgeClass}">${progressStatus}</span>
-                    <span class="progress-model">${h(String(progress.model || ''))}</span>
-                </div>
+                ${progressCardContent}
             </div>
         `
         : '';
     
+
     const statsHtml = `
         <div class="dashboard-cards">
             <div class="card">
@@ -635,6 +526,449 @@ DashboardApp.renderStats = function() {
     `;
     DashboardApp._appendSanitizedHtml(statsContainer, statsHtml);
     DashboardApp._initStatsSeverityChart();
+};
+
+/** Shared status meta (label + badge class) for one progress entry. */
+DashboardApp.progressStatusMeta = function (statusKeyRaw, isPartial) {
+    const statusKey = String(statusKeyRaw || '').toLowerCase();
+    const isAborted = statusKey === 'aborted';
+    const isFailed = statusKey === 'failed';
+    const isSucceeded = statusKey === 'succeeded';
+    const isFinished = statusKey === 'finished' || statusKey === 'complete' || isSucceeded;
+    let label;
+    if (isAborted) {
+        label = 'Aborted';
+    } else if (isFailed) {
+        label = 'Failed';
+    } else if (isFinished) {
+        label = 'Complete';
+    } else {
+        label = isPartial ? 'In progress' : 'Complete';
+    }
+    let badgeClass;
+    if (isAborted) {
+        badgeClass = 'badge-status-aborted';
+    } else if (isFailed) {
+        badgeClass = 'badge-status-failed';
+    } else if (!isFinished && isPartial) {
+        badgeClass = 'badge-status-in-progress';
+    } else {
+        badgeClass = 'badge-status-complete';
+    }
+    return { label: label, badgeClass: badgeClass, isAborted: isAborted, isFailed: isFailed, isFinished: isFinished };
+};
+
+/** Shared tested-vulnerabilities fragment (full builds + in-place updates). */
+DashboardApp.progressTestedVulnsInnerHtml = function (entry) {
+    const h = DashboardApp._escapeHtml;
+    const testedVulnerabilities = Array.isArray(entry.tested_vulnerabilities)
+        ? entry.tested_vulnerabilities.filter(Boolean)
+        : [];
+    return testedVulnerabilities.length > 0
+        ? testedVulnerabilities.map(vuln => {
+            const emoji = DashboardApp.getVulnerabilityEmoji(String(vuln).toLowerCase().replace(/ /g, '_')).trim() || '🔒';
+            return `<span class="progress-vuln-emoji" title="${h(vuln)}">${h(emoji)}</span>`;
+        }).join('')
+        : '<span class="progress-vuln-empty">No vulnerabilities completed yet</span>';
+};
+
+/** Shared phases fragment (active phase + summary rows) for full builds + in-place updates. */
+DashboardApp.progressPhaseRowsInnerHtml = function (entry, isFinished) {
+    const h = DashboardApp._escapeHtml;
+    const normalizePhaseNumber = DashboardApp.normalizeProgressNumber;
+    const phases = Array.isArray(entry.phases) ? entry.phases : [];
+    const phaseRowsHtml = phases
+        .map((p) => {
+            if (!p || typeof p !== 'object') {
+                return '';
+            }
+            const label = String(p.label || p.id || 'Phase');
+            const done = normalizePhaseNumber(p.completed);
+            const tot = normalizePhaseNumber(p.total);
+            if (
+                typeof DashboardApp.shouldHideCompletedProgressPhaseRow === 'function' &&
+                DashboardApp.shouldHideCompletedProgressPhaseRow(p, isFinished, entry.event_version)
+            ) {
+                return '';
+            }
+            const pct = tot > 0 ? Math.min(100, Math.round((done / tot) * 100)) : 0;
+            const st = String(p.status || '').trim();
+            const labelWithStatus =
+                typeof DashboardApp.htmlProgressPhaseLabelWithStatus === 'function'
+                    ? DashboardApp.htmlProgressPhaseLabelWithStatus(h, label, st)
+                    : h(label) + (st ? (' · ' + h(st)) : '');
+            return `<div class="progress-phase-row"><span class="progress-phase-label">${labelWithStatus}</span><span class="progress-phase-count">${done}/${tot} (${pct}%)</span></div>`;
+        })
+        .filter(Boolean)
+        .join('');
+
+    // Keep scan progress high-level only: detailed vuln/file sub-phases are intentionally hidden.
+    const adaptiveHtml = '';
+
+    const activePhaseRaw = String(entry.active_phase || '').trim();
+    const activePhaseHtml = activePhaseRaw
+        ? `<div class="progress-active-phase">Phase: <code>${h(activePhaseRaw)}</code>${entry.scan_mode ? ` · ${h(String(entry.scan_mode))}` : ''}</div>`
+        : '';
+
+    return phaseRowsHtml || adaptiveHtml || activePhaseHtml
+        ? `${activePhaseHtml}${phaseRowsHtml}${adaptiveHtml ? `<div class="progress-adaptive-wrap">${adaptiveHtml}</div>` : ''}`
+        : '';
+};
+
+/** Shared current-vulnerability parts (emoji + text) for full builds + in-place updates. */
+DashboardApp.progressCurrentVulnParts = function (entry, meta, hasRun) {
+    const currentVulnerabilityRaw = String(entry.current_vulnerability || '').trim();
+    const emoji = currentVulnerabilityRaw
+        ? (DashboardApp.getVulnerabilityEmoji(currentVulnerabilityRaw.toLowerCase().replace(/ /g, '_')).trim() || '🔒')
+        : (meta.isAborted ? '🛑' : meta.isFailed ? '⚠️' : (hasRun ? '⏳' : '📭'));
+    const text = currentVulnerabilityRaw
+        || (meta.isAborted ? 'Scan aborted by user' : meta.isFailed ? 'Scan failed' : (hasRun ? 'Waiting for first vulnerability' : 'No active scan'));
+    return { emoji: emoji, text: text };
+};
+
+/** One progress panel body (meta, phases, bar, current vuln, tested, footer). */
+DashboardApp.progressPanelBodyHtml = function (entry, opts = {}) {
+    const h = DashboardApp._escapeHtml;
+    const hasEntryRun = opts.hasRun !== undefined ? opts.hasRun : true;
+    const totalVulns = Math.max(0, Number(entry.total_vulnerabilities || 0));
+    const completedVulns = Math.max(0, Number(entry.completed_vulnerabilities || 0));
+    const progressPct = totalVulns > 0 ? Math.min(100, Math.round((completedVulns / totalVulns) * 100)) : 0;
+    const meta = DashboardApp.progressStatusMeta(entry.status, entry.is_partial);
+    const currentParts = DashboardApp.progressCurrentVulnParts(entry, meta, hasEntryRun);
+    const phasesInner = DashboardApp.progressPhaseRowsInnerHtml(entry, meta.isFinished);
+    const phasesSection = phasesInner
+        ? `<div class="progress-phases">${phasesInner}</div>`
+        : '';
+
+    return `
+                <div class="progress-meta">${completedVulns}/${totalVulns} vulnerabilities</div>
+                ${phasesSection}
+                <div class="progress-track">
+                    <div class="progress-fill" style="width: ${progressPct};"></div>
+                </div>
+                <div class="progress-current-vulnerability">
+                    <span class="progress-current-emoji">${h(currentParts.emoji)}</span>
+                    <span class="progress-current-text">${h(currentParts.text)}</span>
+                </div>
+                <div class="progress-tested-vulnerabilities">${DashboardApp.progressTestedVulnsInnerHtml(entry)}</div>
+                <div class="progress-footer">
+                    <span class="badge ${meta.badgeClass}">${meta.label}</span>
+                    <span class="progress-model">${h(String(entry.model || ''))}</span>
+                </div>
+        `;
+};
+
+/**
+ * Build the Scan progress card content structure (title, optional per-model tabs,
+ * panels). Multi-model runs render ALL panels (hidden attribute) so switching
+ * tabs is a pure DOM toggle — no re-render, no chart reset, no flicker.
+ */
+DashboardApp.buildProgressCardContent = function () {
+    const h = DashboardApp._escapeHtml;
+    const progress = DashboardApp.progressState || {};
+    const hasRun = Boolean(progress.has_progress);
+    const modelsProgress = Array.isArray(progress.models_progress)
+        ? progress.models_progress.filter((entry) => entry && typeof entry === 'object')
+        : [];
+    const multiModel = modelsProgress.length > 1;
+
+    if (multiModel) {
+        DashboardApp._ensureProgressTabDelegation();
+        const overall = (progress.overall && typeof progress.overall === 'object')
+            ? progress.overall
+            : DashboardApp.computeOverallProgress(modelsProgress);
+        const modelsTotal = modelsProgress.length;
+        const doneCount = modelsProgress.filter((entry) => entry.state === 'complete').length;
+        const currentCount = modelsProgress.filter((entry) => entry.state === 'in_progress').length;
+        const pendingCount = modelsTotal - doneCount - currentCount;
+
+        // Auto-follow the model currently scanning; switch back to Overall when the
+        // run finishes. A manual tab selection stays until the active model changes.
+        const currentEntryIndex = modelsProgress.findIndex((entry) => entry.state === 'in_progress');
+        const currentModelName = currentEntryIndex >= 0 ? String(modelsProgress[currentEntryIndex].model || '') : '';
+        if (currentModelName !== String(DashboardApp._progressFollowModel || '')) {
+            DashboardApp._progressFollowModel = currentModelName;
+            DashboardApp._progressSelectedTabIndex = currentEntryIndex >= 0 ? currentEntryIndex + 1 : 0;
+        }
+        const selectedIndex = Math.min(
+            Math.max(0, Number(DashboardApp._progressSelectedTabIndex || 0)),
+            modelsTotal
+        );
+
+        const overallEntry = {
+            model: `Overall · ${modelsTotal} model${modelsTotal > 1 ? 's' : ''}`,
+            status: overall.status,
+            is_partial: overall.is_partial,
+            completed_vulnerabilities: overall.completed_vulnerabilities,
+            total_vulnerabilities: overall.total_vulnerabilities,
+            current_vulnerability: '',
+            tested_vulnerabilities: [],
+            phases: [],
+            event_version: progress.event_version,
+        };
+        const overallTab = `<button type="button" class="progress-tab is-overall${selectedIndex === 0 ? ' is-selected' : ''}" data-tab-index="0" title="${h('Overall progress across all models')}">📊 ${h('Overall')} <span class="progress-tab-count">(${doneCount}/${modelsTotal} done)</span></button>`;
+        const modelTabs = modelsProgress
+            .map((entry, index) => {
+                const state = String(entry.state || 'pending');
+                const stateClass = state === 'complete' ? 'is-done' : state === 'in_progress' ? 'is-current' : 'is-pending';
+                const modelName = String(entry.model || '');
+                const emoji = (DashboardApp.getModelEmoji(modelName) || '🤖').trim();
+                const label = DashboardApp.formatDisplayName(modelName, 'model', false);
+                const suffix = state === 'complete' ? ' ✓' : state === 'in_progress' ? ' ⏳' : '';
+                return `<button type="button" class="progress-tab ${stateClass}${selectedIndex === index + 1 ? ' is-selected' : ''}" data-tab-index="${index + 1}" title="${h(modelName)}">${h(emoji)} ${h(label)}${suffix}</button>`;
+            })
+            .join('');
+
+        const panels = [
+            {
+                index: 0,
+                entry: overallEntry,
+                html:
+                    `<div class="progress-models-total">${doneCount}/${modelsTotal} model(s) complete · ${currentCount} in progress · ${pendingCount} pending</div>` +
+                    DashboardApp.progressPanelBodyHtml(overallEntry, { hasRun: true }),
+            },
+        ].concat(
+            modelsProgress.map((entry, index) => ({
+                index: index + 1,
+                entry: entry,
+                html: DashboardApp.progressPanelBodyHtml(entry, { hasRun: true }),
+            }))
+        );
+
+        return {
+            kind: 'tabs',
+            modelsKey: modelsProgress.map((entry) => String(entry.model || '')).join('|'),
+            tabsHtml: `${overallTab}${modelTabs}`,
+            panels: panels,
+            selectedIndex: selectedIndex,
+        };
+    }
+
+    const totalVulns = Math.max(0, Number(progress.total_vulnerabilities || 0));
+    if (totalVulns <= 0) {
+        return null;
+    }
+    return {
+        kind: 'single',
+        singleHtml: `<div class="card-title">⏱️ Scan progress</div>${DashboardApp.progressPanelBodyHtml(progress, { hasRun: hasRun })}`,
+    };
+};
+
+/** Card inner markup from structured content (title + tabs + all panels, or single panel). */
+DashboardApp._progressCardInnerHtml = function (content) {
+    if (!content) {
+        return '';
+    }
+    if (content.kind === 'tabs') {
+        return `
+                <div class="card-title">⏱️ Scan progress</div>
+                <div class="progress-tabs">${content.tabsHtml}</div>
+                ${content.panels
+                    .map(
+                        (panel) =>
+                            `<div class="progress-panel" data-panel-index="${panel.index}"${panel.index === content.selectedIndex ? '' : ' hidden'}>${panel.html}</div>`
+                    )
+                    .join('')}
+        `;
+    }
+    return content.singleHtml;
+};
+
+/** Sync the in-place-update cache after any full card render. */
+DashboardApp._resetProgressCardCache = function (content) {
+    if (!content) {
+        DashboardApp._progressCardCache = {};
+        return;
+    }
+    if (content.kind === 'tabs') {
+        DashboardApp._progressCardCache = {
+            modelsKey: content.modelsKey,
+            tabsHtml: content.tabsHtml,
+            panelByIndex: content.panels.reduce((acc, panel) => {
+                acc[panel.index] = panel.html;
+                return acc;
+            }, {}),
+        };
+        return;
+    }
+    DashboardApp._progressCardCache = { singleHtml: content.singleHtml };
+};
+
+/**
+ * Patch one panel's known children in place (bar width, counts, current vuln,
+ * tested, footer). Returns false when the expected structure is missing — the
+ * caller then falls back to a full panel body rebuild.
+ */
+DashboardApp._updateProgressPanelInPlace = function (panelEl, entry) {
+    const meta = DashboardApp.progressStatusMeta(entry.status, entry.is_partial);
+    const totalVulns = Math.max(0, Number(entry.total_vulnerabilities || 0));
+    const completedVulns = Math.max(0, Number(entry.completed_vulnerabilities || 0));
+    const pct = totalVulns > 0 ? Math.min(100, Math.round((completedVulns / totalVulns) * 100)) : 0;
+    const fill = panelEl.querySelector('.progress-fill');
+    const metaEl = panelEl.querySelector('.progress-meta');
+    const currentEmojiEl = panelEl.querySelector('.progress-current-emoji');
+    const currentTextEl = panelEl.querySelector('.progress-current-text');
+    const testedEl = panelEl.querySelector('.progress-tested-vulnerabilities');
+    const badgeEl = panelEl.querySelector('.progress-footer .badge');
+    const modelEl = panelEl.querySelector('.progress-model');
+    if (!fill || !metaEl || !currentEmojiEl || !currentTextEl || !testedEl || !badgeEl || !modelEl) {
+        return false;
+    }
+    fill.style.width = pct + '%';
+    metaEl.textContent = `${completedVulns}/${totalVulns} vulnerabilities`;
+    const currentParts = DashboardApp.progressCurrentVulnParts(entry, meta, true);
+    currentEmojiEl.textContent = currentParts.emoji;
+    currentTextEl.textContent = currentParts.text;
+    const testedInner = DashboardApp.progressTestedVulnsInnerHtml(entry);
+    if ((testedEl.dataset.innerDigest || '') !== testedInner) {
+        testedEl.dataset.innerDigest = testedInner;
+        DashboardApp._appendSanitizedHtml(testedEl, testedInner);
+    }
+    badgeEl.className = `badge ${meta.badgeClass}`;
+    badgeEl.textContent = meta.label;
+    modelEl.textContent = String(entry.model || '');
+    const phasesEl = panelEl.querySelector('.progress-phases');
+    if (phasesEl) {
+        const phasesInner = DashboardApp.progressPhaseRowsInnerHtml(entry, meta.isFinished);
+        if ((phasesEl.dataset.innerDigest || '') !== phasesInner) {
+            phasesEl.dataset.innerDigest = phasesInner;
+            if (phasesInner) {
+                DashboardApp._appendSanitizedHtml(phasesEl, phasesInner);
+            } else {
+                phasesEl.textContent = '';
+            }
+        }
+    }
+    return true;
+};
+
+/**
+ * Patch the stats card numbers in place (Reports / Models / Vulnerability types
+ * + severity badges) without re-creating the Chart.js canvas. Falls back to a
+ * full renderStats() when the cards are not present yet.
+ */
+DashboardApp.patchStatsCardsInPlace = function () {
+    const statsContainer = document.getElementById('stats-container');
+    if (!statsContainer || !DashboardApp.hasRenderableStats() || !statsContainer.querySelector('.card-value')) {
+        DashboardApp.renderStats();
+        return;
+    }
+    const setCardValue = function (titleText, value) {
+        statsContainer.querySelectorAll('.card').forEach((card) => {
+            const title = card.querySelector('.card-title');
+            if (title && title.textContent.trim() === titleText) {
+                const valueEl = card.querySelector('.card-value');
+                if (valueEl) {
+                    valueEl.textContent = value;
+                }
+            }
+        });
+    };
+    setCardValue('📊 Reports', DashboardApp.stats.total_reports || 0);
+    setCardValue('🤖 Models', Object.keys(DashboardApp.stats.models || {}).length);
+    setCardValue('🛡️ Vulnerability types', Object.keys(DashboardApp.stats.vulnerabilities || {}).length);
+    const rs = DashboardApp.stats.risk_summary || {};
+    const badgeValues = [
+        { cls: 'badge-critical', emoji: '🔴', label: 'Critical', value: rs.critical != null ? rs.critical : 0 },
+        { cls: 'badge-high', emoji: '🚨', label: 'High', value: rs.high || 0 },
+        { cls: 'badge-medium', emoji: '⚠️', label: 'Medium', value: rs.medium || 0 },
+        { cls: 'badge-low', emoji: '📌', label: 'Low', value: rs.low || 0 },
+    ];
+    statsContainer.querySelectorAll('.stats-severity-badges .badge').forEach((badge) => {
+        const match = badgeValues.find((item) => badge.classList.contains(item.cls));
+        if (match) {
+            badge.textContent = `${match.emoji} ${match.value} ${match.label}`;
+        }
+    });
+    const chart = DashboardApp._statsSeverityChart;
+    if (chart && chart.data && Array.isArray(chart.data.datasets) && chart.data.datasets.length > 0) {
+        chart.data.datasets[0].data = badgeValues.map((item) => Number(item.value) || 0);
+        chart.update();
+    }
+};
+
+/**
+ * Update only the Scan progress card — charts and the rest of the stats stay
+ * stable. Identical content is skipped entirely, and unchanged fields are
+ * patched in place instead of recreating the DOM (no visible refresh).
+ */
+DashboardApp.renderProgressCard = function () {
+    const statsContainer = document.getElementById('stats-container');
+    const card = statsContainer ? statsContainer.querySelector('.progress-card') : null;
+    const content = DashboardApp.buildProgressCardContent();
+    if (!card) {
+        if (content && DashboardApp.hasRenderableStats && DashboardApp.hasRenderableStats()) {
+            DashboardApp.renderStats();
+        }
+        return;
+    }
+    if (!content) {
+        card.remove();
+        DashboardApp._resetProgressCardCache(null);
+        return;
+    }
+    const cache = DashboardApp._progressCardCache || {};
+    if (content.kind === 'single') {
+        if (cache.singleHtml !== content.singleHtml) {
+            DashboardApp._appendSanitizedHtml(card, DashboardApp._progressCardInnerHtml(content));
+            DashboardApp._resetProgressCardCache(content);
+        }
+        return;
+    }
+    if (cache.modelsKey !== content.modelsKey) {
+        // Model set changed: full inner rebuild (rare, only at run start/transition).
+        DashboardApp._appendSanitizedHtml(card, DashboardApp._progressCardInnerHtml(content));
+        DashboardApp._resetProgressCardCache(content);
+        return;
+    }
+    // In-place updates for an unchanged model set.
+    const tabsEl = card.querySelector('.progress-tabs');
+    if (tabsEl && cache.tabsHtml !== content.tabsHtml) {
+        DashboardApp._appendSanitizedHtml(tabsEl, content.tabsHtml);
+    }
+    const cachedPanels = cache.panelByIndex || {};
+    content.panels.forEach((panel) => {
+        const panelEl = card.querySelector(`.progress-panel[data-panel-index="${panel.index}"]`);
+        if (!panelEl) {
+            return;
+        }
+        if (cachedPanels[panel.index] !== panel.html) {
+            if (!DashboardApp._updateProgressPanelInPlace(panelEl, panel.entry)) {
+                DashboardApp._appendSanitizedHtml(panelEl, panel.html);
+            }
+        }
+        panelEl.hidden = panel.index !== content.selectedIndex;
+    });
+    card.querySelectorAll('.progress-tab').forEach((tabEl) => {
+        tabEl.classList.toggle('is-selected', Number(tabEl.dataset.tabIndex || 0) === content.selectedIndex);
+    });
+    DashboardApp._resetProgressCardCache(content);
+};
+
+/** One-time delegated click handling for the multi-model progress tabs (no re-render). */
+DashboardApp._ensureProgressTabDelegation = function () {
+    if (DashboardApp._progressTabsDelegated) {
+        return;
+    }
+    const container = document.getElementById('stats-container');
+    if (!container) {
+        return;
+    }
+    container.addEventListener('click', function (event) {
+        const tab = event.target.closest('.progress-tab');
+        if (!tab) {
+            return;
+        }
+        const index = Number(tab.dataset.tabIndex || 0);
+        DashboardApp._progressSelectedTabIndex = Number.isFinite(index) ? index : 0;
+        container.querySelectorAll('.progress-tab').forEach((tabEl) => {
+            tabEl.classList.toggle('is-selected', Number(tabEl.dataset.tabIndex || 0) === DashboardApp._progressSelectedTabIndex);
+        });
+        container.querySelectorAll('.progress-panel').forEach((panel) => {
+            panel.hidden = Number(panel.dataset.panelIndex || 0) !== DashboardApp._progressSelectedTabIndex;
+        });
+    });
+    DashboardApp._progressTabsDelegated = true;
 };
 
 DashboardApp.switchView = function(viewMode) {

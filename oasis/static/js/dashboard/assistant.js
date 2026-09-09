@@ -9,6 +9,43 @@ DashboardApp.resetAssistantConversation = function () {
 };
 
 /**
+ * Show/hide the transient "RAG unavailable" warning inside the assistant panel.
+ * Reuses the codebase-warning styles; driven by the ``rag_unavailable`` flag of
+ * the chat response (JSON body or streaming ``done`` event).
+ */
+DashboardApp.setAssistantRagUnavailableNotice = function (panel, unavailable) {
+    if (!panel) {
+        return;
+    }
+    const ui = DashboardApp.ASSISTANT_UI || {};
+    const notice = panel.querySelector('#oasis-assistant-rag-notice');
+    if (!unavailable) {
+        if (notice) {
+            notice.remove();
+        }
+        return;
+    }
+    if (notice) {
+        return;
+    }
+    const title = ui.ragUnavailableTitle || 'RAG unavailable';
+    const detail = typeof ui.ragUnavailableDetail === 'string' ? ui.ragUnavailableDetail : '';
+    const el = document.createElement('div');
+    el.id = 'oasis-assistant-rag-notice';
+    el.className = 'oasis-assistant-codebase-warning';
+    el.setAttribute('role', 'alert');
+    el.innerHTML =
+        '<div class="oasis-assistant-codebase-warning__headline">' +
+        '<span class="oasis-assistant-codebase-warning__emoji" aria-hidden="true">⚠️</span>' +
+        `<strong class="oasis-assistant-codebase-warning__title">${DashboardApp._escapeHtml(title)}</strong>` +
+        '</div>' +
+        (detail
+            ? `<p class="oasis-assistant-codebase-warning__body">${DashboardApp._escapeHtml(detail)}</p>`
+            : '');
+    panel.insertBefore(el, panel.firstChild);
+};
+
+/**
  * Render the ``AssistantInvestigationResult`` payload returned by
  * ``/api/assistant/investigate`` inside a plain container. Layout is
  * intentionally lightweight (dl + lists) so it composes cleanly in both
@@ -90,6 +127,55 @@ DashboardApp._gatherAssistantFindingIndices = function (panelRoot) {
         chunk_index: num(ci),
         finding_index: num(gi),
     };
+};
+
+/**
+ * "Ask AI" buttons rendered per finding inside the report HTML preview
+ * (``render_finding`` macro, dashboard-only via ``preview.assistant_enabled``).
+ * One delegated listener on ``document``: the preview HTML is regenerated on
+ * every modal open, so individual listeners would leak. Selecting a finding
+ * through the flat picker reveals the scan-time verdict and focuses the chat.
+ */
+DashboardApp._bindAssistantAskAiButtons = function () {
+    if (DashboardApp._oasisAskAiBound) {
+        return;
+    }
+    DashboardApp._oasisAskAiBound = true;
+    document.addEventListener('click', function (ev) {
+        const btn =
+            ev.target && typeof ev.target.closest === 'function'
+                ? ev.target.closest('.report-finding-ask-ai')
+                : null;
+        if (!btn) {
+            return;
+        }
+        // Keep the <details> toggle of the finding summary closed.
+        ev.preventDefault();
+        ev.stopPropagation();
+        const fi = Number(btn.dataset.oasisFi);
+        const ci = Number(btn.dataset.oasisCi);
+        const gi = Number(btn.dataset.oasisGi);
+        if (![fi, ci, gi].every(Number.isFinite) || fi < 0 || ci < 0 || gi < 0) {
+            return;
+        }
+        const panel = document.querySelector('.oasis-assistant-panel');
+        if (
+            !panel ||
+            typeof panel._oasisAssistantSetFindingIndices !== 'function'
+        ) {
+            return;
+        }
+        panel._oasisAssistantSetFindingIndices(fi, ci, gi);
+        try {
+            panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } catch (e) {
+            /* scrollIntoView unsupported: ignore */
+        }
+        const input = panel.querySelector('#oasis-assistant-input');
+        if (input && typeof input.focus === 'function') {
+            input.focus();
+        }
+    });
 };
 
 /** Human-readable pills for the selected finding (Validate row); uses dashboard charter pills. */
@@ -178,19 +264,56 @@ DashboardApp.refreshAssistantVerdictPanelFromSession = function (panel, txt) {
     const chatModelSelect = panel && panel.querySelector('#oasis-assistant-chat-model');
     const cm = chatModelSelect && chatModelSelect.value ? String(chatModelSelect.value).trim() : '';
     const validatePanel = panel && panel.querySelector('#oasis-assistant-validate-panel');
-    if (!panel || !reportPath || !sid || !cm || !validatePanel) {
+    if (!panel || !reportPath || !validatePanel) {
         return Promise.resolve();
     }
-    const fk = DashboardApp.findingValidationStorageKey(DashboardApp._gatherAssistantFindingIndices(panel));
+    const indices = DashboardApp._gatherAssistantFindingIndices(panel);
+    const fk = DashboardApp.findingValidationStorageKey(indices);
     if (!fk) {
         validatePanel.hidden = true;
         DashboardApp._clearElement(validatePanel);
         return Promise.resolve();
     }
+    const hidePanel = function () {
+        validatePanel.hidden = true;
+        DashboardApp._clearElement(validatePanel);
+    };
+    const showScanTimeFallback = function () {
+        // Scan-time verdicts live in the finding_validations.json sidecar —
+        // deterministic and model-independent, so no chat session is required.
+        const scopePath = indices.finding_scope_report_path;
+        const fkScan = DashboardApp.findingValidationStorageKey(
+            Object.assign({}, indices, { finding_scope_report_path: '' })
+        );
+        if (!fkScan || typeof DashboardApp.fetchAssistantScanValidations !== 'function') {
+            hidePanel();
+            return Promise.resolve();
+        }
+        return DashboardApp.fetchAssistantScanValidations(reportPath, scopePath)
+            .then(function (doc) {
+                const map = doc && typeof doc.validations === 'object' ? doc.validations : {};
+                const fv = typeof map[fkScan] === 'object' && map[fkScan] ? map[fkScan] : null;
+                if (fv) {
+                    validatePanel.hidden = false;
+                    DashboardApp.renderAssistantVerdictPanel(validatePanel, fv, txt, {
+                        origin: 'scan',
+                    });
+                } else {
+                    hidePanel();
+                }
+            })
+            .catch(function () {
+                hidePanel();
+            });
+    };
+    if (!sid || !cm) {
+        // No chat session/model yet: the scan-time sidecar is still usable.
+        return showScanTimeFallback();
+    }
     return DashboardApp.fetchAssistantSession(reportPath, sid)
         .then(function (doc) {
             if (!doc || typeof doc !== 'object') {
-                return;
+                return showScanTimeFallback();
             }
             const branches =
                 doc.model_branches && typeof doc.model_branches === 'object' ? doc.model_branches : {};
@@ -202,14 +325,15 @@ DashboardApp.refreshAssistantVerdictPanelFromSession = function (panel, txt) {
                     : null;
             if (fv) {
                 validatePanel.hidden = false;
-                DashboardApp.renderAssistantVerdictPanel(validatePanel, fv, txt);
-            } else {
-                validatePanel.hidden = true;
-                DashboardApp._clearElement(validatePanel);
+                DashboardApp.renderAssistantVerdictPanel(validatePanel, fv, txt, {
+                    origin: 'session',
+                });
+                return Promise.resolve();
             }
+            return showScanTimeFallback();
         })
         .catch(function () {
-            /* ignore */
+            return showScanTimeFallback();
         });
 };
 
@@ -220,10 +344,11 @@ DashboardApp.refreshAssistantVerdictPanelFromSession = function (panel, txt) {
  * and the entry-points list is rendered inside a bounded, scrollable
  * container so every hit stays reachable regardless of volume.
  */
-DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
+DashboardApp.renderAssistantVerdictPanel = function (container, result, txt, opts) {
     if (!container) {
         return;
     }
+    const panelOpts = opts && typeof opts === 'object' ? opts : {};
     const esc = DashboardApp._escapeHtml || function (s) {
         return String(s == null ? '' : s);
     };
@@ -268,6 +393,16 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
         vname.className = 'oasis-assistant-validate-vuln';
         vname.textContent = vulnName;
         headLeft.appendChild(vname);
+    }
+    if (panelOpts.origin === 'scan') {
+        const originPill = document.createElement('span');
+        originPill.className = 'oasis-assistant-validate-origin';
+        originPill.title = label(
+            'validateScanTimeTitle',
+            'Deterministic validation computed automatically during the scan.'
+        );
+        originPill.textContent = label('validateScanTimeOrigin', 'Scan-time');
+        headLeft.appendChild(originPill);
     }
     head.appendChild(headLeft);
 
@@ -357,6 +492,25 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
                 copiedCode: label('assistantCopiedCode', 'Copied'),
             });
         }
+        const segments = Array.isArray(result.narrative_thought_segments)
+            ? result.narrative_thought_segments
+                  .map(function (seg) {
+                      return typeof seg === 'string' ? seg.trim() : '';
+                  })
+                  .filter(Boolean)
+            : [];
+        if (segments.length) {
+            const thoughts = document.createElement('details');
+            thoughts.className = 'oasis-assistant-think';
+            const thoughtsSummary = document.createElement('summary');
+            thoughtsSummary.textContent = label('validateNarrativeReasoning', 'Reasoning');
+            const thoughtsPre = document.createElement('pre');
+            thoughtsPre.className = 'oasis-assistant-think-pre';
+            thoughtsPre.textContent = segments.join('\n\n');
+            thoughts.appendChild(thoughtsSummary);
+            thoughts.appendChild(thoughtsPre);
+            container.appendChild(thoughts);
+        }
     }
     if (!llmMd && synthesisErrorText) {
         const synErr = document.createElement('p');
@@ -365,6 +519,40 @@ DashboardApp.renderAssistantVerdictPanel = function (container, result, txt) {
             label('validateSynthesisErrorPrefix', 'Narrative synthesis: ') +
             synthesisErrorText;
         container.appendChild(synErr);
+    }
+    // Scan-time verdicts carry no LLM narrative — offer one on demand (the
+    // re-validation also persists the result into the active chat session).
+    const revalidateFn =
+        typeof panelOpts.onRevalidate === 'function'
+            ? panelOpts.onRevalidate
+            : typeof container._oasisAssistantRevalidate === 'function'
+            ? container._oasisAssistantRevalidate
+            : null;
+    if (!llmMd && revalidateFn) {
+        const narrativeRow = document.createElement('div');
+        narrativeRow.className = 'oasis-assistant-validate-narrative-row';
+        const narrativeBtn = document.createElement('button');
+        narrativeBtn.type = 'button';
+        narrativeBtn.className = 'btn btn-secondary oasis-assistant-validate-narrative-btn';
+        narrativeBtn.textContent = label(
+            'validateGenerateNarrative',
+            'Generate narrative with AI'
+        );
+        narrativeBtn.addEventListener('click', function () {
+            narrativeBtn.disabled = true;
+            narrativeBtn.textContent = label('validateGenerating', 'Generating…');
+            try {
+                revalidateFn();
+            } finally {
+                narrativeBtn.disabled = false;
+                narrativeBtn.textContent = label(
+                    'validateGenerateNarrative',
+                    'Generate narrative with AI'
+                );
+            }
+        });
+        narrativeRow.appendChild(narrativeBtn);
+        container.appendChild(narrativeRow);
     }
 
     // Scope card — compact mono-space with truncation hint for long paths.
@@ -706,7 +894,12 @@ DashboardApp._truncateAssistantLabel = function (text, maxLen) {
 
 /** True for _executive_summary report path (md or json) under security-reports. */
 DashboardApp.isExecutiveSummaryPath = function (reportPath) {
-    return /(^|\/)_executive_summary\.(json|md)$/i.test(String(reportPath || ''));
+    return /(^|\/)\_executive_summary\.(json|md)$/i.test(String(reportPath || ''));
+};
+
+/** True for the run-level consolidated multi-model report path (issue #60). */
+DashboardApp.isConsolidatedReportPath = function (reportPath) {
+    return /(^|\/)consolidated\/consolidated_report\.json$/i.test(String(reportPath || ''));
 };
 
 /** Map sibling md/json paths (same stem) so assistant API sees the canonical JSON path. */
@@ -850,6 +1043,60 @@ DashboardApp.populateAssistantFindingSelectorsFromPayload = function (panelRoot,
         opt.textContent = DashboardApp._truncateAssistantLabel(fp, 72);
         selFi.appendChild(opt);
     });
+    // Flat finding picker (one interaction instead of File → Chunk → Finding):
+    // optgroup per file, one option per finding carrying "fi|ci|gi".
+    const picker = panelRoot.querySelector('#oasis-assistant-finding-picker');
+    if (!picker) {
+        return;
+    }
+    DashboardApp._clearElement(picker);
+    const noneOpt = document.createElement('option');
+    noneOpt.value = '';
+    noneOpt.textContent = noneText;
+    picker.appendChild(noneOpt);
+    let total = 0;
+    files.forEach(function (f, fi) {
+        const chunks = f && Array.isArray(f.chunk_analyses) ? f.chunk_analyses : [];
+        const fp = f && typeof f.file_path === 'string' ? f.file_path : '(' + (fi + 1) + ')';
+        const group = document.createElement('optgroup');
+        group.label = DashboardApp._truncateAssistantLabel(fp, 60);
+        chunks.forEach(function (ch, ci) {
+            const findings = ch && Array.isArray(ch.findings) ? ch.findings : [];
+            findings.forEach(function (fd, gi) {
+                const title =
+                    fd && typeof fd.title === 'string' && fd.title.trim()
+                        ? fd.title.trim()
+                        : 'Finding ' + (gi + 1);
+                const severity = fd && typeof fd.severity === 'string' ? fd.severity.trim() : '';
+                const line =
+                    fd && typeof fd.snippet_start_line === 'number' && fd.snippet_start_line > 0
+                        ? fd.snippet_start_line
+                        : ch && typeof ch.start_line === 'number' && ch.start_line > 0
+                        ? ch.start_line
+                        : null;
+                const opt = document.createElement('option');
+                opt.value = fi + '|' + ci + '|' + gi;
+                opt.textContent = DashboardApp._truncateAssistantLabel(
+                    (fi + 1) + '.' + (ci + 1) + '.' + (gi + 1) + ' · ' + title +
+                    (severity ? ' (' + severity + ')' : '') +
+                    (line ? ' · line ' + line : ''),
+                    110
+                );
+                group.appendChild(opt);
+                total += 1;
+            });
+        });
+        if (group.children.length) {
+            picker.appendChild(group);
+        }
+    });
+    if (!total) {
+        const emptyOpt = document.createElement('option');
+        emptyOpt.value = '';
+        emptyOpt.textContent = txt('findingPickerEmpty', 'No findings in this report');
+        emptyOpt.disabled = true;
+        picker.appendChild(emptyOpt);
+    }
 };
 
 /** Wire cascading file/chunk/finding changes once per panel. */
@@ -961,6 +1208,74 @@ DashboardApp._assistantBindFindingSelectorEvents = function (panelRoot, txt) {
         notifyFindingSelection();
     });
     selGi.addEventListener('change', notifyFindingSelection);
+
+    // Programmatic selection used by the flat picker and the per-finding
+    // "Ask AI" buttons: keep the legacy cascading selects as the source of
+    // truth, then notify once (panel pills + verdict panel refresh).
+    const setFindingIndices = function (fi, ci, gi) {
+        const files = panelRoot._oasisAssistantFiles || [];
+        const picker = panelRoot.querySelector('#oasis-assistant-finding-picker');
+        if (
+            !Number.isFinite(fi) || fi < 0 || fi >= files.length ||
+            !Number.isFinite(ci) || ci < 0 ||
+            !Number.isFinite(gi) || gi < 0
+        ) {
+            resetSelect(selFi);
+            resetSelect(selCi);
+            resetSelect(selGi);
+            if (picker) {
+                picker.value = '';
+            }
+            notifyFindingSelection();
+            return;
+        }
+        selFi.value = String(fi);
+        renderChunksForFile(files, fi);
+        const chunks = files[fi] && Array.isArray(files[fi].chunk_analyses) ? files[fi].chunk_analyses : [];
+        if (ci >= chunks.length) {
+            resetSelect(selCi);
+            resetSelect(selGi);
+            if (picker) {
+                picker.value = '';
+            }
+            notifyFindingSelection();
+            return;
+        }
+        selCi.value = String(ci);
+        renderFindingsForChunk(files, fi, ci);
+        const findings = chunks[ci].findings || [];
+        if (gi >= findings.length) {
+            resetSelect(selGi);
+            if (picker) {
+                picker.value = '';
+            }
+            notifyFindingSelection();
+            return;
+        }
+        selGi.value = String(gi);
+        if (picker) {
+            picker.value = fi + '|' + ci + '|' + gi;
+        }
+        notifyFindingSelection();
+    };
+    panelRoot._oasisAssistantSetFindingIndices = setFindingIndices;
+
+    const picker = panelRoot.querySelector('#oasis-assistant-finding-picker');
+    if (picker) {
+        picker.addEventListener('change', function () {
+            const parts = String(picker.value || '')
+                .split('|')
+                .map(function (n) {
+                    return Number(n);
+                });
+            if (parts.length !== 3 || !parts.every(function (n) {
+                return Number.isFinite(n) && n >= 0;
+            })) {
+                return;
+            }
+            setFindingIndices(parts[0], parts[1], parts[2]);
+        });
+    }
 };
 
 /**
@@ -1082,6 +1397,12 @@ DashboardApp.mountReportAssistantPanel = function () {
     if (rms.currentFormat !== 'json' && !execSummary) {
         return;
     }
+    // Consolidated multi-model reports stay assistant-free for now: the chat
+    // contract expects vulnerability/executive payload shapes (issue #60).
+    if (typeof DashboardApp.isConsolidatedReportPath === 'function'
+        && DashboardApp.isConsolidatedReportPath(canonicalPath)) {
+        return;
+    }
 
     const wrapper = document.getElementById('report-modal-content');
     if (!wrapper || wrapper.querySelector('.oasis-assistant-panel')) {
@@ -1164,17 +1485,22 @@ DashboardApp.mountReportAssistantPanel = function () {
                 </label>
                 <div class="oasis-assistant-finding-ref${findingHiddenClass}">
                     <span class="oasis-assistant-finding-ref-intro">${DashboardApp._escapeHtml(txt('findingRefIntro', ''))}</span>
+                    <label class="oasis-assistant-finding-field oasis-assistant-finding-picker-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingPickerLabel', 'Finding'))}</span>
+                        <select id="oasis-assistant-finding-picker" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingPicker', 'Finding picker'))}"></select>
+                    </label>
                     <div class="oasis-assistant-finding-selects">
                         ${viRowHtml}
-                        <label class="oasis-assistant-finding-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingFileLabel', 'File'))}</span>
-                            <select id="oasis-assistant-fi" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingFile', 'File'))}"></select>
-                        </label>
-                        <label class="oasis-assistant-finding-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingChunkLabel', 'Chunk'))}</span>
-                            <select id="oasis-assistant-ci" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingChunk', 'Chunk'))}"></select>
-                        </label>
-                        <label class="oasis-assistant-finding-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingFindingLabel', 'Finding'))}</span>
-                            <select id="oasis-assistant-gi" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingFinding', 'Finding'))}"></select>
-                        </label>
+                        <div class="oasis-assistant-finding-legacy" hidden>
+                            <label class="oasis-assistant-finding-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingFileLabel', 'File'))}</span>
+                                <select id="oasis-assistant-fi" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingFile', 'File'))}"></select>
+                            </label>
+                            <label class="oasis-assistant-finding-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingChunkLabel', 'Chunk'))}</span>
+                                <select id="oasis-assistant-ci" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingChunk', 'Chunk'))}"></select>
+                            </label>
+                            <label class="oasis-assistant-finding-field"><span class="oasis-assistant-finding-key">${DashboardApp._escapeHtml(txt('findingFindingLabel', 'Finding'))}</span>
+                                <select id="oasis-assistant-gi" aria-label="${DashboardApp._escapeHtml(txt('ariaFindingFinding', 'Finding'))}"></select>
+                            </label>
+                        </div>
                     </div>
                 </div>
                 <div class="oasis-assistant-validate-row">
@@ -1243,6 +1569,7 @@ DashboardApp.mountReportAssistantPanel = function () {
         return DashboardApp.refreshAssistantVerdictPanelFromSession(panel, txt);
     };
     panel._oasisAssistantFindingSelectionCallback = refreshFindingUi;
+    DashboardApp._bindAssistantAskAiButtons();
 
     /* report_template.html puts .report-footer before the injected assistant in DOM order; relocate below the panel. */
     wrapper.querySelectorAll('footer.report-footer').forEach(function (footer) {
@@ -1985,8 +2312,7 @@ DashboardApp.mountReportAssistantPanel = function () {
 
     const validateBtn = panel.querySelector('#oasis-assistant-validate-btn');
     const validatePanel = panel.querySelector('#oasis-assistant-validate-panel');
-    if (validateBtn && validatePanel) {
-        validateBtn.addEventListener('click', function () {
+    const runInvestigation = function () {
             const indices = DashboardApp._gatherAssistantFindingIndices(panel);
             // Resolve the selected file/chunk/finding locally so the request
             // is self-contained (visible in Network tab) and the server can
@@ -2070,7 +2396,10 @@ DashboardApp.mountReportAssistantPanel = function () {
             validatePanel.textContent = txt('validateRunning', 'Validating…');
             DashboardApp.postAssistantInvestigate(validatePayload)
                 .then(function (result) {
-                    DashboardApp.renderAssistantVerdictPanel(validatePanel, result, txt);
+                    DashboardApp.renderAssistantVerdictPanel(validatePanel, result, txt, {
+                        origin: 'session',
+                        onRevalidate: runInvestigation,
+                    });
                     const anchor =
                         'OASIS finding validation finished for the selected finding. The full structured verdict (status, evidence, narrative) is stored for this chat model — ask for a PoC, clarifications, or next steps.';
                     const nowIso = new Date().toISOString();
@@ -2114,7 +2443,12 @@ DashboardApp.mountReportAssistantPanel = function () {
                     validateBtn.disabled = false;
                     validateBtn.textContent = originalLabel;
                 });
-        });
+    };
+    if (validateBtn && validatePanel) {
+        validateBtn.addEventListener('click', runInvestigation);
+        // Expose the handler so scan-time verdict panels can trigger a live
+        // re-validation ("Generate narrative") without a session round-trip.
+        validatePanel._oasisAssistantRevalidate = runInvestigation;
     }
 
     const sendQuestion = function (text) {
@@ -2174,6 +2508,7 @@ DashboardApp.mountReportAssistantPanel = function () {
         let streamingErrorShown = false;
 
         const applyFinalReply = function (data) {
+            DashboardApp.setAssistantRagUnavailableNotice(panel, data.rag_unavailable === true);
             if (budgetHintEl) {
                 budgetHintEl.textContent = formatBudgetHint(data.system_budget_chars);
             }

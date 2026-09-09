@@ -20,7 +20,7 @@
   <h1>OASIS</h1>
 </div>
 <p align="center">
-  <small>🏝️ <strong>O</strong>llama <strong>A</strong>utomated <strong>S</strong>ecurity <strong>I</strong>ntelligence <strong>S</strong>canner</small>
+  <small>🏝️ <strong>O</strong>pen <strong>A</strong>utomated <strong>S</strong>ecurity <strong>I</strong>ntelligence <strong>S</strong>canner</small>
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  🛡️ An AI-powered security auditing tool that leverages Ollama models to detect and analyze potential security vulnerabilities in your code.
+  🛡️ An AI-powered security auditing tool that leverages local LLMs (Ollama, or any OpenAI-compatible server: vLLM, LiteLLM, LM Studio…) to detect and analyze potential security vulnerabilities in your code.
 </p>
 
 <p align="center">
@@ -47,12 +47,18 @@
 | [Hardware Requirements](#readme-hardware) | CPUs, GPU, scaling |
 | [Advanced Usage Examples](#readme-advanced-usage-examples) | Example CLI invocations |
 | [Command Line Arguments](#readme-command-line-args) | Flags, web/assistant options, streaming |
+| [CI integration](#readme-ci-integration) | `--fail-on` gate, exit codes, GitHub Actions example |
+| [Model providers](#readme-model-providers) | Ollama / OpenAI-compatible backends (vLLM, LM Studio...) |
 | [Getting the Most out of OASIS](#readme-best-practices) | Models, LangGraph workflow, tips |
 | [Supported Vulnerability Types](#readme-vuln-types) | Type tags reference table |
 | [Output Structure](#readme-output-structure) | `security_reports/`, project slug, canonical JSON |
 | [Run with Docker](#readme-docker) | Compose, `docker run`, web from container |
 | [Cache Management](#readme-cache) | Embeddings and scan caches |
 | [Audit Mode](#readme-audit) | Pre-scan audit, structured `audit_report.json` |
+| [Suppression registry](#readme-suppressions) | Fingerprint registry, SARIF suppressions, candidates |
+| [Inline ignore markers](#readme-inline-ignore) | `#oasisignore` / `#noqa`-style source markers dropped before reports |
+| [Scan diff](#readme-scan-diff) | `--diff-against` baseline comparison, new/fixed/persistent |
+| [Consolidated report](#readme-consolidated) | `-rm` multi-model merge, fingerprint groups, LLM narrative |
 | [Web Interface](#readme-web) | `--web`, security |
 | [Changelog](#readme-changelog) | Release notes |
 | [Contributing](#readme-contributing) | PRs and issues |
@@ -67,8 +73,10 @@
 ## 🌟 Features
 
 - 🤖 **Dashboard assistant**: In the report modal, the AI assistant triages **single-vulnerability JSON** reports or **executive / scan-wide** mode (aggregated JSON under the run) with optional **RAG** over the local embedding cache, a **chat model** selector (Ollama tags), **Markdown** replies, persisted **chat sessions** keyed by the canonical report path, and configurable Ollama/RAG flags (`--web-ollama-url`, `--web-embed-model`, `--web-assistant-rag`)
-- 🛡️ **Finding validation agent**: The assistant can run a deterministic, code-driven investigation for one selected finding via `POST /api/assistant/investigate`, then return a citation-backed exploitability verdict with confidence. Optional LLM narrative can be added on top, but it is constrained to stay consistent with the deterministic result. See [Finding Validation Principle](#readme-finding-validation-principle) for full behavior and guardrails.
+- ⏳ **Multi-model scan progress**: the dashboard Scan progress card renders an **Overall** tab (aggregate bar + `X/N models complete`) plus one tab per deep model — emoji + display name, with current (⏳) / done (✓) / pending (grayed) states and per-model phase rows; multi-model runs can no longer stick to the first model's completion
+- 🛡️ **Finding validation agent**: Findings are **validated automatically during the scan** — a deterministic, code-driven investigation (entry points, call chains, taint flows, on-path mitigations) embeds an exploitability verdict with confidence in every report, shown as color-coded badges. In the dashboard, the assistant panel exposes the full evidence per finding via a single finding picker or the **Ask AI** buttons in the Detailed analysis section; a manual `POST /api/assistant/investigate` re-validation with optional LLM narrative stays available and is constrained to stay consistent with the deterministic result. See [Finding Validation Principle](#readme-finding-validation-principle) for full behavior and guardrails.
 - 🔍 **Multi-Model Analysis**: Leverage multiple Ollama models for comprehensive security scanning
+- 🤝 **OpenAI-compatible backends**: Run the same pipeline against **vLLM**, LM Studio, llama.cpp server, LocalAI, ... via `--provider openai --api-base URL`
 - 🔄 **Two-Phase Scanning**: Use lightweight models for initial scanning and powerful models for deep analysis
 - 🧠 **LangGraph Orchestration**: Single pipeline (discover → scan → expand → deep → verify → report, optional PoC assist) with bounded context-expand retries
 - 🔄 **Interactive Model Selection**: Guided selection of scan and analysis models with parameter-based filtering
@@ -246,6 +254,7 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 ### Input/Output Options
 - `--input` `-i`: Path to file, directory, or .txt file containing newline-separated paths to analyze
 - `--project-name` `-pn`: Optional project alias for report grouping/filtering (overrides the name derived from `-i`; allowed chars: `A-Z`, `a-z`, `0-9`, `_`, `-`)
+- **`--diff-against` `PATH`**: Write a **scan diff report** comparing this run with a baseline run — new / fixed / persistent findings plus severity changes. See [Scan diff](#readme-scan-diff).
 - `--output-format` `-of`: Comma-separated formats or `all` for json, sarif, pdf, html, md (default: all)
 - `--extensions` `-x`: Custom file extensions to analyze (e.g., "py,js,java")
 - `--language` `-l`: Language for reports (default: en)  
@@ -260,11 +269,19 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
     - function (**EXPERIMENTAL**): Splits the file into individual functions for analysis, allowing for more precise detection of issues within specific code blocks but with less contextual linkage across functions.  
 
 - **`--langgraph-max-expand`** `N`: Maximum **context-expand** retries after verify detects structured-output problems (default: **2**).
+- **`--validate-findings`** / **`--no-validate-findings`**: Run the deterministic finding validation **automatically during the scan** and embed the verdicts in the reports (default: **on**). Findings are validated per `(file, line)` anchor with verdict deduplication; the dashboard can still run a live investigation per finding for full evidence.
+- **`--validate-findings-budget`** `SEC`: Total wall-clock budget (seconds) for scan-time finding validation per scan (default: **120**). Findings past the budget stay unannotated and remain validatable on demand from the dashboard.
+- **`--validate-findings-narrative`**: Additionally generate a **thinking-enabled LLM narrative** for each scan-time verdict (uses the deep model, stored in the `finding_validations.json` sidecar; off by default — increases scan time). Narrative reasoning is captured as collapsible thought segments in the dashboard; verdicts with no signal to explain (`insufficient_signal`, `error`) are skipped, and the narrative phase shares the same wall-clock budget.
 - **`--poc-hints`**: Log optional high-level PoC hint bullets from structured findings only (**no** extra LLM call; **does not** run code).
 - **`--poc-assist`**: Ask the deep model for a standalone executable PoC (script or commands) from findings; **logged only** — OASIS does not run generated code.
 - **`--custom-instructions`**: Extra text appended to deep-analysis and **`--poc-assist`** prompts (merged with the file variant below; does **not** inject into the dashboard assistant system prompt—the assistant uses the canonical report JSON and optional RAG).
 - **`--custom-instructions-file`**: UTF-8 file merged with **`--custom-instructions`** (file first, then inline text).
 - `--threshold` `-t`: Similarity threshold (default: 0.5)
+- **`--suppressions-file` `PATH`**: JSON registry of suppressed finding fingerprints; matching findings are exported with a native **SARIF suppressions** entry. See [Suppression registry](#readme-suppressions).
+- **`--write-suppression-candidates`**: Write `suppression_candidates.json` in the run output listing every finding fingerprint to copy into a registry.
+- **`--inline-ignore`** / **`--no-inline-ignore`**: Honor inline ignore markers on source lines (e.g. `# noqa`, `# oasisignore`) and drop annotated findings before validation and reports (default: **on**). See [Inline ignore markers](#readme-inline-ignore).
+- **`--inline-ignore-tokens`** `CSV`: Comma-separated ignore markers to honor (default: `oasisignore,nosec,noqa,nosemgrep`).
+- **`--fail-on` `SEVERITY`**: Exit with code **3** when the run reports findings at or above this severity [critical, high, medium, low] (case-insensitive). See [CI integration](#readme-ci-integration).
 - `--vulns` `-v`: Vulnerability types to check (comma-separated or 'all')
 - `--chunk-size` `-ch`: Maximum size of text chunks for embedding (default: auto-detected)
 
@@ -275,6 +292,15 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 - `--small-model-thinking` `-smt`: Enable/disable thinking for the quick scan model [yes,no] (default: no)
 - `--embed-model` `-em`: Embedding model(s); in audit mode, supports a comma-separated list (example: `-em nomic-embed-text,bge-m3`) (default: nomic-embed-text)
 - `--list-models` `-lm`: List available models and exit
+- **`--provider`**: Model backend — `ollama` (native API, auto-pull) or `openai` (OpenAI-compatible server: vLLM, LM Studio, llama.cpp, LocalAI...) (default: `ollama`, env `OASIS_LLM_PROVIDER`)
+- **`--api-base`**: Base URL of the OpenAI-compatible server, e.g. `https://llm.example.com/v1` (default: `http://localhost:8000/v1`, env `OASIS_OPENAI_BASE_URL`)
+- **`--api-key`**: API key for the OpenAI-compatible server (default: env `OASIS_OPENAI_API_KEY`, else `local`; never logged).
+- **`--embed-provider`**: Embedding backend — `ollama` (native API) or `openai` (OpenAI-compatible embedding server: vLLM, llama.cpp, LiteLLM...). Default: **inherits the chat backend** (`--provider`), so chat and embedding workloads can still be routed to separate servers with an explicit flag (env `OASIS_EMBED_PROVIDER`). See [Model providers](#readme-model-providers).
+- **`--embed-api-base`**: Base URL of the OpenAI-compatible embedding server (default: inherited from `--api-base`; env `OASIS_EMBED_OPENAI_BASE_URL`).
+- **`--embed-api-key`**: API key for the OpenAI-compatible embedding server (default: inherited from `--api-key`; env `OASIS_EMBED_OPENAI_API_KEY`; never logged).
+- **`--report-model`** `-rm`: Consolidation model — after a multi-model run, merge the per-model findings into one consolidated report (deterministic fingerprint groups; the model synthesizes the narrative). See [Consolidated multi-model report](#readme-consolidated).
+
+See [Model providers](#readme-model-providers) for details and per-server examples.
 
 ### Cache Management
 - `--clear-cache-embeddings` `-cce`: Clear embeddings cache before starting
@@ -287,14 +313,20 @@ oasis -i [path_to_analyze] -sm gemma3:4b -m llama3:latest,codellama:latest -t 0.
 - `--web-password` `-wpw`: Web interface password (if not specified, a random password will be generated)
 - `--web-port` `-wp`: Web interface port (default: 5000)
 - **`--web-ollama-url`**: Ollama HTTP API URL for the in-dashboard assistant (overridden by `OASIS_WEB_OLLAMA_URL`, otherwise same as `--ollama-url`).
+- **`--web-provider`**: Model backend for the dashboard assistant (default: same as `--provider`, env `OASIS_WEB_LLM_PROVIDER`).
+- **`--web-api-base`**: OpenAI-compatible base URL for the dashboard assistant (default: same as `--api-base`, env `OASIS_WEB_OPENAI_BASE_URL`).
+- **`--web-api-key`**: API key for the dashboard assistant backend (default: same as `--api-key`, env `OASIS_WEB_OPENAI_API_KEY`).
 - **`--web-embed-model`**: Embedding model for optional RAG over the local `.oasis_cache` pickle (defaults to the report’s `embed_model` or `nomic-embed-text`).
+- **`--web-embed-provider`**: Embedding backend for assistant RAG queries (default: same as `--embed-provider`, else the chat backend; env `OASIS_WEB_EMBED_PROVIDER`).
+- **`--web-embed-api-base`**: OpenAI-compatible base URL for assistant RAG embeddings (default: same as `--embed-api-base`, else the chat `--web-api-base`; env `OASIS_WEB_EMBED_OPENAI_BASE_URL`).
+- **`--web-embed-api-key`**: API key for assistant RAG embeddings (default: same as `--embed-api-key`, else the chat `--web-api-key`; env `OASIS_WEB_EMBED_OPENAI_API_KEY`).
 - **`--web-assistant-rag` / `--no-web-assistant-rag`**: Use embedding-cache retrieval in assistant answers (default: on).
 
 For **JSON** reports, the dashboard modal includes an **Assistant** panel (triage, codebase context). Optional 0-based file/chunk/finding indices focus the model on one structured finding; RAG uses the same project root and cache file as the scan when available.
 
 Assistant replies are rendered as **Markdown** (sanitized HTML). Model “thinking” sections wrapped in tags such as `<think>…</think>` are stripped from the visible answer and shown in collapsible blocks when present.
 
-**Chat persistence** stores each conversation under `security_reports/<project_slug>/<run_timestamp>/.../json/.../<report>.json` in a sibling `chat/` folder (one JSON file per session). The UI can resume the latest session, start a new chat, or delete saved sessions. Data stays on the server filesystem next to your reports (no separate database). REST endpoints: `GET /api/assistant/sessions`, `GET /api/assistant/session`, `POST /api/assistant/chat`, **`POST /api/assistant/chat-stream`** (NDJSON progressive replies—the UI falls back to `POST /api/assistant/chat` when streaming is unavailable), `POST /api/assistant/session-branch`, `DELETE /api/assistant/session`, `DELETE /api/assistant/sessions`.
+**Chat persistence** stores each conversation under `security_reports/<project_slug>/<run_timestamp>/.../json/.../<report>.json` in a sibling `chat/` folder (one JSON file per session). The UI can resume the latest session, start a new chat, or delete saved sessions. Data stays on the server filesystem next to your reports (no separate database). REST endpoints: `GET /api/assistant/sessions`, `GET /api/assistant/session`, `POST /api/assistant/chat`, **`POST /api/assistant/chat-stream`** (NDJSON progressive replies—the UI falls back to `POST /api/assistant/chat` when streaming is unavailable), `POST /api/assistant/session-branch`, `DELETE /api/assistant/session`, `DELETE /api/assistant/sessions`. Scan-time verdicts are served from a sibling **`finding_validations.json`** sidecar via `GET /api/assistant/finding-validations?report_path=…` (with `finding_scope_report_path=…` in executive aggregate mode) and also feed the chat system prompt when no session validation exists.
 
 ### Logging and Debug
 - `--debug` `-d`: Enable debug output
@@ -302,13 +334,22 @@ Assistant replies are rendered as **Markdown** (sanitized HTML). Model “thinki
 
 ### Special Modes
 - `--audit` `-a`: Run embedding distribution analysis
-- `--ollama-url` `-ol`: Ollama URL (default: http://localhost:11434)
+- `--ollama-url` `-ol`: Ollama URL (default: http://localhost:11434; used when `--provider` is `ollama`)
 - `--version` `-V`: Show OASIS version and exit
 
 ### Environment overrides (advanced)
 
 Optional **`OASIS_*`** variables tune timeouts and heuristic budgets without editing code (see `oasis/config.py` for the full list). Examples:
 
+- **`OASIS_LLM_PROVIDER`** — default model backend (`ollama` | `openai`) when `--provider` is not set.
+- **`OASIS_OPENAI_BASE_URL`** — OpenAI-compatible base URL when `--api-base` is not set.
+- **`OASIS_OPENAI_API_KEY`** — API key for OpenAI-compatible servers (never logged).
+- **`OASIS_OPENAI_CTX_TOKENS`** — declared context window (tokens) of OpenAI-compatible models; used for chunk sizing and assistant budget (the OpenAI protocol does not expose it).
+- **`OASIS_OPENAI_STRUCTURED_OUTPUT`** — `auto` (default: send `response_format` JSON schema, fall back to schema-in-prompt on HTTP 4xx), `on` (always send, surface errors), `off` (schema-in-prompt only).
+- **`OASIS_OPENAI_THINKING_KWARGS`** — `auto` (default: translate the `-mt`/`-smt` thinking flags into vLLM-style `chat_template_kwargs.enable_thinking`, retry without it on HTTP 4xx), `on` (always translate, surface errors), `off` (never send — strict servers).
+- **`OASIS_EMBED_PROVIDER`** — embedding backend (`ollama` | `openai`); defaults to the chat backend configuration when unset.
+- **`OASIS_EMBED_OPENAI_BASE_URL`** / **`OASIS_EMBED_OPENAI_API_KEY`** — embedding server settings when the embedding provider is `openai`.
+- **`OASIS_WEB_EMBED_PROVIDER`** / **`OASIS_WEB_EMBED_OPENAI_BASE_URL`** / **`OASIS_WEB_EMBED_OPENAI_API_KEY`** — dashboard assistant RAG embeddings (fall back to the scan-side embedding backend, then the chat backend).
 - **`OASIS_WEB_OLLAMA_URL`** — Ollama base URL for the dashboard assistant when `--web-ollama-url` is not set.
 - **`OASIS_CHUNK_ANALYZE_TIMEOUT_SEC`** — server-side deadline for one Ollama generate call (seconds).
 - **`OASIS_CHUNK_DEEP_NUM_PREDICT`** — cap on structured deep output tokens (`num_predict`).
@@ -317,6 +358,112 @@ Optional **`OASIS_*`** variables tune timeouts and heuristic budgets without edi
 - **`OASIS_STRUCTURED_DEGENERACY_*`** — thresholds for repetitive structured-output detection.
 
 Higher limits increase worst-case latency and memory use on the Ollama host.
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-ci-integration"></a>
+
+## 🤝 CI integration
+
+### Failing a pipeline on severity (`--fail-on`)
+
+Pass **`--fail-on <SEVERITY>`** to make OASIS exit with code **3** when the finished run reports at least one finding at or above the given severity (`critical`, `high`, `medium`, `low`; case-insensitive). The gate reads the canonical JSON documents of the run after analysis completes, so it covers every deep model of the pass. Operational failures still exit with **1** and argparse usage errors with **2**, keeping the three outcomes distinguishable in CI.
+
+```bash
+oasis -i ./my-project -m qwen2.5-coder:14b --fail-on high
+# → exit 0: no finding at or above High
+# → exit 3: N finding(s) at or above High
+# → exit 1: operational failure (backend unreachable, no models, ...)
+```
+
+The gate summary is logged at the end of the run with per-severity counts, e.g. `CI gate --fail-on high: findings at or above threshold: 2 (low=3, medium=1, high=2, critical=0)`.
+
+### GitHub Actions example
+
+Combine `--fail-on` with the SARIF export (`-of sarif` or `all`) and upload the result to GitHub Code Scanning:
+
+```yaml
+- name: Run OASIS security scan
+  id: oasis
+  continue-on-error: true
+  run: |
+    oasis -i . -m qwen2.5-coder:14b --fail-on high -of sarif
+
+- name: Upload SARIF
+  if: always()
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: security_reports/**/sarif/*.sarif
+```
+
+> The scan step uses `continue-on-error` so the SARIF upload still happens when the gate trips (exit 3); the job result then reflects the OASIS exit code.
+
+### E2E fixture checks (manual/dev)
+
+`scripts/e2e_fixture_scan.py` runs the CLI against the bundled realistic fixtures (`test_files/realistic_app/`, 5 languages) on a reduced vulnerability set (default: the Injection family — SQL Injection, Command Injection, XSS) and prints a per-(language, vulnerability) pass/fail table from the canonical JSON reports, scan-time verdicts included. It needs a live LLM server, so it stays a manual/dev gate rather than a CI test:
+
+```bash
+python scripts/e2e_fixture_scan.py \
+  --provider openai --api-base http://llm.example.com/v1 \
+  --model Qwen/Qwen2.5-Coder-32B-Instruct --embed-model bge-m3
+```
+
+See `test_files/realistic_app/README.md` for fixture details and expectations.
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-model-providers"></a>
+
+## 🤝 Model providers (backends)
+
+OASIS talks to local LLM servers through a **backend abstraction** (`oasis/backends/`). Two providers ship out of the box:
+
+| Provider | Flag | Servers | Notes |
+|----------|------|---------|-------|
+| `ollama` (default) | `-ol` / `--ollama-url` | Ollama | Auto-pulls missing models, detects runtime context (`ps()`), per-model `think` support |
+| `openai` | `--api-base` / `--api-key` | **vLLM**, LM Studio, llama.cpp server, LocalAI, LiteLLM, ... | Any server exposing `/v1/chat/completions`, `/v1/embeddings`, `/v1/models` |
+
+### vLLM example
+
+```bash
+oasis -i /path/to/codebase \
+  --provider openai \
+  --api-base https://llm.example.com/v1 \
+  -m Qwen/Qwen2.5-Coder-32B-Instruct \
+  -sm Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+- Model ids must exactly match what the server serves (check `oasis --provider openai --api-base URL -lm`); there is **no auto-pull** — deploy/serve the models on the server first.
+- Embeddings run on the same server by default (`/v1/embeddings`); point `-em` at a served embedding model (e.g. `nomic-embed-text` on LM Studio / vLLM with `--task embed`). To route embeddings to a different server instead, see [Embedding backend](#readme-embed-backend) below.
+- Declare the model context with **`OASIS_OPENAI_CTX_TOKENS`** so chunk sizing and the assistant budget adapt (the OpenAI protocol does not expose context windows).
+- Structured outputs are sent as `response_format` JSON schemas; on servers that reject them, OASIS automatically retries with the schema appended to the prompt (see `OASIS_OPENAI_STRUCTURED_OUTPUT`).
+- Thinking flags (`-mt` / `-smt`) map to `chat_template_kwargs.enable_thinking` (vLLM convention) so reasoning models like Qwen3 honor the OASIS default (`thinking off` = no reasoning tokens); on servers rejecting the field, OASIS retries without it (see `OASIS_OPENAI_THINKING_KWARGS`). When thinking is left enabled, reasoning tokens consume the `max_tokens` budget.
+- Dashboard assistant: `--web-provider openai --web-api-base ...` (or nothing — it follows the scan backend by default).
+
+Provider selection precedence: `--provider` → `OASIS_LLM_PROVIDER` → auto (`openai` when an API base is set, else `ollama`).
+
+<a id="readme-embed-backend"></a>
+
+### 🔀 Embedding backend (independent routing)
+
+Chat (scan / deep / assistant) and **embedding** are two different LLM workloads; OASIS resolves them independently so they can be spread across servers — e.g. embeddings on a dedicated local RAG server while the chat models run elsewhere.
+
+| Workload | Flags | Default |
+|----------|-------|---------|
+| Chat (scan/deep) | `--provider`, `--api-base`, `--api-key` | Ollama (`--ollama-url`) |
+| Embeddings | `--embed-provider`, `--embed-api-base`, `--embed-api-key` | **Inherited from the chat backend** (same provider / base URL / API key); explicit `--embed-*` flags override |
+| Assistant RAG embeddings | `--web-embed-provider`, `--web-embed-api-base`, `--web-embed-api-key` | Same as the scan-side embedding backend, then the chat backend |
+
+```bash
+# Chat models and embeddings on the same OpenAI-compatible server (default inheritance)
+oasis -i ./my-project --provider openai --api-base https://llm.example.com/v1 -m Qwen/Qwen2.5-Coder-32B-Instruct
+
+# Embeddings on a dedicated OpenAI-compatible server instead
+oasis -i ./my-project --provider openai --api-base https://llm.example.com/v1 \
+  --embed-provider openai --embed-api-base http://127.0.0.1:9999/v1 -em nomic-embed-text
+```
+
+Embedding backend precedence: `--embed-provider` → `OASIS_EMBED_PROVIDER` → auto (`openai` when an embedding API base is set) → **the chat backend configuration** (`--provider` / `--api-base` / `--api-key`) → local Ollama. The dashboard assistant RAG follows the same policy: `--web-embed-*` → `OASIS_WEB_EMBED_*` → the scan-side embedding backend → the chat backend. Both routed backends are logged at startup, and every embed model must be **available on its backend** (`/v1/models` match for OpenAI-compatible servers, local pull for Ollama) — startup aborts with a clear `Model not available` error otherwise. When the RAG embedding backend fails at query time, the dashboard assistant shows a ⚠️ notice on the affected answer.
 
 <p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
 
@@ -369,7 +516,7 @@ Analysis is orchestrated by a single **LangGraph** pipeline:
 3. **Expand** — widen suspicious chunk context within budget (retries capped by **`--langgraph-max-expand`**)  
 4. **Deep** — `ChunkDeepAnalysis` for flagged chunks  
 5. **Verify** — schema consistency; may loop back to **Expand** when retries remain  
-6. **Report** — vulnerability reports + executive summary  
+6. **Report** — vulnerability reports + executive summary; duplicate findings from the deep pass (same file + identical snippet fingerprint or overlapping resolved lines) are **merged automatically** beforehand — the best finding of each cluster (highest severity, then longest snippet) is kept at its original position and duplicates are dropped **before** validation and report writing, so every artifact (canonical JSON, stats, exports, sidecar, diff baseline) sees the deduplicated list; with **`--validate-findings`** (default: on) each finding is deterministically validated right before its report is written (verdicts embedded in the reports and visible as badges)  
 7. **PoC stage (optional)** — **`--poc-hints`** (hint bullets from findings) and/or **`--poc-assist`** (LLM-produced executable PoC text, not run by OASIS)
 
 Within each run you still choose a **scan model** (`-sm`) and **deep model(s)** (`-m`) as before.
@@ -577,8 +724,16 @@ The finding-validation flow is designed so the **verdict stays deterministic**, 
 4. **Post-verdict entry-point filtering is presentation-only**  
    After the deterministic verdict is computed, `entry_points` are filtered for presentation when the finding family is **flow** or **access**, reducing unrelated noise in the "Related to" panel and optional narrative. This filtering does **not** change verdict semantics (`status`, `confidence`, `summary`), and `config` findings keep their original entry-point payload.
 
-5. **Optional LLM narrative with no-invention guardrails**  
-   When synthesis is enabled (`synthesize_narrative`, default `true`) and a chat model is available, the API may return `narrative_markdown`. That narrative is secondary, must not contradict the deterministic verdict, is focused with the same sink anchor (`scope_focus`), and must not invent files, paths, call chains, or evidence absent from the deterministic JSON.
+5. **Optional LLM narrative with no-invention guardrails**
+   When synthesis is enabled (`synthesize_narrative`, default `true`) and a chat model is available, the API may return `narrative_markdown`. That narrative is secondary, must not contradict the deterministic verdict, is focused with the same sink anchor (`scope_focus`), and must not invent files, paths, call chains, or evidence absent from the deterministic JSON. Narrative synthesis requests **thinking** by default (`think=True`): reasoning models' chain-of-thought — either the non-streaming `reasoning_content` channel or inline think tags — is captured as `narrative_thought_segments` and rendered as collapsible thought segments next to the narrative; models/servers that refuse thinking are retried once without it so the narrative still succeeds.
+
+6. **Scan-time validation is automatic**
+   The same deterministic validator runs **during the scan** (after each vulnerability type's deep pass) and embeds a compact verdict (`status`, `confidence`, `summary`, backend) in the canonical reports (`files[].chunk_analyses[].findings[].validation`), also rendered in the HTML/Markdown exports with a color-coded **status badge** next to the severity pill in each finding summary (dashboard modal and saved HTML/PDF reports). Verdicts are deduplicated per `(file, line)` anchor and gated by `--validate-findings-budget`; findings past the budget stay unannotated and can still be validated on demand from the dashboard, where the full evidence (entry points, call chains, taint flows) is returned. With **`--validate-findings-narrative`** (off by default), a thinking-enabled LLM narrative is additionally generated per verdict with the deep model and persisted into the sidecar (same budget, no narrative for `insufficient_signal`/`error` verdicts).
+
+7. **Full scan-time evidence in the assistant panel**  
+   The scan also persists every full investigation payload beside the report as a **`finding_validations.json` sidecar** (same stable finding keys as chat sessions). Selecting a finding in the assistant panel shows the complete scan-time verdict — scope, entry points, taint flows, call chains, mitigations — even before any chat session exists (a **Scan-time** pill marks the origin). Finding selection is a **single flat picker** (one `<select>` grouped per file, one entry per finding with title, severity and source line) instead of the former cascading File/Chunk/Finding dropdowns. Every finding in the **Detailed analysis** section also carries a **💬 Ask AI** button (dashboard previews only) that selects the finding, reveals the scan-time verdict, scrolls to the assistant and focuses the chat input. The chat system prompt (`FINDING_VALIDATION_JSON`) falls back to the sidecar too, so the assistant can discuss the verdict from the first message; a session validation (manual *Validate findings*, with LLM narrative) always wins over the sidecar, and a **Generate narrative** button on scan-time panels triggers a live re-validation that persists the narrated result into the active session.
+
+**Language coverage**: the deterministic catalog (`oasis/helpers/vuln/validation_patterns.py`) provides entry points, taint sources, sinks and mitigations for Python (Flask/Django/FastAPI/CLI), JavaScript/Node (Express), PHP (superglobals/Laravel), Ruby (Rails), Java (Servlet/Spring/JDBC/JPA), C#/.NET (ASP.NET Core, Razor, Blazor, desktop), Go (net/http/gin/echo/fiber), Kotlin (ktor) and Rust (axum/actix/rocket/warp). Adding support for a new framework only touches that catalog file.
 
 <p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
 
@@ -664,6 +819,122 @@ oasis --input [path_to_analyze] --audit -em qwen3-embedding:4b,bge-m3
    ```
 
 The Audit Mode is especially valuable for large codebases where a full scan might be time-consuming, allowing you to make informed decisions about where to focus your security analysis efforts.
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-suppressions"></a>
+
+## 🧹 Suppression registry
+
+OASIS can persist triage decisions ("this finding is a known false positive") in a **suppressions registry** and carry them into future scans.
+
+### Registry format
+
+A JSON file (recommended location: **`<project>/.oasis_suppressions.json`**) mapping **finding fingerprints** to a triage entry:
+
+```json
+{
+  "version": 1,
+  "suppressions": {
+    "sha256:9f2c…": { "note": "intentional test sink, covered by unit tests" }
+  }
+}
+```
+
+A flat `{"sha256:…": "note"}` form is also accepted. The **fingerprint** is a stable content hash of (file path + vulnerability type + normalized vulnerable snippet), so the same unfixed finding keeps its identity across runs even when titles, severities, or chunk boundaries change. Missing or malformed registry files fail open (the scan runs, a warning is logged).
+
+### Usage
+
+```bash
+# 1. List every finding fingerprint of a run to build your registry
+oasis -i ./my-project -m qwen2.5-coder:14b --write-suppression-candidates
+# → security_reports/<project>/<run>/suppression_candidates.json
+
+# 2. Copy the fingerprints you consider false positives into .oasis_suppressions.json with a note
+
+# 3. Future runs mark matching findings in the SARIF export
+oasis -i ./my-project -m qwen2.5-coder:14b --suppressions-file .oasis_suppressions.json -of sarif
+```
+
+Matching findings are **not removed** — they are exported with a native SARIF 2.1.0 `suppressions` entry (`kind: "logical"`, `status: "accepted"`, your note as justification), so GitHub Code Scanning and other SARIF consumers can filter them, and the canonical JSON stays untouched for auditability. A log line summarizes how many findings matched the registry at the end of the run.
+
+<a id="readme-inline-ignore"></a>
+
+## 🚫 Inline ignore markers
+
+Findings whose source lines carry an ignore marker are **dropped from the reports**. The marker is honored on the vulnerable lines themselves, on the line right after the snippet (trailing-comment convention), and inside the quoted snippet. Default markers: **`oasisignore`** (OASIS-specific) plus the common ecosystem triage tokens **`noqa`**, **`nosec`**, **`nosemgrep`**, matched case-insensitively on any line of the span.
+
+```python
+# Known test-only sink — skipped by OASIS from the next scans
+password = "hunter2"  # oasisignore
+```
+
+```bash
+# Default behavior (on): annotated findings never reach the reports
+oasis -i ./my-project -m qwen2.5-coder:14b
+
+# Keep annotated findings visible in the reports
+oasis -i ./my-project -m qwen2.5-coder:14b --no-inline-ignore
+
+# Honor only your own marker
+oasis -i ./my-project -m qwen2.5-coder:14b --inline-ignore-tokens oasisignore
+```
+
+Notes:
+
+- Detection is deterministic and language-agnostic (no comment-syntax parsing); a marker on the line **above** the vulnerable line is deliberately not honored (it may belong to another statement).
+- The scan still sees annotated code (no LLM-cost change); the filter runs right after the deep pass, **before** scan-time validation, so ignored findings consume no validation budget.
+- Chunk notes are rewritten when findings are dropped: the section displays **`N finding(s) skipped via inline ignore marker`** with the original LLM notes kept after `Original notes:` for traceability.
+- Combine with the [Suppression registry](#readme-suppressions) for cross-run triage of findings that cannot be annotated in code.
+- Unreadable files fail open: the finding is kept and a warning is logged.
+
+<a id="readme-scan-diff"></a>
+
+## 🔄 Scan diff (baseline)
+
+Pass **`--diff-against PATH`** to compare the finished run with a previous run and write a **diff report** under the current run output:
+
+- **`diff/diff_report.json`** — canonical document (`report_type: "diff"`, schema `DiffReportDocument`)
+- **`diff/diff_report.md`** — human-readable Markdown sibling
+
+Findings are matched across runs by a **stable fingerprint** (file path + vulnerability type + normalized vulnerable snippet), so buckets stay accurate even when titles, severities, or chunk boundaries change:
+
+- **New** — fingerprint present in the current run only
+- **Fixed** — fingerprint present in the baseline only
+- **Persistent** — present in both; a severity change is tracked separately (and the finding stays listed as persistent)
+
+```bash
+# Scan 1 (baseline)
+oasis -i ./my-project -pn my-project -m qwen2.5-coder:14b
+# Scan 2, compared with scan 1
+oasis -i ./my-project -pn my-project -m qwen2.5-coder:14b \
+  --diff-against security_reports/my-project/<run_timestamp>
+```
+
+The baseline `PATH` accepts a **run directory** (`security_reports/<project>/<timestamp>`), a **model directory** (containing `json/`), a `json` directory, or a **single canonical JSON file**. Executive-summary, audit, and progress documents are ignored; only `report_type: "vulnerability"` documents participate. A per-run log line summarizes the buckets, e.g. `Scan diff vs baseline: new=1 fixed=2 persistent=9 severity_changes=1`.
+
+<p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
+
+<a id="readme-consolidated"></a>
+
+## 🧩 Consolidated multi-model report
+
+When several deep models run in the same pass (`-m model-a,model-b`), each model writes its own report subtree. Pass **`-rm/--report-model MODEL`** to merge all per-model findings of the run into one **consolidated report**:
+
+- **`consolidated/consolidated_report.json`** — canonical document (`report_type: "consolidated"`, schema `ConsolidatedReportDocument`)
+- **`consolidated/consolidated_report.md`** — human-readable Markdown sibling
+
+The merge is **deterministic**: findings are grouped by the same stable fingerprint as the scan diff (file + vulnerability type + normalized snippet) and bucketed by confirmation — *confirmed by all models*, *confirmed by several models*, *single-model findings* — with per-model severities kept side by side. The report model is then asked **only to narrate** an executive overview, a prioritized action list and remediation guidance from a compact digest of the groups (structured output; it never re-detects findings). An LLM failure degrades to a narrative-less document — the grouping still stands on its own.
+
+```bash
+# Two deep models + a third model for the consolidated narrative
+oasis -i ./my-project -m qwen2.5-coder:32b,deepseek-r1:32b -rm qwen2.5-coder:14b
+# → consolidated/consolidated_report.json + .md in the run output
+```
+
+Runs with a single model skip the feature (a log line explains it). The digest sent to the model is capped by **`OASIS_REPORT_CONSOLIDATION_DIGEST_MAX_CHARS`** (default 24000, best-confirmed groups kept first). The per-model reports stay untouched — the consolidated document is an additive, cross-model view.
+
+The dashboard lists it under the **`Consolidated`** pseudo-model; opening it renders the canonical JSON preview (TOC, summary buckets, narrative, per-bucket group tables).
 
 <p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
 

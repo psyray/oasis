@@ -13,7 +13,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from .think_parse import parse_assistant_think
-from oasis.ollama_manager import OllamaManager
+from oasis.backends.base import ModelBackend
 from oasis.schemas.analysis import AssistantInvestigationResult
 
 logger = logging.getLogger(__name__)
@@ -158,12 +158,19 @@ def build_synthesis_messages(
 def enrich_investigation_with_llm_narrative(
     result: AssistantInvestigationResult,
     *,
-    ollama_manager: OllamaManager,
+    ollama_manager: ModelBackend,
     chat_model: str,
     max_context_chars: int = _DEFAULT_CONTEXT_CAP,
     temperature: float = 0.2,
+    enable_thinking: bool = True,
 ) -> AssistantInvestigationResult:
-    """Return a copy of ``result`` with ``narrative_markdown`` filled when successful."""
+    """Return a copy of ``result`` with ``narrative_markdown`` filled when successful.
+
+    Thinking is requested by default (``think=True``) so reasoning models expose
+    their chain-of-thought for validation narratives; captured segments land in
+    ``narrative_thought_segments``. Models/servers that refuse thinking are
+    retried once without it so the narrative still succeeds.
+    """
     model = (chat_model or "").strip()
     if not model:
         return result
@@ -184,21 +191,46 @@ def enrich_investigation_with_llm_narrative(
             ),
         )
     try:
-        resp = ollama_manager.chat(
-            model, messages, options={"temperature": normalized_temperature}
-        )
+        chat_kwargs: Dict[str, Any] = {"options": {"temperature": normalized_temperature}}
+        if enable_thinking:
+            chat_kwargs["think"] = True
+        resp = ollama_manager.chat(model, messages, **chat_kwargs)
     except Exception as exc:
-        logger.warning(
-            "Investigation narrative LLM call failed model=%s err=%s",
+        if not enable_thinking:
+            logger.warning(
+                "Investigation narrative LLM call failed model=%s err=%s",
+                model,
+                type(exc).__name__,
+                exc_info=True,
+            )
+            return result.model_copy(
+                update={
+                    "synthesis_error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+        # Thinking requested but the model/server refused it — retry once
+        # without so non-reasoning models still get a narrative.
+        logger.info(
+            "Investigation narrative with thinking failed model=%s err=%s; retrying without thinking",
             model,
             type(exc).__name__,
-            exc_info=True,
         )
-        return result.model_copy(
-            update={
-                "synthesis_error": f"{type(exc).__name__}: {exc}",
-            }
-        )
+        try:
+            resp = ollama_manager.chat(
+                model, messages, options={"temperature": normalized_temperature}
+            )
+        except Exception as retry_exc:
+            logger.warning(
+                "Investigation narrative LLM call failed model=%s err=%s",
+                model,
+                type(retry_exc).__name__,
+                exc_info=True,
+            )
+            return result.model_copy(
+                update={
+                    "synthesis_error": f"{type(retry_exc).__name__}: {retry_exc}",
+                }
+            )
 
     if _oasis_log.isEnabledFor(logging.DEBUG):
         _oasis_log.debug(
@@ -212,9 +244,17 @@ def enrich_investigation_with_llm_narrative(
         raw = ""
     split = parse_assistant_think(raw)
     narrative = (split.visible_markdown or raw).strip()
+    thought_segments = list(split.thought_segments)
+    # Reasoning models surface their chain-of-thought in a dedicated channel
+    # (ollama native ``thinking``; OpenAI-compatible ``reasoning_content`` is
+    # normalized to it by the backends).
+    channel_thinking = msg.get("thinking") if isinstance(msg, dict) else ""
+    if isinstance(channel_thinking, str) and channel_thinking.strip():
+        thought_segments.insert(0, channel_thinking.strip())
     return result.model_copy(
         update={
             "narrative_markdown": narrative,
+            "narrative_thought_segments": thought_segments,
             "synthesis_model": model,
             "synthesis_error": None,
         }

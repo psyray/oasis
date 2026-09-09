@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
-PATTERNS_VERSION = 1
+PATTERNS_VERSION = 5
 
 
 # --------------------------------------------------------------------------- #
@@ -43,7 +43,17 @@ ENTRY_POINTS: Dict[str, List[Tuple[str, str]]] = {
         (r"@(?:Get|Post|Put|Delete|Patch|Request)Mapping\s*\(\s*(?:value\s*=\s*)?['\"]([^'\"]+)['\"]", "spring_mapping"),
     ],
     "laravel": [
-        (r"\bRoute::(get|post|put|delete|patch|any)\s*\(\s*['\"]([^'\"]+)['\"]", "laravel_route"),
+        (r"\bRoute::(?:get|post|put|delete|patch|any)\s*\(\s*['\"]([^'\"]+)['\"]", "laravel_route"),
+    ],
+    "php": [
+        # Native PHP request dispatch: superglobals read from the request body.
+        # Each superglobal access marks a place where user-controlled data
+        # enters the program (procedural scripts, index.php?action=… routers).
+        (r"\$_GET\s*\[", "php_get"),
+        (r"\$_POST\s*\[", "php_post"),
+        (r"\$_REQUEST\s*\[", "php_request"),
+        (r"\$_FILES\s*\[", "php_files"),
+        (r"\$argv\s*\[", "php_argv"),
     ],
     "rails": [
         (r"^\s*(?:get|post|put|delete|patch)\s+['\"]([^'\"]+)['\"]", "rails_route"),
@@ -80,6 +90,31 @@ ENTRY_POINTS: Dict[str, List[Tuple[str, str]]] = {
         (r"@(?:app|celery)\.task\b", "celery_task"),
         (r"\bon_message\s*\(", "queue_on_message"),
     ],
+    "go": [
+        # net/http
+        (r"\bhttp\.HandleFunc\s*\(\s*['\"]([^'\"]+)['\"]", "go_handle_func"),
+        # gin / echo (upper-case verbs on short receivers)
+        (r"\b(?:r|router|engine|e)\.(?:GET|POST|PUT|DELETE|PATCH|Any)\s*\(\s*['\"]([^'\"]+)['\"]", "gin_echo_route"),
+        # fiber / chi (capitalized-first verbs)
+        (r"\b(?:app|r|router|server)\.(?:Get|Post|Put|Delete|Patch|All)\s*\(\s*['\"]([^'\"]+)['\"]", "fiber_chi_route"),
+    ],
+    "rust": [
+        # rocket / actix attribute macros
+        (r"#\[(?:get|post|put|delete|patch)\s*\(\s*['\"]([^'\"]+)['\"]", "rocket_actix_route"),
+        # axum / actix builder
+        (r"\.route\s*\(\s*['\"]([^'\"]+)['\"]", "axum_route"),
+        (r"\bweb::(?:resource|scope)\s*\(\s*['\"]([^'\"]+)['\"]", "actix_resource"),
+        (r"\bwarp::path!?\s*\(\s*['\"]([^'\"]+)['\"]", "warp_path"),
+    ],
+    "kotlin": [
+        # ktor routing DSL (bare verb calls inside routing { })
+        (r"^\s*(?:get|post|put|delete|patch)\s*\(\s*['\"]([^'\"]+)['\"]", "ktor_route"),
+    ],
+    "scala": [
+        # Play framework controllers
+        (r"^\s*def\s+\w+\s*=\s*Action\b", "play_action_def"),
+        (r"\bAction\s*(?:\.async)?\s*\{", "play_action_block"),
+    ],
 }
 
 
@@ -96,6 +131,10 @@ SOURCES: Dict[str, List[str]] = {
         r"\breq\.query\b",
         r"\brouter\.query\b",
         r"\bparams\.get\s*\(",
+        # PHP superglobals
+        r"\$_GET\s*\[",
+        r"\$_POST\s*\[",
+        r"\$_REQUEST\s*\[",
         # ASP.NET Core
         r"\bRequest\.Query\[",
         r"\bRequest\.Form\[",
@@ -103,6 +142,32 @@ SOURCES: Dict[str, List[str]] = {
         r"\[FromForm\b",
         r"\[FromRoute\b",
         r"\[FromBody\b",
+        # Ruby / Rails
+        r"\bparams\s*\[",
+        r"\bparams\.require\s*\(",
+        r"\bparams\.fetch\s*\(",
+        # Go (net/http + gin/echo/chi/fiber contexts)
+        r"\br\.(?:FormValue|PostFormValue|ParseForm)\s*\(",
+        r"\br\.URL\.Query\s*\(\s*\)",
+        r"\br\.Form\s*\[",
+        r"\bc\.(?:Param|Query|PostForm)\s*\(",
+        r"\bctx\.QueryParam\s*\(",
+        # Java (Servlet + Spring annotations)
+        r"\brequest\.getParameter\s*\(",
+        r"@Request(?:Param|Body|Part)\b",
+        r"@(?:Path|Query|Form|Matrix)Param\b",
+        # Kotlin (ktor request contexts)
+        r"\bcall\.parameters\s*\[",
+        r"\bcall\.receive\s*[<(]",
+        r"\bcall\.request\.queryParameters\b",
+        # Scala (Play)
+        r"\brequest\.getQueryString\s*\(",
+        # Go (gorilla/mux, chi route params)
+        r"\bvars\s*\[",
+        r"\bchi\.URLParam\s*\(",
+        # Rust (axum / actix extractors)
+        r"\b(?:Query|Path|Form|Json|Payload)<",
+        r"\bweb::(?:Query|Path|Form|Json|Payload)\b",
     ],
     "http_headers": [
         r"\brequest\.headers\b",
@@ -114,6 +179,15 @@ SOURCES: Dict[str, List[str]] = {
         r"\bRequest\.Headers\[",
         r"\bRequest\.Cookies\[",
         r"\[FromHeader\b",
+        r"\$_COOKIE\s*\[",
+        r"\$_SERVER\[\s*['\"]HTTP_",
+        # Go header reads
+        r"\br\.Header\.Get\s*\(",
+        r"\bc\.GetHeader\s*\(",
+        # Java header reads
+        r"\brequest\.getHeader\s*\(",
+        # Ruby cookie reads
+        r"\bcookies\s*\[:",
     ],
     "http_body": [
         r"\brequest\.body\b",
@@ -122,16 +196,29 @@ SOURCES: Dict[str, List[str]] = {
         r"\breq\.body\b",
         r"\bRequest\.Body\b",
         r"\bHttpContext\.Request\.Body\b",
+        r"file_get_contents\s*\(\s*['\"]php://input",
+        r"\$HTTP_RAW_POST_DATA\b",
+        # Go request body readers
+        r"\bioutil\.ReadAll\s*\(\s*r\.Body\s*\)",
+        r"\bjson\.NewDecoder\s*\(\s*r\.Body\s*\)",
+        # Java request body readers
+        r"\brequest\.getReader\s*\(",
+        r"\brequest\.getInputStream\s*\(",
     ],
     "http_file_upload": [
         r"\brequest\.files\b",
         r"\brequest\.FILES\b",
         r"\breq\.files\b",
         r"\bMultipartFile\b",
+        r"\$_FILES\s*\[",
+        # Go / Java multipart uploads
+        r"\br\.FormFile\s*\(",
+        r"\brequest\.getPart\s*\(",
     ],
     "env_var": [
         r"\bos\.environ\[",
         r"\bos\.environ\.get\s*\(",
+        r"\bgetenv\s*\(",
     ],
 }
 
@@ -151,6 +238,27 @@ SINKS: Dict[str, List[str]] = {
         r"\.(?:FromSql|FromSqlRaw|FromSqlInterpolated|ExecuteSqlRaw|ExecuteSqlInterpolated)\s*\(",
         # Dapper
         r"\.(?:Query|QueryAsync|QueryFirst|QueryFirstAsync|Execute|ExecuteAsync)\s*\(",
+        # PHP database access
+        r"->\s*query\s*\(",
+        r"\bmysqli_(?:query|real_query|multi_query|prepare)\s*\(",
+        r"\b(?:pg_query|pg_exec)\s*\(",
+        r"\b(?:new\s+)?(?:PDO|SQLite3)\b",
+        # Go database/sql
+        r"\.(?:Exec|ExecContext|QueryRow|QueryRowContext|QueryContext)\s*\(",
+        # Go sqlx / GORM raw SQL
+        r"\.(?:QueryRowx|Queryx|NamedExec|NamedQuery)\s*\(",
+        r"\.Raw\s*\(",
+        # Java JDBC / JPA
+        r"\.(?:executeQuery|executeUpdate|executeBatch|executeLargeUpdate|executeLargeBatch)\s*\(",
+        r"\.(?:createQuery|createNativeQuery|createSQLQuery)\s*\(",
+        # Rust diesel query builders (turbofish-safe: .get_results::<User>())
+        r"\.(?:get_results?|get_result)\b",
+        r"\bdiesel::",
+        # Ruby / Rails raw SQL
+        r"\bfind_by_sql\s*\(",
+        r"\.where\s*\(\s*['\"][^'\"]*#\{",
+        # Node.js sqlite3 / better-sqlite3 / mysql2 / pg (object-qualified calls)
+        r"\b(?:db|database|conn|connection|pool|client)\.(?:all|get|run|each|exec|query)\s*\(",
     ],
     "os_exec": [
         r"\bsubprocess\.(?:call|run|Popen|check_output|check_call)\s*\(",
@@ -159,6 +267,26 @@ SINKS: Dict[str, List[str]] = {
         # .NET: System.Diagnostics.Process.Start(...) and ProcessStartInfo
         r"\bProcess\.Start\s*\(",
         r"\bnew\s+ProcessStartInfo\s*\(",
+        # PHP process execution
+        r"\bshell_exec\s*\(",
+        r"\bsystem\s*\(",
+        r"\bpassthru\s*\(",
+        r"\bproc_open\s*\(",
+        r"\bpopen\s*\(",
+        # Go process execution
+        r"\bexec\.Command(?:Context)?\s*\(",
+        r"\bsyscall\.Exec\s*\(",
+        # Java process execution
+        r"\bnew\s+ProcessBuilder\s*\(",
+        # Rust process execution
+        r"\bCommand::new\s*\(",
+        # Ruby process execution
+        r"\bIO\.popen\s*\(",
+        r"%x\(",
+        r"`[^`]*(?:\$\{|#\{)[^`]*`",
+        # Node.js child_process
+        r"\bchild_process\.(?:exec|execSync|execFile|execFileSync|spawn|spawnSync)\s*\(",
+        r"\b(?:execSync|spawnSync)\s*\(",
     ],
     "shell_exec": [
         r"\bshell\s*=\s*True\b",
@@ -169,15 +297,40 @@ SINKS: Dict[str, List[str]] = {
         r"\bexec\s*\(",
         r"\bFunction\s*\(\s*['\"]",
         r"\bnew\s+Function\s*\(",
+        # Java script engine evaluation
+        r"\bgetEngineByName\s*\(",
     ],
     "dynamic_import": [
         r"\b__import__\s*\(",
         r"\bimportlib\.import_module\s*\(",
+        # JVM / .NET dynamic class and type loading
+        r"\bClass\.forName\s*\(",
+        r"\bType\.GetType\s*\(",
+        r"\bAssembly\.Load\s*\(",
     ],
     "html_render": [
         r"\brender_template_string\s*\(",
         r"\bMarkup\s*\(",
         r"\|\s*safe\b",
+        # PHP reflected/stored output (echo/print render unsanitized data)
+        r"\becho\s+",
+        r"\bprint\s+",
+        r"\bprint_r\s*\(",
+        r"\bprintf?\s*\(",
+        r"\bvprintf\s*\(",
+        # C# raw response output
+        r"\bResponse\.Write\s*\(",
+        # JS template renderers and jQuery HTML writes
+        r"\bres\.render\s*\(",
+        r"\bejs\.render\s*\(",
+        r"\.html\s*\(",
+        # Go template unsafe conversions
+        r"\btemplate\.(?:HTML|JS|URL)\s*\(",
+        # Ruby ERB / Rails raw output
+        r"\bERB\.new\s*\(",
+        r"\braw\s*\(",
+        # Rails inline template rendering
+        r"\brender\s+inline:",
     ],
     "innerHTML_write": [
         r"\.innerHTML\s*=",
@@ -192,10 +345,30 @@ SINKS: Dict[str, List[str]] = {
         r"\bPath\s*\([^)]*\)\.read_text\s*\(",
         r"\bFile(?:Input|Reader)Stream\s*\(",
         r"\bfs\.(?:readFile|readFileSync|createReadStream)\s*\(",
+        r"\bfopen\s*\(",
+        r"\bfile_get_contents\s*\(",
+        r"\breadfile\s*\(",
+        # Go file reads
+        r"\bos\.ReadFile\s*\(",
+        r"\bioutil\.ReadFile\s*\(",
+        r"\bos\.Open\s*\(",
+        # Java stream/reader opens
+        r"\bnew\s+(?:FileReader|FileInputStream)\s*\(",
+        r"\bFiles\.(?:readString|readAllBytes|readAllLines|newInputStream)\s*\(",
+        # Ruby file reads
+        r"\b(?:File|IO)\.read\s*\(",
+        # Rust file reads
+        r"\bFile::open\s*\(",
+        r"\bfs::read\s*\(",
+        r"\bfs::read_to_string\s*\(",
     ],
     "path_join": [
         r"\bos\.path\.join\s*\(",
         r"\bPath\s*\([^)]*\)\s*/",
+        # Go / Java path composition
+        r"\bfilepath\.Join\s*\(",
+        r"\bpath\.Join\s*\(",
+        r"\bnew\s+File\s*\(",
     ],
     "file_include": [
         r"\b(?:include|require)(?:_once)?\s*\(",
@@ -204,6 +377,14 @@ SINKS: Dict[str, List[str]] = {
         r"\.save\s*\(",
         r"\bshutil\.copyfileobj\s*\(",
         r"\bopen\s*\([^)]*['\"][aw]b?['\"]",
+        # Go file writes
+        r"\bos\.WriteFile\s*\(",
+        r"\bioutil\.WriteFile\s*\(",
+        # Java / Ruby / Rust file writes
+        r"\bnew\s+(?:FileWriter|FileOutputStream)\s*\(",
+        r"\bFiles\.write\s*\(",
+        r"\bFile\.write\s*\(",
+        r"\bfs::write\s*\(",
     ],
     "url_fetch": [
         r"\brequests\.(?:get|post|put|delete|patch|request)\s*\(",
@@ -211,17 +392,50 @@ SINKS: Dict[str, List[str]] = {
         r"\bhttpx\.(?:get|post|put|delete|patch|request|AsyncClient)\s*\(",
         r"\bfetch\s*\(",
         r"\baxios\.(?:get|post|put|delete|patch|request)\s*\(",
+        r"\bcurl_init\s*\(",
+        r"\bcurl_exec\s*\(",
+        # Go net/http
+        r"\bhttp\.Get\s*\(",
+        r"\bhttp\.Post(?:Form)?\s*\(",
+        r"\bhttp\.NewRequest\s*\(",
+        # C# HttpClient
+        r"\.(?:GetAsync|GetStringAsync|PostAsync|PutAsync|DeleteAsync|PatchAsync|SendAsync|GetStreamAsync|GetByteArrayAsync|GetFromJsonAsync|PostAsJsonAsync)\s*\(",
+        r"\bnew\s+HttpClient\s*\(",
+        # Java HTTP clients
+        r"\bnew\s+URL\s*\(",
+        r"\bHttpURLConnection\b",
+        r"\bRestTemplate\b",
+        r"\bWebClient\b",
+        r"\bHttpClient\b",
+        # Rust reqwest
+        r"\breqwest::(?:blocking::)?get\s*\(",
+        r"\breqwest::(?:blocking::)?Client::new\s*\(",
+        # Ruby HTTP clients
+        r"\bNet::HTTP\b",
+        r"\bRestClient\.(?:get|post|put|delete)\s*\(",
     ],
     "redirect_call": [
         r"\bredirect\s*\(",
         r"\bres\.redirect\s*\(",
         r"\bHttpResponseRedirect\s*\(",
         r"\bLocation\s*:\s*",
+        # Go / C# / Java / Rails redirects
+        r"\bhttp\.Redirect\s*\(",
+        r"\bResponse\.Redirect\s*\(",
+        r"\bRedirectTo(?:Action|Route)\s*\(",
+        r"\bsendRedirect\s*\(",
+        r"\bredirect_to\s+",
     ],
     "xml_parse": [
         r"\bxml\.etree\.ElementTree\.(?:parse|fromstring|XMLParser)\s*\(",
         r"\blxml\.etree\.(?:parse|fromstring|XMLParser)\s*\(",
         r"\bDocumentBuilderFactory\b",
+        # Java XML parsers
+        r"\b(?:SAXParserFactory|XMLInputFactory|SAXReader|TransformerFactory|XmlMapper)\b",
+        # Go XML parsing
+        r"\bxml\.(?:Unmarshal|NewDecoder)\s*\(",
+        # Rust XML crates
+        r"\b(?:quick_xml|roxmltree|serde_xml_rs)::",
     ],
     "deserialize_call": [
         r"\bpickle\.loads?\s*\(",
@@ -229,12 +443,24 @@ SINKS: Dict[str, List[str]] = {
         r"\bjsonpickle\.decode\s*\(",
         r"\bObjectInputStream\s*\(",
         r"\bunserialize\s*\(",
+        # Ruby deserialization
+        r"\bMarshal\.load\s*\(",
+        r"\bYAML\.load(?:_file)?\s*\(",
+        # Java deserialization
+        r"\bXMLDecoder\b",
+        r"\bXStream\b",
+        # Go deserialization of untrusted payloads
+        r"\bgob\.NewDecoder\s*\(",
+        r"\byaml\.Unmarshal\s*\(",
     ],
     "db_get_by_id": [
         r"\.get\s*\(\s*(?:id|pk)\s*=",
         r"\.objects\.get\s*\(",
         r"\.find(?:One|ById)\s*\(",
         r"\bfindById\s*\(",
+        # Ruby / Rails record lookups
+        r"\.find_by\s*\(",
+        r"\.find\s*\(\s*params\s*\[",
     ],
     "object_lookup": [
         r"\bget_object_or_404\s*\(",
@@ -243,6 +469,9 @@ SINKS: Dict[str, List[str]] = {
         # Treat any POST/PUT/DELETE/PATCH route declaration as a state-changing sink
         r"methods\s*=\s*\[[^\]]*['\"](?:POST|PUT|DELETE|PATCH)['\"]",
         r"@(?:app|bp|router)\.(?:post|put|delete|patch)\b",
+        # Express verb routes and Rails routes.rb DSL
+        r"\b(?:app|router|api)\.(?:post|put|delete|patch)\s*\(\s*['\"]",
+        r"^\s*(?:post|put|delete|patch)\s+['\"]",
     ],
     "auth_check": [
         r"\bcheck_password\s*\(",
@@ -293,6 +522,15 @@ MITIGATIONS: Dict[str, List[str]] = {
         r"\.execute\s*\([^,)]+,\s*[\(\[]",
         r"\bparamstyle\b",
         r"\?\s*,\s*[\(\[]",
+        # JDBC prepared-statement setters
+        r"\.(?:setString|setInt|setLong|setDouble|setFloat|setObject|setDate|setTimestamp|setBigDecimal)\s*\(",
+        # Rails / gorm SQL placeholders and Rails hash conditions
+        r"\.where\s*\(\s*['\"][^'\"]*\?",
+        r"\.Where\s*\(\s*['\"][^'\"]*\?",
+        r"\.where\s*\(\s*[a-z_]\w*\s*:",
+        # PostgreSQL / Go ordinal placeholders ("WHERE id = $1") — require SQL
+        # keywords on the same line to avoid currency strings like "$100".
+        r"['\"][^'\"]*(?i:SELECT|INSERT|UPDATE|DELETE|WHERE|VALUES)[^'\"]*\$\d+",
     ],
     "orm_query": [
         r"\b(?:Model|session|db|objects)\.(?:filter|filter_by|query|all|first|get)\s*\(",
@@ -307,6 +545,7 @@ MITIGATIONS: Dict[str, List[str]] = {
     ],
     "shlex_quote": [
         r"\bshlex\.quote\s*\(",
+        r"\bescapeshellarg\s*\(",
     ],
     "allowlist_cmd": [
         r"\bif\s+cmd\s+in\s+\{?\[",
@@ -320,6 +559,14 @@ MITIGATIONS: Dict[str, List[str]] = {
         r"\bescape\s*\(",
         r"\bencodeURIComponent\s*\(",
         r"\bDOMPurify\.sanitize\s*\(",
+        r"\bhtmlspecialchars\s*\(",
+        r"\bhtmlentities\s*\(",
+        r"\bstrip_tags\s*\(",
+        # Go / Ruby / Java (OWASP Encoder) output escaping
+        r"\bhtml\.EscapeString\s*\(",
+        r"\btemplate\.HTMLEscape(?:String)?\s*\(",
+        r"\bCGI\.escapeHTML\s*\(",
+        r"\bEncode\.for(?:Html|HtmlAttribute|HtmlContent|Java|CssUrl|Uri)\s*\(",
     ],
     "bleach_clean": [
         r"\bbleach\.clean\s*\(",
@@ -335,6 +582,9 @@ MITIGATIONS: Dict[str, List[str]] = {
     "path_normalize": [
         r"\bos\.path\.(?:realpath|abspath|normpath)\s*\(",
         r"\bPath\s*\([^)]*\)\.resolve\s*\(",
+        # Go / Java path normalization
+        r"\bfilepath\.(?:Clean|Abs)\s*\(",
+        r"\.(?:getCanonicalPath|toRealPath)\s*\(",
     ],
     "basename_only": [
         r"\bos\.path\.basename\s*\(",
@@ -362,6 +612,8 @@ MITIGATIONS: Dict[str, List[str]] = {
         r"\bjsonschema\.validate\s*\(",
         r"\bvalidator\s*\(",
         r"\bjoi\.validate\s*\(",
+        # Ruby strong parameters
+        r"\.\s*permit\s*\(",
     ],
     "regex_validate": [
         r"\bre\.(?:match|fullmatch)\s*\(",
@@ -387,6 +639,9 @@ MITIGATIONS: Dict[str, List[str]] = {
     "disable_entity_loader": [
         r"resolve_entities\s*=\s*False",
         r"setFeature\s*\(\s*['\"]http://apache.org/xml/features/disallow-doctype-decl['\"]",
+        # Java secure XML processing
+        r"\bXMLConstants\.(?:FEATURE_SECURE_PROCESSING|ACCESS_EXTERNAL_DTD|ACCESS_EXTERNAL_SCHEMA)\b",
+        r"setSupportingExternalEntities\s*\(\s*false\s*\)",
     ],
     "safe_loader": [
         r"\byaml\.safe_load\s*\(",
@@ -439,6 +694,13 @@ CONTROLS: Dict[str, List[str]] = {
         r"@jwt_required\b",
         r"\bisAuthenticated\s*\(",
         r"\bpassport\.authenticate\s*\(",
+        # Java method security
+        r"@PreAuthorize\b",
+        r"@Secured\b",
+        r"@RolesAllowed\b",
+        # Rails authentication filters
+        r"\bauthenticate_user!\b",
+        r"\bbefore_action\s+:authenticate",
     ],
     "ownership_check": [
         r"if\s+[\w\.]+\.(?:user|owner|author)_id\s*==\s*",

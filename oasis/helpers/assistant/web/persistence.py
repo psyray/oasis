@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from ....schemas.analysis import ANALYSIS_SCHEMA_VERSION
 from ...context.path_containment import is_path_within_root
 
 CHAT_SCHEMA_VERSION = 3
@@ -92,6 +93,79 @@ def chat_dir_for_report_json(resolved_report: Path) -> Path:
     """Per-report chat directory ``<parent>/<stem>/chat`` (isolated per JSON file)."""
     stem = resolved_report.stem
     return (resolved_report.parent / stem / "chat").resolve()
+
+
+def finding_validations_sidecar_path(resolved_report: Path) -> Path:
+    """Scan-time sidecar ``<parent>/<stem>/finding_validations.json`` (beside the chat dir)."""
+    return (resolved_report.parent / resolved_report.stem / "finding_validations.json").resolve()
+
+
+def load_finding_validations_sidecar(resolved_report: Path) -> Optional[Dict[str, Any]]:
+    """Load the scan-time sidecar document for *resolved_report* (defensive parse)."""
+    path = finding_validations_sidecar_path(resolved_report)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def get_scan_finding_validation(
+    resolved_report: Path,
+    finding_key: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Return one scan-time validation dict from the sidecar for *finding_key*."""
+    if not isinstance(finding_key, str) or not finding_key.strip():
+        return None
+    doc = load_finding_validations_sidecar(resolved_report)
+    if not doc:
+        return None
+    validations = doc.get("validations")
+    if not isinstance(validations, dict):
+        return None
+    raw = validations.get(finding_key)
+    return dict(raw) if isinstance(raw, dict) else None
+
+
+def merge_scan_finding_validations_sidecar(
+    resolved_report: Path,
+    vulnerability_name: str,
+    results_by_key: Dict[str, Dict[str, Any]],
+) -> int:
+    """Merge scan-time validations into the sidecar; returns the number of keys written.
+
+    Existing entries for other finding keys are preserved; keys supplied here are
+    overwritten with the newest scan results.
+    """
+    if not isinstance(results_by_key, dict) or not results_by_key:
+        return 0
+    path = finding_validations_sidecar_path(resolved_report)
+    prev = load_finding_validations_sidecar(resolved_report)
+    validations: Dict[str, Dict[str, Any]] = {}
+    if prev and isinstance(prev.get("validations"), dict):
+        validations = _coerce_finding_validations_map(prev.get("validations"))
+    for fk, result in results_by_key.items():
+        ks = str(fk).strip()
+        if ks and isinstance(result, dict):
+            validations[ks] = dict(result)
+    doc = {
+        "schema_version": ANALYSIS_SCHEMA_VERSION,
+        "report_type": "finding_validations",
+        "generated_at": utc_now_iso(),
+        "vulnerability_name": vulnerability_name or "",
+        "validations": validations,
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(doc, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    except OSError:
+        return 0
+    return sum(1 for fk in results_by_key if str(fk).strip())
 
 
 def validate_session_id(session_id: str) -> bool:

@@ -1,5 +1,7 @@
 """CLI validation tests for OasisScanner (argparse helpers, argument rules)."""
 
+from __future__ import annotations
+
 import argparse
 import shutil
 import sys
@@ -55,10 +57,20 @@ class TestOasisCliParsing(unittest.TestCase):
         max_expand: int,
         poc_hints: bool,
         poc_assist: bool,
+        validate_findings: bool = True,
+        validate_findings_budget: float = 120.0,
+        validate_findings_narrative: bool = False,
+        inline_ignore: bool = True,
+        inline_ignore_tokens: str | None = None,
     ):
         self.assertEqual(namespace.langgraph_max_expand_iterations, max_expand)
         self.assertEqual(namespace.poc_hints, poc_hints)
         self.assertEqual(namespace.poc_assist, poc_assist)
+        self.assertIs(namespace.validate_findings, validate_findings)
+        self.assertEqual(namespace.validate_findings_budget, validate_findings_budget)
+        self.assertIs(namespace.validate_findings_narrative, validate_findings_narrative)
+        self.assertIs(namespace.inline_ignore, inline_ignore)
+        self.assertEqual(namespace.inline_ignore_tokens, inline_ignore_tokens)
 
     def test_parse_yes_no_accepts_yes_no(self):
         self.assertTrue(OasisScanner._parse_yes_no_flag("yes"))
@@ -94,6 +106,152 @@ class TestOasisCliParsing(unittest.TestCase):
             self._assert_langgraph_flags(ns, max_expand=4, poc_hints=True, poc_assist=True)
             ns2 = self._parse_cli_args(parser, td)
             self._assert_langgraph_flags(ns2, max_expand=2, poc_hints=False, poc_assist=False)
+        finally:
+            shutil.rmtree(td)
+
+    def test_validate_findings_flags_disable_and_budget(self):
+        scanner = OasisScanner()
+        parser = scanner.setup_argument_parser()
+        td = tempfile.mkdtemp()
+        try:
+            ns = self._parse_cli_args(
+                parser,
+                td,
+                "--no-validate-findings",
+                "--validate-findings-budget",
+                "30",
+            )
+            self._assert_langgraph_flags(
+                ns,
+                max_expand=2,
+                poc_hints=False,
+                poc_assist=False,
+                validate_findings=False,
+                validate_findings_budget=30.0,
+            )
+            ns2 = self._parse_cli_args(parser, td, "--validate-findings", "--validate-findings-budget", "45.5")
+            self._assert_langgraph_flags(
+                ns2,
+                max_expand=2,
+                poc_hints=False,
+                poc_assist=False,
+                validate_findings=True,
+                validate_findings_budget=45.5,
+            )
+        finally:
+            shutil.rmtree(td)
+
+    def test_inline_ignore_flags_default_disable_and_custom_tokens(self):
+        scanner = OasisScanner()
+        parser = scanner.setup_argument_parser()
+        td = tempfile.mkdtemp()
+        try:
+            ns = self._parse_cli_args(parser, td)
+            self._assert_langgraph_flags(
+                ns,
+                max_expand=2,
+                poc_hints=False,
+                poc_assist=False,
+                inline_ignore=True,
+                inline_ignore_tokens=None,
+            )
+            ns2 = self._parse_cli_args(
+                parser,
+                td,
+                "--no-inline-ignore",
+                "--inline-ignore-tokens",
+                "noqa,nosec",
+            )
+            self._assert_langgraph_flags(
+                ns2,
+                max_expand=2,
+                poc_hints=False,
+                poc_assist=False,
+                inline_ignore=False,
+                inline_ignore_tokens="noqa,nosec",
+            )
+            ns3 = self._parse_cli_args(parser, td, "--inline-ignore")
+            self._assert_langgraph_flags(
+                ns3,
+                max_expand=2,
+                poc_hints=False,
+                poc_assist=False,
+                inline_ignore=True,
+            )
+        finally:
+            shutil.rmtree(td)
+
+    def test_embed_backend_flags_parse(self):
+        scanner = OasisScanner()
+        parser = scanner.setup_argument_parser()
+        td = tempfile.mkdtemp()
+        try:
+            ns = self._parse_cli_args(
+                parser,
+                td,
+                "--embed-provider",
+                "openai",
+                "--embed-api-base",
+                "http://127.0.0.1:9999/v1",
+                "--embed-api-key",
+                "k1",
+            )
+            self.assertEqual(ns.embed_provider, "openai")
+            self.assertEqual(ns.embed_api_base, "http://127.0.0.1:9999/v1")
+            self.assertEqual(ns.embed_api_key, "k1")
+            self.assertIsNone(ns.web_embed_provider)
+            self.assertIsNone(ns.web_embed_api_base)
+            self.assertIsNone(ns.web_embed_api_key)
+
+            ns2 = self._parse_cli_args(
+                parser,
+                td,
+                "--web-embed-provider",
+                "openai",
+                "--web-embed-api-base",
+                "http://127.0.0.1:9998/v1",
+                "--web-embed-api-key",
+                "k2",
+            )
+            self.assertEqual(ns2.web_embed_provider, "openai")
+            self.assertEqual(ns2.web_embed_api_base, "http://127.0.0.1:9998/v1")
+            self.assertEqual(ns2.web_embed_api_key, "k2")
+        finally:
+            shutil.rmtree(td)
+
+    def test_report_model_flag_parse(self):
+        scanner = OasisScanner()
+        parser = scanner.setup_argument_parser()
+        td = tempfile.mkdtemp()
+        try:
+            ns = self._parse_cli_args(parser, td)
+            self.assertIsNone(ns.report_model)
+            ns2 = self._parse_cli_args(parser, td, "-rm", "qwen2.5-coder:7b")
+            self.assertEqual(ns2.report_model, "qwen2.5-coder:7b")
+        finally:
+            shutil.rmtree(td)
+
+    def test_validate_findings_narrative_flag_default_off_and_opt_in(self):
+        scanner = OasisScanner()
+        parser = scanner.setup_argument_parser()
+        td = tempfile.mkdtemp()
+        try:
+            ns = self._parse_cli_args(parser, td)
+            self._assert_langgraph_flags(
+                ns,
+                max_expand=2,
+                poc_hints=False,
+                poc_assist=False,
+                validate_findings_narrative=False,
+            )
+            ns2 = self._parse_cli_args(parser, td, "--validate-findings-narrative")
+            self._assert_langgraph_flags(
+                ns2,
+                max_expand=2,
+                poc_hints=False,
+                poc_assist=False,
+                validate_findings_narrative=True,
+            )
         finally:
             shutil.rmtree(td)
 
@@ -270,6 +428,7 @@ class TestOasisAuditMode(unittest.TestCase):
             project_name="my_proj",
         )
         scanner.ollama_manager = MagicMock()
+        scanner.embed_model_manager = MagicMock()
         scanner.report = MagicMock()
         vuln_mapping = {"xss": {"name": "XSS"}}
 
@@ -316,7 +475,9 @@ class TestOasisAuditMode(unittest.TestCase):
             chunk_size=None,
         )
         scanner.ollama_manager = MagicMock()
+        scanner.embed_model_manager = MagicMock()
         scanner.ollama_manager.detect_optimal_chunk_size.return_value = 1024
+        scanner.embed_model_manager.detect_optimal_chunk_size.return_value = 1024
         scanner.report = MagicMock()
         vuln_mapping = {"xss": {"name": "XSS"}}
 
@@ -339,7 +500,7 @@ class TestOasisAuditMode(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(
-            scanner.ollama_manager.detect_optimal_chunk_size.call_args_list,
+            scanner.embed_model_manager.detect_optimal_chunk_size.call_args_list,
             [unittest.mock.call("embed-a")],
         )
         first_model_args = manager_cls.call_args_list[1].args[0]
@@ -357,7 +518,9 @@ class TestOasisAuditMode(unittest.TestCase):
             chunk_size=7372,
         )
         scanner.ollama_manager = MagicMock()
+        scanner.embed_model_manager = MagicMock()
         scanner.ollama_manager.detect_optimal_chunk_size.return_value = 1536
+        scanner.embed_model_manager.detect_optimal_chunk_size.return_value = 1536
         scanner.report = MagicMock()
         vuln_mapping = {"xss": {"name": "XSS"}}
 
@@ -380,7 +543,7 @@ class TestOasisAuditMode(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(
-            scanner.ollama_manager.detect_optimal_chunk_size.call_args_list,
+            scanner.embed_model_manager.detect_optimal_chunk_size.call_args_list,
             [unittest.mock.call("embed-a")],
         )
 
@@ -393,7 +556,9 @@ class TestOasisAuditMode(unittest.TestCase):
             chunk_size=None,
         )
         scanner.ollama_manager = MagicMock()
+        scanner.embed_model_manager = MagicMock()
         scanner.ollama_manager.detect_optimal_chunk_size.return_value = None
+        scanner.embed_model_manager.detect_optimal_chunk_size.return_value = None
         scanner.report = MagicMock()
         vuln_mapping = {"xss": {"name": "XSS"}}
 
@@ -429,7 +594,9 @@ class TestOasisAuditMode(unittest.TestCase):
             chunk_size=None,
         )
         scanner.ollama_manager = MagicMock()
+        scanner.embed_model_manager = MagicMock()
         scanner.ollama_manager.detect_optimal_chunk_size.side_effect = RuntimeError("boom")
+        scanner.embed_model_manager.detect_optimal_chunk_size.side_effect = RuntimeError("boom")
         scanner.report = MagicMock()
         vuln_mapping = {"xss": {"name": "XSS"}}
 
@@ -463,6 +630,7 @@ class TestOasisAuditMode(unittest.TestCase):
             chunk_size=0,
         )
         scanner.ollama_manager = MagicMock()
+        scanner.embed_model_manager = MagicMock()
         scanner.report = MagicMock()
         vuln_mapping = {"xss": {"name": "XSS"}}
 
@@ -488,7 +656,7 @@ class TestOasisAuditMode(unittest.TestCase):
             any("Invalid manual --chunk-size" in m for m in messages),
             f"Expected invalid chunk-size warning in {messages!r}",
         )
-        scanner.ollama_manager.detect_optimal_chunk_size.assert_not_called()
+        scanner.embed_model_manager.detect_optimal_chunk_size.assert_not_called()
         first_model_args = manager_cls.call_args_list[1].args[0]
         self.assertEqual(first_model_args.chunk_size, MAX_CHUNK_SIZE)
 
@@ -500,6 +668,7 @@ class TestOasisAuditMode(unittest.TestCase):
             input_path="/tmp/project",
         )
         scanner.ollama_manager = MagicMock()
+        scanner.embed_model_manager = MagicMock()
         scanner.report = MagicMock()
         vuln_mapping = {"xss": {"name": "XSS"}}
 
@@ -531,7 +700,9 @@ class TestOllamaInitOrdering(unittest.TestCase):
         fake_manager.ensure_model_available.return_value = True
         fake_manager.detect_optimal_chunk_size.return_value = 36864
 
-        with patch("oasis.oasis.OllamaManager", return_value=fake_manager):
+        with patch("oasis.oasis.create_model_manager", return_value=fake_manager), patch(
+            "oasis.oasis.create_embed_model_manager", return_value=fake_manager
+        ):
             result = scanner._init_ollama()
 
         self.assertTrue(result)
@@ -561,11 +732,15 @@ class TestOllamaInitOrdering(unittest.TestCase):
         fake_manager.check_connection.return_value = True
         fake_manager.ensure_model_available.return_value = False
 
-        with patch("oasis.oasis.OllamaManager", return_value=fake_manager):
+        with patch("oasis.oasis.create_model_manager", return_value=fake_manager), patch(
+            "oasis.oasis.create_embed_model_manager", return_value=fake_manager
+        ), patch("oasis.oasis.logger") as logger_mock:
             result = scanner._init_ollama()
 
         self.assertFalse(result)
         fake_manager.detect_optimal_chunk_size.assert_not_called()
+        error_texts = " ".join(str(call.args[0]) for call in logger_mock.error.call_args_list)
+        self.assertIn("not available on the embedding backend", error_texts)
 
 
 class TestOasisInitFlow(unittest.TestCase):

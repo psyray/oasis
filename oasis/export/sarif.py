@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List
 
+from ..helpers.suppressions import finding_fingerprint
 from ..schemas.analysis import VulnerabilityFinding, VulnerabilityReportDocument
 
 SARIF_SCHEMA = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json"
@@ -51,6 +52,7 @@ def vulnerability_document_to_sarif(
     doc: VulnerabilityReportDocument,
     *,
     tool_version: str,
+    suppressions: dict[str, dict[str, str]] | None = None,
 ) -> Dict[str, Any]:
     """
     Map a ``VulnerabilityReportDocument`` to a SARIF 2.1.0 ``sarifLog`` object.
@@ -59,6 +61,10 @@ def vulnerability_document_to_sarif(
     ``snippet_start_line`` / ``snippet_end_line`` when present (resolved from
     ``vulnerable_code`` inside the analyzed chunk); otherwise falls back to the
     chunk span. ``region.snippet`` carries ``vulnerable_code`` when present.
+
+    ``suppressions`` maps finding fingerprints to registry entries; matched
+    results carry a native SARIF ``suppressions`` entry (kind ``logical``,
+    status ``accepted``) with the registry note as justification.
     """
     rule_id = _slug_rule_id(doc.vulnerability_name)
     vuln_meta: Dict[str, Any] = doc.vulnerability if isinstance(doc.vulnerability, dict) else {}
@@ -113,6 +119,18 @@ def vulnerability_document_to_sarif(
                         "oasisFindingIndex": finding_index,
                     },
                 }
+                if suppressions:
+                    registry_entry = suppressions.get(
+                        finding_fingerprint(file_entry.file_path, doc.vulnerability_name, finding.vulnerable_code)
+                    )
+                    if registry_entry is not None:
+                        result["suppressions"] = [
+                            {
+                                "kind": "logical",
+                                "status": "accepted",
+                                "justification": str(registry_entry.get("note") or "Suppressed via OASIS registry"),
+                            }
+                        ]
                 results.append(result)
 
     run: Dict[str, Any] = {

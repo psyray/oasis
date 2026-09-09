@@ -11,6 +11,7 @@ import re
 import secrets
 import socket
 import string
+import threading
 from threading import Thread
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -53,6 +54,8 @@ from .config import DEFAULT_ARGS, REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, V
 from .config import OLLAMA_URL
 from .export.filenames import (
     AUDIT_REPORT_ARTIFACT_STEM,
+    CONSOLIDATED_REPORT_ARTIFACT_STEM,
+    RUN_ARTIFACT_SUBDIR_NAMES,
     artifact_filename,
     report_dir_glob_for_format,
 )
@@ -79,7 +82,8 @@ from .helpers.dashboard import (
 )
 from .helpers.progress import SCAN_PROGRESS_EXTENDED_KEYS, coerce_scan_progress_event_version
 from .report import Report, executive_summary_progress_sidecar_path, is_executive_summary_progress_sidecar
-from .ollama_manager import OllamaManager
+from .backends import create_embed_model_manager, create_model_manager, resolve_provider_choice, ModelBackend
+from .config import LLM_PROVIDER_OLLAMA, LLM_PROVIDER_OPENAI
 from .helpers.analysis_root_path import (
     CODEBASE_UNAVAILABLE_DETAIL,
     CODEBASE_UNAVAILABLE_SHORT,
@@ -147,11 +151,14 @@ from .helpers.assistant.web.persistence import (
     ensure_session_views,
     finding_validation_storage_key,
     get_finding_validation_for_branch,
+    get_scan_finding_validation,
+    load_finding_validations_sidecar,
     list_chat_sessions,
     load_chat_session,
     merge_finding_validation_into_session,
     new_session_id,
     normalize_validated_messages_for_storage,
+    resolve_report_json,
     save_chat_session,
     save_session_branch_messages,
     utc_now_iso,
@@ -181,6 +188,10 @@ from .tools import parse_iso_date, parse_report_date
 logger = logging.getLogger(__name__)
 
 _CODEBASE_ACCESS_STATE_CACHE_MAX = 512
+
+# Pseudo-model name under which run-level consolidated multi-model reports are
+# listed in the dashboard (issue #60).
+_CONSOLIDATED_DASHBOARD_MODEL_NAME = "Consolidated"
 
 
 def normalize_dashboard_project_key(value: Any) -> str:
@@ -291,9 +302,21 @@ class WebServer:
         web_password=None,
         web_port=5000,
         web_ollama_url=None,
+        web_provider=None,
+        web_api_base=None,
+        web_api_key=None,
         web_embed_model=None,
+        web_embed_provider=None,
+        web_embed_api_base=None,
+        web_embed_api_key=None,
         web_assistant_rag=True,
         default_ollama_url=None,
+        default_provider=None,
+        default_api_base=None,
+        default_api_key=None,
+        default_embed_provider=None,
+        default_embed_api_base=None,
+        default_embed_api_key=None,
     ):
         """Initialize a dashboard server bound to a single runtime session.
 
@@ -307,10 +330,23 @@ class WebServer:
         self.web_password = web_password
         self.web_port = web_port
         self.web_ollama_url = web_ollama_url
+        self.web_provider = web_provider
+        self.web_api_base = web_api_base
+        self.web_api_key = web_api_key
         self.web_embed_model = web_embed_model
+        self.web_embed_provider = web_embed_provider
+        self.web_embed_api_base = web_embed_api_base
+        self.web_embed_api_key = web_embed_api_key
         self.web_assistant_rag = bool(web_assistant_rag)
         self._default_ollama_url = default_ollama_url or OLLAMA_URL
-        self._assistant_ollama_manager: Optional[OllamaManager] = None
+        self._default_provider = default_provider
+        self._default_api_base = default_api_base
+        self._default_api_key = default_api_key
+        self._default_embed_provider = default_embed_provider
+        self._default_embed_api_base = default_embed_api_base
+        self._default_embed_api_key = default_embed_api_key
+        self._assistant_ollama_manager: Optional[ModelBackend] = None
+        self._embed_ollama_manager: Optional[ModelBackend] = None
         self.report_data = None
         self.global_stats: Optional[Dict[str, Any]] = None
         self.socketio = None
@@ -324,6 +360,11 @@ class WebServer:
         self._codebase_access_state_cache: OrderedDict[
             Tuple[Optional[str], Path], Tuple[Optional[Path], bool]
         ] = OrderedDict()
+        # Single-flight guard: concurrent dashboard requests (three parallel
+        # ``force=1`` fetches, the progress monitor) must not each walk the
+        # report tree; the first requester collects, later arrivals reuse it.
+        self._collect_lock = threading.Lock()
+        self._collect_epoch = 0
         if not isinstance(report, Report):
             raise ValueError("Report must be an instance of Report")
         
@@ -383,6 +424,7 @@ class WebServer:
         self._assistant_ollama_manager = None
         self._canonical_json_fields_cache.clear()
         self._codebase_access_state_cache.clear()
+        self._collect_epoch = 0
 
         app = Flask(
             __name__, template_folder=str(Path(__file__).parent / "templates"),
@@ -489,24 +531,42 @@ class WebServer:
             try:
                 self.collect_report_data()
                 payload = self._build_scan_progress_payload()
-                progress_key = (
-                    payload.get("completed_vulnerabilities"),
-                    payload.get("total_vulnerabilities"),
-                    payload.get("is_partial"),
-                    str(payload.get("status") or ""),
-                    payload.get("model"),
-                    payload.get("path"),
-                    payload.get("updated_at"),
-                    payload.get("active_phase"),
-                    repr(payload.get("phases")),
-                    repr(payload.get("adaptive_subphases")),
-                ) if payload else None
+                progress_key = self._progress_monitor_key(payload)
                 if payload and progress_key != self._last_emitted_progress_key:
                     self.socketio.emit("scan_progress", payload)
                     self._last_emitted_progress_key = progress_key
             except Exception:
                 logger.debug("Progress monitor loop failed", exc_info=True)
             self.socketio.sleep(self._progress_monitor_interval_seconds())
+
+    @staticmethod
+    def _progress_monitor_key(payload: dict | None):
+        """Dedup key for the realtime monitor; sensitive to every model's state."""
+        if not payload:
+            return None
+        models_digest = tuple(
+            (
+                entry.get("model"),
+                entry.get("state"),
+                entry.get("completed_vulnerabilities"),
+                entry.get("total_vulnerabilities"),
+                entry.get("updated_at"),
+            )
+            for entry in (payload.get("models_progress") or [])
+        )
+        return (
+            payload.get("completed_vulnerabilities"),
+            payload.get("total_vulnerabilities"),
+            payload.get("is_partial"),
+            str(payload.get("status") or ""),
+            payload.get("model"),
+            payload.get("path"),
+            payload.get("updated_at"),
+            payload.get("active_phase"),
+            repr(payload.get("phases")),
+            repr(payload.get("adaptive_subphases")),
+            models_digest,
+        )
 
     def emit_scan_progress(self, progress: dict) -> None:
         if not self.socketio:
@@ -516,6 +576,14 @@ class WebServer:
         else:
             return
 
+    def _attach_models_progress(self, payload: dict) -> dict:
+        """Attach per-model progress entries + overall aggregate for multi-model runs."""
+        models_progress = self._aggregate_models_scan_progress(getattr(self, "report_data", None) or [])
+        if models_progress:
+            payload["models_progress"] = models_progress
+            payload["overall"] = self._overall_scan_progress(models_progress)
+        return payload
+
     def _build_scan_progress_payload(self, progress: dict | None = None) -> dict:
         """Build realtime progress event payload from explicit or latest report progress."""
         if progress is None:
@@ -524,7 +592,7 @@ class WebServer:
             return {}
         payload = self._normalize_scan_progress_payload(progress, has_progress=True)
         payload["event_version"] = coerce_scan_progress_event_version(payload.get("event_version"))
-        return payload
+        return self._attach_models_progress(payload)
 
     @staticmethod
     def _progress_monitor_interval_seconds() -> float:
@@ -667,7 +735,13 @@ class WebServer:
             if report.get("vulnerability_type") == "Executive Summary"
             and report.get("progress")
         ]
-        summary_reports.sort(key=lambda report: report.get("date") or "", reverse=True)
+        summary_reports.sort(
+            key=lambda report: (
+                report.get("date") or "",
+                WebServer._progress_updated_at(report.get("progress")),
+            ),
+            reverse=True,
+        )
         if not summary_reports:
             return {}
         latest = summary_reports[0]
@@ -676,6 +750,159 @@ class WebServer:
         progress["date"] = latest.get("date")
         progress["path"] = latest.get("path")
         return progress
+
+    @staticmethod
+    def _progress_updated_at(progress: Any) -> str:
+        """Inner ``updated_at`` of a sidecar progress dict (tie-break within a run)."""
+        if isinstance(progress, dict):
+            value = progress.get("updated_at")
+            if isinstance(value, str):
+                return value.strip()
+        return ""
+
+    @staticmethod
+    def _run_dir_from_row_path(security_dir: Path, row_path: Any) -> Optional[Path]:
+        """Run directory for an indexed report row (``<run>/<model>/json/…`` layouts)."""
+        rel = str(row_path or "").strip().replace("\\", "/").strip("/")
+        if not rel:
+            return None
+        parts = [part for part in rel.split("/") if part]
+        if not any(is_run_timestamp_dirname(part) for part in parts):
+            return None
+        run_idx = max(i for i, part in enumerate(parts) if is_run_timestamp_dirname(part))
+        # A project slug may precede the run timestamp (nested layout): keep it so the
+        # resolved directory is security_dir/<project>/<run> when present.
+        segments = parts[: run_idx + 1]
+        return (Path(security_dir) / Path(*segments)).resolve(strict=False)
+
+    def _aggregate_models_scan_progress(self, reports: list[dict]) -> list[dict]:
+        """Per-model scan progress for the latest run (tabbed dashboard view).
+
+        Models come from the run directory layout (created upfront for every
+        deep model), so models that have not started yet appear as ``pending``;
+        started models keep their latest executive-summary sidecar state.
+        """
+        summary_rows = [
+            report
+            for report in (reports or [])
+            if report.get("vulnerability_type") == "Executive Summary" and report.get("progress")
+        ]
+        if not summary_rows:
+            return []
+        latest = self._latest_scan_progress_from_reports(summary_rows)
+        security_dir = getattr(self, "security_dir", None)
+        if security_dir is None:
+            return []
+        run_dir = self._run_dir_from_row_path(Path(security_dir), latest.get("path"))
+        if run_dir is None or not run_dir.is_dir():
+            return []
+
+        run_prefix = ""
+        try:
+            run_prefix = str(run_dir.relative_to(self.security_dir.resolve()))
+        except (ValueError, OSError):
+            return []
+        run_rows = [
+            report
+            for report in summary_rows
+            if str(report.get("path") or "").replace("\\", "/").startswith(run_prefix + "/")
+        ]
+
+        latest_by_model: Dict[str, dict] = {}
+        for row in run_rows:
+            model = str(row.get("model") or "").strip()
+            if not model:
+                continue
+            current = latest_by_model.get(model)
+            if current is None or WebServer._progress_updated_at(row.get("progress")) > WebServer._progress_updated_at(
+                current.get("progress")
+            ):
+                latest_by_model[model] = row
+
+        try:
+            model_dir_names = sorted(
+                d.name
+                for d in run_dir.iterdir()
+                if d.is_dir() and d.name not in RUN_ARTIFACT_SUBDIR_NAMES
+            )
+        except OSError:
+            model_dir_names = []
+        models = [self._desanitize_name(name) for name in model_dir_names]
+        for model in latest_by_model:
+            if model not in models:
+                models.append(model)
+
+        entries: list[dict] = []
+        for model in models:
+            row = latest_by_model.get(model)
+            if row is None:
+                entries.append(
+                    {
+                        "model": model,
+                        "state": "pending",
+                        "status": "pending",
+                        "completed_vulnerabilities": 0,
+                        "total_vulnerabilities": 0,
+                        "is_partial": True,
+                        "current_vulnerability": "",
+                        "tested_vulnerabilities": [],
+                        "phases": [],
+                        "updated_at": "",
+                        "date": latest.get("date"),
+                        "path": "",
+                    }
+                )
+                continue
+            entry = self._normalize_scan_progress_payload(
+                {**dict(row.get("progress") or {}), "model": model, "date": row.get("date"), "path": row.get("path")},
+                has_progress=True,
+            )
+            status_key = str(entry.get("status") or "").lower()
+            if status_key in {"complete", "finished", "succeeded"}:
+                entry["state"] = "complete"
+            elif status_key in {"failed", "aborted"}:
+                entry["state"] = status_key
+            else:
+                entry["state"] = "in_progress"
+            entries.append(entry)
+        return entries
+
+    @staticmethod
+    def _overall_scan_progress(models_progress: list[dict]) -> dict:
+        """Aggregate progress across the models of one run (equal weight per vuln type).
+
+        Models scan the same vulnerability list, so the overall denominator is the
+        known per-model total times the number of models in the run; pending models
+        contribute zero completed vulnerabilities.
+        """
+        if not models_progress:
+            return {}
+        known_totals = [
+            int(entry.get("total_vulnerabilities") or 0)
+            for entry in models_progress
+            if entry.get("state") != "pending"
+        ]
+        per_model_total = max(known_totals, default=0)
+        completed = sum(int(entry.get("completed_vulnerabilities") or 0) for entry in models_progress)
+        total = per_model_total * len(models_progress)
+        states = {str(entry.get("state") or "") for entry in models_progress}
+        if states and states <= {"complete"}:
+            status = "complete"
+        elif "failed" in states or "aborted" in states:
+            status = "in_progress" if any(entry.get("state") == "in_progress" for entry in models_progress) else (
+                "failed" if "failed" in states else "aborted"
+            )
+        else:
+            status = "in_progress"
+        return {
+            "completed_vulnerabilities": completed,
+            "total_vulnerabilities": total,
+            "status": status,
+            "is_partial": status != "complete",
+        }
+
+    def _scan_progress_models_total(self, models_progress: list[dict]) -> int:
+        return len(models_progress)
 
     def _generate_random_password(self, length=10):
         """Generate a random password with letters, digits and special characters"""
@@ -710,10 +937,121 @@ class WebServer:
                 return candidate
         return str(OLLAMA_URL).strip()
 
-    def _get_assistant_ollama_manager(self) -> OllamaManager:
+    def _resolve_assistant_api_base(self) -> str:
+        """OpenAI-compatible base URL for the assistant (empty string when unset)."""
+        for raw in (
+            self.web_api_base,
+            os.environ.get("OASIS_WEB_OPENAI_BASE_URL"),
+            self._default_api_base,
+        ):
+            if raw is None:
+                continue
+            if candidate := str(raw).strip():
+                return candidate
+        return ""
+
+    def _resolve_assistant_api_key(self) -> str:
+        """API key for the assistant backend (empty string falls back to config default)."""
+        for raw in (
+            self.web_api_key,
+            os.environ.get("OASIS_WEB_OPENAI_API_KEY"),
+            self._default_api_key,
+        ):
+            if raw is None:
+                continue
+            if candidate := str(raw).strip():
+                return candidate
+        return ""
+
+    def _resolve_assistant_provider(self) -> str:
+        """
+        Assistant backend provider: ``--web-provider`` → env → scan backend → auto.
+
+        Auto-detection picks the OpenAI-compatible backend when an assistant API
+        base URL is configured, else the native Ollama backend.
+        """
+        for raw in (
+            self.web_provider,
+            os.environ.get("OASIS_WEB_LLM_PROVIDER"),
+            self._default_provider,
+        ):
+            resolved = resolve_provider_choice(raw)
+            if resolved:
+                return resolved
+        if self._resolve_assistant_api_base():
+            return LLM_PROVIDER_OPENAI
+        return LLM_PROVIDER_OLLAMA
+
+    def _get_assistant_ollama_manager(self) -> ModelBackend:
         if self._assistant_ollama_manager is None:
-            self._assistant_ollama_manager = OllamaManager(self._resolve_assistant_ollama_url())
+            self._assistant_ollama_manager = create_model_manager(
+                provider=self._resolve_assistant_provider(),
+                ollama_url=self._resolve_assistant_ollama_url(),
+                api_base=self._resolve_assistant_api_base() or None,
+                api_key=self._resolve_assistant_api_key() or None,
+            )
         return self._assistant_ollama_manager
+
+    def _resolve_embed_provider(self) -> str:
+        """RAG embedding provider: ``--web-embed-provider`` → env → embedding backend → chat backend.
+
+        Embedding-specific configuration wins; when none is set, the chat backend
+        configuration is inherited (itself falling back to local Ollama), so RAG
+        embeddings can still target a dedicated server via ``--web-embed-*``.
+        """
+        for raw in (
+            self.web_embed_provider,
+            os.environ.get("OASIS_WEB_EMBED_PROVIDER"),
+            self._default_embed_provider,
+            os.environ.get("OASIS_EMBED_PROVIDER"),
+        ):
+            resolved = resolve_provider_choice(raw)
+            if resolved:
+                return resolved
+        if self._resolve_embed_api_base():
+            return LLM_PROVIDER_OPENAI
+        return self._resolve_assistant_provider()
+
+    def _resolve_embed_api_base(self) -> str:
+        """OpenAI-compatible base URL for RAG embeddings (empty string when unset)."""
+        for raw in (
+            self.web_embed_api_base,
+            os.environ.get("OASIS_WEB_EMBED_OPENAI_BASE_URL"),
+            self._default_embed_api_base,
+            os.environ.get("OASIS_EMBED_OPENAI_BASE_URL"),
+            self._resolve_assistant_api_base(),
+        ):
+            if raw is None:
+                continue
+            if candidate := str(raw).strip():
+                return candidate
+        return ""
+
+    def _resolve_embed_api_key(self) -> str:
+        """API key for RAG embeddings (empty string falls back to config default)."""
+        for raw in (
+            self.web_embed_api_key,
+            os.environ.get("OASIS_WEB_EMBED_OPENAI_API_KEY"),
+            self._default_embed_api_key,
+            os.environ.get("OASIS_EMBED_OPENAI_API_KEY"),
+            self._resolve_assistant_api_key(),
+        ):
+            if raw is None:
+                continue
+            if candidate := str(raw).strip():
+                return candidate
+        return ""
+
+    def _get_embed_ollama_manager(self) -> ModelBackend:
+        """Backend used for assistant RAG query embeddings (independent from chat)."""
+        if self._embed_ollama_manager is None:
+            self._embed_ollama_manager = create_embed_model_manager(
+                provider=self._resolve_embed_provider(),
+                ollama_url=self._resolve_assistant_ollama_url(),
+                api_base=self._resolve_embed_api_base() or None,
+                api_key=self._resolve_embed_api_key() or None,
+            )
+        return self._embed_ollama_manager
 
     def _embed_model_for_assistant(self, report_payload: Optional[Dict[str, Any]]) -> str:
         if self.web_embed_model and str(self.web_embed_model).strip():
@@ -775,7 +1113,7 @@ class WebServer:
             return "", False
 
         try:
-            client = self._get_assistant_ollama_manager().get_client()
+            client = self._get_embed_ollama_manager().get_client()
             er = client.embeddings(model=em_model, prompt=last_user[:8000])
         except Exception as exc:
             logger.warning(
@@ -898,17 +1236,52 @@ class WebServer:
                 loaded_sess = load_chat_session(
                     self.security_dir, report_rel, sid_ctx.strip()
                 )
-                return get_finding_validation_for_branch(
+                persisted = get_finding_validation_for_branch(
                     loaded_sess,
                     chat_model,
                     finding_key_for_prompt,
                 )
+                if persisted is not None:
+                    return persisted
         except Exception:
             logger.warning(
                 'Assistant chat context build failed; continuing without persisted finding validation',
                 exc_info=True,
             )
-        return None
+        # Fallback: scan-time sidecar (finding_validations.json) — the session wins
+        # when it carries a manual validation; otherwise the deterministic scan-time
+        # verdict feeds FINDING_VALIDATION_JSON even before any chat session exists.
+        try:
+            return self._assistant_load_scan_finding_validation(data, report_rel)
+        except Exception:
+            logger.warning(
+                'Assistant scan finding-validation fallback failed; continuing without it',
+                exc_info=True,
+            )
+            return None
+
+    def _assistant_load_scan_finding_validation(
+        self,
+        data: Dict[str, Any],
+        report_rel: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Load the scan-time sidecar verdict for the selected finding (no session needed)."""
+        fi, ci, gi = coerce_finding_indices(data)
+        if fi is None or ci is None or gi is None:
+            return None
+        scope_raw = data.get('finding_scope_report_path')
+        target_rel = (
+            scope_raw.strip()
+            if isinstance(scope_raw, str) and scope_raw.strip()
+            else report_rel
+        )
+        resolved = resolve_report_json(self.security_dir, target_rel)
+        if resolved is None:
+            return None
+        # Sidecar keys never carry the executive scope (they live beside the
+        # vulnerability report itself), so look up with an empty scope prefix.
+        scan_key = finding_validation_storage_key('', fi, ci, gi)
+        return get_scan_finding_validation(resolved, scan_key)
 
     def _assistant_diagnose_runtime_ctx_budget(
         self,
@@ -1721,6 +2094,44 @@ class WebServer:
                 return jsonify(prep.body), prep.status
             return self._stream_assistant_chat_response(prep)
 
+        @app.route('/api/assistant/finding-validations', methods=['GET'])
+        @login_required
+        def assistant_finding_validations():
+            """Scan-time validation sidecar (full verdict payloads) for one report.
+
+            When ``finding_scope_report_path`` is provided (executive aggregate mode),
+            the sidecar of the targeted vulnerability report is returned instead.
+            """
+            report_rel = normalize_report_rel_query_arg(request.args.get('report_path'))
+            if not report_rel:
+                return jsonify({'error': 'report_path required'}), 400
+            scope_rel = normalize_report_rel_query_arg(
+                request.args.get('finding_scope_report_path')
+            )
+            target_resolved = resolve_report_json(
+                self.security_dir, scope_rel or report_rel
+            )
+            if target_resolved is None:
+                return jsonify({'error': 'report not found'}), 404
+            doc = load_finding_validations_sidecar(target_resolved)
+            if not doc:
+                return jsonify(
+                    {
+                        'generated_at': None,
+                        'vulnerability_name': '',
+                        'validations': {},
+                    }
+                )
+            validations = doc.get('validations')
+            return jsonify(
+                {
+                    'schema_version': doc.get('schema_version'),
+                    'generated_at': doc.get('generated_at'),
+                    'vulnerability_name': doc.get('vulnerability_name') or '',
+                    'validations': validations if isinstance(validations, dict) else {},
+                }
+            )
+
         @app.route('/api/assistant/investigate', methods=['POST'])
         @login_required
         def assistant_investigate():
@@ -2149,6 +2560,10 @@ class WebServer:
                         "" if codebase_ok else CODEBASE_UNAVAILABLE_DETAIL
                     ),
                     "active_severity_filter": [tier.capitalize() for tier in severity_tiers],
+                    # Assistant panel is mounted next to the preview in the dashboard;
+                    # exported/saved reports do not carry the flag so Ask-AI buttons
+                    # stay dashboard-only.
+                    "assistant_enabled": True,
                     # Internal-only context for executive-summary detail link fallback.
                     "_security_root": security_root,
                     "_current_report_path": resolved_path,
@@ -2587,22 +3002,84 @@ class WebServer:
             return reports
 
         for run_dir, run_key, report_date in self._iter_run_directories(security_reports_dir):
-            for model_dir in (d for d in run_dir.iterdir() if d.is_dir()):
+            for model_dir in (
+                d for d in run_dir.iterdir() if d.is_dir() and d.name not in RUN_ARTIFACT_SUBDIR_NAMES
+            ):
                 model_name = self._desanitize_name(model_dir.name)
                 reports.extend(
                     self._process_model_directory(
                         model_dir, model_name, report_date, run_key
                     )
                 )
+            reports.extend(self._consolidated_report_rows(run_dir, report_date, run_key))
 
         reports.sort(key=lambda x: x["date"] or "", reverse=True)
         return reports
 
     def collect_report_data(self) -> None:
-        """Refresh ``report_data`` and ``global_stats`` from ``security_reports`` layout."""
-        reports = self._collect_reports_from_directories()
-        self.report_data = reports
-        self.global_stats = self._calculate_global_statistics(reports)
+        """Refresh ``report_data`` and ``global_stats`` from ``security_reports`` layout.
+
+        Single-flighted: concurrent callers (three parallel ``force=1``
+        dashboard fetches, the progress monitor, an explicit reload) share one
+        directory walk — callers arriving while a collect is in flight reuse
+        its result, which is already fresher than their own start.
+        """
+        epoch_on_entry = self._collect_epoch
+        with self._collect_lock:
+            if self._collect_epoch != epoch_on_entry:
+                # A concurrent collect completed while this caller waited on
+                # the lock; its snapshot is at least as fresh as our entry.
+                return
+            reports = self._collect_reports_from_directories()
+            self.report_data = reports
+            self.global_stats = self._calculate_global_statistics(reports)
+            self._collect_epoch += 1
+
+    def _consolidated_report_rows(self, run_dir: Path, report_date, run_key: str):
+        """Dashboard rows for the run-level consolidated multi-model report (issue #60)."""
+        json_path = run_dir / "consolidated" / f"{CONSOLIDATED_REPORT_ARTIFACT_STEM}.json"
+        if not json_path.is_file():
+            return []
+        rows = [
+            self._process_report_file(
+                json_path,
+                _CONSOLIDATED_DASHBOARD_MODEL_NAME,
+                "json",
+                report_date,
+                run_key,
+                run_dir / "consolidated",
+            )
+        ]
+        self._backfill_consolidated_row_context(run_dir, rows[0])
+        return rows
+
+    def _backfill_consolidated_row_context(self, run_dir: Path, row: Dict[str, Any]) -> None:
+        """Inherit ``project``/``analysis_root`` for consolidated artifacts written before
+        the fields existed, instead of flagging the codebase unreachable (⚠️ badge)."""
+        ar_current = row.get("analysis_root")
+        if isinstance(ar_current, str) and ar_current.strip():
+            return
+        try:
+            model_dirs = [
+                d for d in run_dir.iterdir()
+                if d.is_dir() and d.name not in RUN_ARTIFACT_SUBDIR_NAMES
+            ]
+        except OSError:
+            return
+        for model_dir in model_dirs:
+            for json_file in sorted((model_dir / "json").glob("*.json")):
+                project, analysis_root_raw = self._canonical_json_fields_from_path(json_file)
+                if not project and not analysis_root_raw:
+                    continue
+                resolved_root, codebase_ok = self._cached_codebase_access_state(analysis_root_raw)
+                if project and not str(row.get("project") or "").strip():
+                    row["project"] = project
+                if analysis_root_raw:
+                    row["analysis_root"] = analysis_root_raw
+                    row["analysis_root_resolved"] = str(resolved_root) if resolved_root else None
+                    row["codebase_accessible"] = codebase_ok
+                    row["assistant_context_warning"] = assistant_context_warning(not codebase_ok)
+                return
 
     def _iter_run_directories(self, security_reports_dir: Path):
         """
@@ -2918,6 +3395,10 @@ class WebServer:
         if AUDIT_REPORT_ARTIFACT_STEM in filename:
             return 'Audit Report'
 
+        # Handle consolidated multi-model report (run-level artifact; issue #60).
+        if CONSOLIDATED_REPORT_ARTIFACT_STEM in filename:
+            return 'Consolidated Report'
+
         vulnerability_patterns = {
             VULNERABILITY_MAPPING[vulnerability]['name'].lower().replace(' ', '_'): VULNERABILITY_MAPPING[vulnerability]['name']
             for vulnerability in VULNERABILITY_MAPPING
@@ -3109,7 +3590,7 @@ class WebServer:
         normalized = self._normalize_scan_progress_payload(progress, has_progress=True)
         if "event_version" in normalized:
             normalized["event_version"] = coerce_scan_progress_event_version(normalized.get("event_version"))
-        return normalized
+        return self._attach_models_progress(normalized)
 
     @staticmethod
     def _latest_scan_progress_from_filtered_reports(reports_to_analyze) -> dict:

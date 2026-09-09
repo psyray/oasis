@@ -38,6 +38,24 @@ def coerce_positive_int_line(value: Any) -> Optional[int]:
     return None
 
 
+def resolve_report_file_path(fp: Any, scan_root: Path) -> Optional[Path]:
+    """Resolve a report ``file_path`` value against *scan_root*.
+
+    Report JSON stores paths relative to the directory OASIS was launched from,
+    while *scan_root* is the analyzed folder (often a subdirectory). Try both
+    interpretations and keep whichever resolves inside *scan_root* as an
+    existing file. Returns ``None`` when no candidate fits. Shared by the
+    dashboard sink resolver and the scan-time batch validator.
+    """
+    if not isinstance(fp, str) or not fp.strip():
+        return None
+    candidates = ((scan_root / fp).resolve(strict=False), Path(fp).resolve(strict=False))
+    for candidate in candidates:
+        if is_path_within_root(candidate, scan_root) and candidate.is_file():
+            return candidate
+    return None
+
+
 def _sink_from_payload_indices(
     payload: Dict[str, Any],
     *,
@@ -56,12 +74,7 @@ def _sink_from_payload_indices(
     if not isinstance(file_entry, dict):
         return None, None
 
-    sink_file: Optional[Path] = None
-    fp = file_entry.get("file_path")
-    if isinstance(fp, str) and fp.strip():
-        candidate = (scan_root / fp).resolve(strict=False)
-        if is_path_within_root(candidate, scan_root) and candidate.is_file():
-            sink_file = candidate
+    sink_file = resolve_report_file_path(file_entry.get("file_path"), scan_root)
 
     sink_line: Optional[int] = None
     chunks = file_entry.get("chunk_analyses") or []
@@ -126,5 +139,6 @@ def resolve_sink_from_finding_indices(
 
 __all__ = [
     "coerce_positive_int_line",
+    "resolve_report_file_path",
     "resolve_sink_from_finding_indices",
 ]

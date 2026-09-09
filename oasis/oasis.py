@@ -15,6 +15,7 @@ from .config import (
     EMBEDDING_DETECTED_CHUNK_SIZE_MAX,
     EMBEDDING_DETECTED_CHUNK_SIZE_MIN,
     LANGUAGES,
+    LLM_PROVIDER_CHOICES,
     MAX_CHUNK_SIZE,
     MODEL_EMOJIS,
     REPORT,
@@ -23,7 +24,9 @@ from .config import (
 
 # Import from other modules
 from .tools import generate_timestamp, setup_logging, logger, display_logo, get_vulnerability_mapping
-from .ollama_manager import OllamaManager
+from .backends import create_embed_model_manager, create_model_manager
+from .helpers.report_consolidation import write_consolidated_report
+from .ollama_manager import OllamaManager  # noqa: F401  (compat: tests patch this symbol)
 from .embedding import EmbeddingManager
 from .analyze import SecurityAnalyzer, EmbeddingAnalyzer
 from .helpers.embedding import (
@@ -31,13 +34,26 @@ from .helpers.embedding import (
     parse_embed_models_csv,
     resolve_embed_models,
 )
+from .helpers.ignore_markers import DEFAULT_INLINE_IGNORE_TOKENS
 from .helpers.langgraph_cli import LG_PIPELINE_INFO, cli_bold, cli_emit_section_banner
+from .helpers.ci_gate import (
+    EXIT_FINDINGS_ABOVE_THRESHOLD,
+    evaluate_fail_on_gate,
+    log_fail_on_gate,
+    normalize_severity,
+)
 from .helpers.report_project import validate_project_alias_for_cli
+from .helpers.report_diff import write_diff_artifacts
+from .helpers.suppressions import (
+    count_suppressed_findings,
+    load_suppressions,
+    write_suppression_candidates,
+)
 from .report import Report
 from .web import WebServer
 
 class OasisScanner:
-    """Main class for OASIS - Ollama Automated Security Intelligence Scanner"""
+    """Main class for OASIS - Open Automated Security Intelligence Scanner"""
     
     def __init__(self):
         """Initialize the OASIS scanner"""
@@ -146,7 +162,7 @@ class OasisScanner:
     ) -> int:
         effective_fallback_chunk_size = self._resolve_chunk_size_fallback(configured_chunk_size)
         try:
-            detected_chunk_size = self.ollama_manager.detect_optimal_chunk_size(embed_model)
+            detected_chunk_size = self.embed_model_manager.detect_optimal_chunk_size(embed_model)
         except Exception as exc:
             self._log_chunk_size_fallback(
                 embed_model,
@@ -270,7 +286,7 @@ class OasisScanner:
                 return super()._split_lines(text, width)
 
         parser = argparse.ArgumentParser(
-            description='🏝️  OASIS - Ollama Automated Security Intelligence Scanner',
+            description='🏝️  OASIS - Open Automated Security Intelligence Scanner',
             formatter_class=CustomFormatter
         )
         
@@ -299,6 +315,14 @@ class OasisScanner:
                 "When provided, it overrides the default project name derived from --input. "
                 "Allowed characters: letters, digits, '_' and '-'."
             ),
+        )
+        io_group.add_argument(
+            '--diff-against',
+            dest='diff_against',
+            type=str,
+            default=None,
+            metavar='PATH',
+            help='Write a diff report (diff/diff_report.json + .md) comparing this run with a baseline: path to a run directory, model directory, json directory, or canonical JSON file',
         )
         io_group.add_argument(
             '-of',
@@ -342,6 +366,67 @@ class OasisScanner:
             help='Maximum context-expand retries after verify detects structured-output issues (default: 2)',
         )
         analysis_group.add_argument(
+            '--validate-findings',
+            dest='validate_findings',
+            action='store_true',
+            default=True,
+            help=(
+                'Run deterministic finding validation during the scan and embed verdicts '
+                'in the reports (default: on)'
+            ),
+        )
+        analysis_group.add_argument(
+            '--no-validate-findings',
+            dest='validate_findings',
+            action='store_false',
+            help='Skip scan-time finding validation (verdicts stay on-demand from the dashboard)',
+        )
+        analysis_group.add_argument(
+            '--validate-findings-budget',
+            dest='validate_findings_budget',
+            type=float,
+            default=120.0,
+            metavar='SEC',
+            help='Total wall-clock budget (seconds) for scan-time finding validation per scan (default: 120)',
+        )
+        analysis_group.add_argument(
+            '--validate-findings-narrative',
+            dest='validate_findings_narrative',
+            action='store_true',
+            default=False,
+            help=(
+                'Add a thinking-enabled LLM narrative to each scan-time finding verdict '
+                '(uses the deep model; off by default, increases scan time)'
+            ),
+        )
+        analysis_group.add_argument(
+            '--inline-ignore',
+            dest='inline_ignore',
+            action='store_true',
+            default=True,
+            help=(
+                'Drop findings whose source lines carry an ignore marker '
+                '(e.g. # noqa, # oasisignore) before validation and reports (default: on)'
+            ),
+        )
+        analysis_group.add_argument(
+            '--no-inline-ignore',
+            dest='inline_ignore',
+            action='store_false',
+            help='Keep inline-ignored findings in the reports',
+        )
+        analysis_group.add_argument(
+            '--inline-ignore-tokens',
+            dest='inline_ignore_tokens',
+            type=str,
+            default=None,
+            metavar='CSV',
+            help=(
+                'Comma-separated ignore markers honored on source lines '
+                f'(default: {",".join(DEFAULT_INLINE_IGNORE_TOKENS)})'
+            ),
+        )
+        analysis_group.add_argument(
             '--poc-hints',
             dest='poc_hints',
             action='store_true',
@@ -372,6 +457,28 @@ class OasisScanner:
             default=None,
             metavar='PATH',
             help='UTF-8 file with extra instructions for deep analysis and PoC assist (combined with --custom-instructions)',
+        )
+        analysis_group.add_argument(
+            '--suppressions-file',
+            dest='suppressions_file',
+            type=str,
+            default=None,
+            metavar='PATH',
+            help='JSON registry of suppressed finding fingerprints; matching findings are exported with a native SARIF suppressions entry (default: none)',
+        )
+        analysis_group.add_argument(
+            '--write-suppression-candidates',
+            dest='write_suppression_candidates',
+            action='store_true',
+            help='Write suppression_candidates.json in the run output listing every finding fingerprint to copy into a suppressions registry',
+        )
+        analysis_group.add_argument(
+            '--fail-on',
+            dest='fail_on',
+            type=str,
+            default=None,
+            metavar='SEVERITY',
+            help='Exit with code 3 when the run reports findings at or above this severity [critical, high, medium, low] (case-insensitive)',
         )
         analysis_group.add_argument('-t', '--threshold', type=float, default=DEFAULT_ARGS['THRESHOLD'], 
                                     help=f'Similarity threshold (default: {DEFAULT_ARGS["THRESHOLD"]})')
@@ -404,6 +511,85 @@ class OasisScanner:
         )
         model_group.add_argument('-lm', '--list-models', action='store_true',
                                 help='List available models and exit')
+        model_group.add_argument(
+            '--provider',
+            dest='provider',
+            choices=LLM_PROVIDER_CHOICES,
+            default=None,
+            metavar='{ollama,openai}',
+            help=(
+                'Model backend: "ollama" (native Ollama API, auto-pull) or "openai" '
+                '(OpenAI-compatible server: vLLM, LM Studio, llama.cpp, LocalAI...) '
+                '(default: ollama, env OASIS_LLM_PROVIDER)'
+            ),
+        )
+        model_group.add_argument(
+            '--api-base',
+            dest='api_base',
+            type=str,
+            default=None,
+            metavar='URL',
+            help=(
+                'Base URL of the OpenAI-compatible server, e.g. https://llm.example.com/v1 '
+                '(default: http://localhost:8000/v1, env OASIS_OPENAI_BASE_URL)'
+            ),
+        )
+        model_group.add_argument(
+            '--api-key',
+            dest='api_key',
+            type=str,
+            default=None,
+            metavar='KEY',
+            help='API key for the OpenAI-compatible server (default: env OASIS_OPENAI_API_KEY, else "local")',
+        )
+        model_group.add_argument(
+            '--embed-provider',
+            dest='embed_provider',
+            choices=LLM_PROVIDER_CHOICES,
+            default=None,
+            metavar='{ollama,openai}',
+            help=(
+                'Embedding backend, resolved independently from --provider (chat): "ollama" '
+                '(native Ollama API, default) or "openai" (OpenAI-compatible embedding server: '
+                'vLLM, llama.cpp, LiteLLM...), so chat and embedding workloads can run on '
+                'separate servers (env OASIS_EMBED_PROVIDER)'
+            ),
+        )
+        model_group.add_argument(
+            '--embed-api-base',
+            dest='embed_api_base',
+            type=str,
+            default=None,
+            metavar='URL',
+            help=(
+                'Base URL of the OpenAI-compatible embedding server, e.g. http://localhost:8000/v1 '
+                '(default: env OASIS_EMBED_OPENAI_BASE_URL)'
+            ),
+        )
+        model_group.add_argument(
+            '--embed-api-key',
+            dest='embed_api_key',
+            type=str,
+            default=None,
+            metavar='KEY',
+            help=(
+                'API key for the OpenAI-compatible embedding server '
+                '(default: env OASIS_EMBED_OPENAI_API_KEY, else "local")'
+            ),
+        )
+        model_group.add_argument(
+            '-rm',
+            '--report-model',
+            dest='report_model',
+            type=str,
+            default=None,
+            metavar='MODEL',
+            help=(
+                'Consolidation model: after a multi-model run (-m a,b) merge the per-model '
+                'findings into one consolidated report (deterministic fingerprint groups; '
+                'the model synthesizes the narrative; default: off)'
+            ),
+        )
         
         # Cache Management
         cache_group = parser.add_argument_group('Cache Management', 'Options for managing cache files')
@@ -432,6 +618,54 @@ class OasisScanner:
             help=(
                 'Ollama API URL for dashboard assistant chat (default: same as --ollama-url when unset in env OASIS_WEB_OLLAMA_URL)'
             ),
+        )
+        web_group.add_argument(
+            '--web-provider',
+            dest='web_provider',
+            choices=LLM_PROVIDER_CHOICES,
+            default=None,
+            metavar='{ollama,openai}',
+            help='Model backend for the dashboard assistant (default: same as --provider)',
+        )
+        web_group.add_argument(
+            '--web-api-base',
+            dest='web_api_base',
+            type=str,
+            default=None,
+            metavar='URL',
+            help='OpenAI-compatible base URL for the dashboard assistant (default: same as --api-base)',
+        )
+        web_group.add_argument(
+            '--web-api-key',
+            dest='web_api_key',
+            type=str,
+            default=None,
+            metavar='KEY',
+            help='API key for the dashboard assistant backend (default: same as --api-key)',
+        )
+        web_group.add_argument(
+            '--web-embed-provider',
+            dest='web_embed_provider',
+            choices=LLM_PROVIDER_CHOICES,
+            default=None,
+            metavar='{ollama,openai}',
+            help='Embedding backend for assistant RAG queries (default: same as --embed-provider)',
+        )
+        web_group.add_argument(
+            '--web-embed-api-base',
+            dest='web_embed_api_base',
+            type=str,
+            default=None,
+            metavar='URL',
+            help='OpenAI-compatible base URL for assistant RAG embeddings (default: same as --embed-api-base)',
+        )
+        web_group.add_argument(
+            '--web-embed-api-key',
+            dest='web_embed_api_key',
+            type=str,
+            default=None,
+            metavar='KEY',
+            help='API key for assistant RAG embeddings (default: same as --embed-api-key)',
         )
         web_group.add_argument(
             '--web-embed-model',
@@ -619,7 +853,7 @@ class OasisScanner:
             models=embed_models,
             project_name=getattr(self.args, "project_name", None),
         )
-        base_embedding_manager = EmbeddingManager(self.args, self.ollama_manager)
+        base_embedding_manager = EmbeddingManager(self.args, self.embed_model_manager)
         prepared_input_files = base_embedding_manager.prepare_input_files(
             self.args,
             files_to_analyze=self.valid_input_files,
@@ -667,7 +901,7 @@ class OasisScanner:
             model_args = deepcopy(self.args)
             model_args.embed_model = embed_model
             model_args.chunk_size = audit_chunk_size
-            model_embedding_manager = EmbeddingManager(model_args, self.ollama_manager)
+            model_embedding_manager = EmbeddingManager(model_args, self.embed_model_manager)
             model_embedding_manager.process_input_files(
                 model_args,
                 files_to_analyze=prepared_input_files,
@@ -734,6 +968,15 @@ class OasisScanner:
             language=getattr(self.args, 'language', 'en')
         )
 
+        suppressions_file = getattr(self.args, "suppressions_file", None)
+        if suppressions_file:
+            self.report.suppressed_registry = load_suppressions(Path(suppressions_file))
+            logger.info(
+                "Suppressions registry: %d fingerprint(s) loaded from %s",
+                len(self.report.suppressed_registry),
+                suppressions_file,
+            )
+
         web_server = None
         if self.args.web:
             self._warn_web_mode_ignores_scan_flags()
@@ -744,9 +987,21 @@ class OasisScanner:
                 web_password=self.args.web_password,
                 web_port=self.args.web_port,
                 web_ollama_url=getattr(self.args, "web_ollama_url", None) or os.environ.get("OASIS_WEB_OLLAMA_URL"),
+                web_provider=getattr(self.args, "web_provider", None),
+                web_api_base=getattr(self.args, "web_api_base", None),
+                web_api_key=getattr(self.args, "web_api_key", None),
                 web_embed_model=getattr(self.args, "web_embed_model", None),
+                web_embed_provider=getattr(self.args, "web_embed_provider", None),
+                web_embed_api_base=getattr(self.args, "web_embed_api_base", None),
+                web_embed_api_key=getattr(self.args, "web_embed_api_key", None),
                 web_assistant_rag=bool(getattr(self.args, "web_assistant_rag", True)),
                 default_ollama_url=getattr(self.args, "ollama_url", None),
+                default_provider=getattr(self.args, "provider", None),
+                default_api_base=getattr(self.args, "api_base", None),
+                default_api_key=getattr(self.args, "api_key", None),
+                default_embed_provider=getattr(self.args, "embed_provider", None),
+                default_embed_api_base=getattr(self.args, "embed_api_base", None),
+                default_embed_api_key=getattr(self.args, "embed_api_key", None),
             )
             self.report.set_progress_notifier(web_server.emit_scan_progress)
 
@@ -809,7 +1064,7 @@ class OasisScanner:
         if self.args.version:
             # Import here to avoid circular imports
             from .__init__ import __version__
-            print(f"OASIS - Ollama Automated Security Intelligence Scanner v{__version__}")
+            print(f"OASIS - Open Automated Security Intelligence Scanner v{__version__}")
             return None
 
         if getattr(self.args, "check_update", False):
@@ -870,6 +1125,15 @@ class OasisScanner:
             self.primary_embed_model = primary_embed_model
         except EmbedModelValueError as exc:
             return self._handle_argument_errors(str(exc))
+
+        fail_on_raw = getattr(self.args, "fail_on", None)
+        if fail_on_raw is not None:
+            fail_on = normalize_severity(fail_on_raw)
+            if fail_on is None:
+                return self._handle_argument_errors(
+                    "Invalid --fail-on value: expected one of critical, high, medium, low"
+                )
+            self.args.fail_on = fail_on
         self.chunk_size_is_manual = getattr(self.args, "chunk_size", None) is not None
         display_logo()
         return True
@@ -883,20 +1147,52 @@ class OasisScanner:
         Returns:
             True if Ollama is running and connected, False otherwise
         """
-        # Initialize Ollama manager
+        # Initialize model backends: chat (scan/deep) and embedding, independently routed.
+        # Embeddings follow the chat backend by default (--embed-* overrides win), so both
+        # workloads can live on separate servers when explicitly configured.
         if ollama_url is None:
             ollama_url = self.args.ollama_url
-        self.ollama_manager = OllamaManager(ollama_url)
+        self.ollama_manager = create_model_manager(self.args, ollama_url=ollama_url)
+        self.embed_model_manager = create_embed_model_manager(self.args, ollama_url=ollama_url)
 
-        if self.ollama_manager.get_client() is None:
-            logger.error("Ollama is not running. Please start Ollama and try again.")
+        chat_target = str(
+            getattr(self.ollama_manager, "api_url", None) or getattr(self.ollama_manager, "api_base", "") or ""
+        )
+        embed_target = str(
+            getattr(self.embed_model_manager, "api_url", None) or getattr(self.embed_model_manager, "api_base", "") or ""
+        )
+        logger.info(
+            f"{MODEL_EMOJIS['default']}Chat backend: {cli_bold(chat_target)} | "
+            f"Embedding backend: {cli_bold(embed_target)} (independently routed)"
+        )
+
+        try:
+            client_ready = self.ollama_manager.get_client() is not None
+        except ConnectionError:
+            client_ready = False
+        if not client_ready:
+            logger.error(
+                "Chat backend is not reachable (%s). Please start it and try again.",
+                chat_target or "unknown",
+            )
+            return False
+
+        try:
+            embed_client_ready = self.embed_model_manager.get_client() is not None
+        except ConnectionError:
+            embed_client_ready = False
+        if not embed_client_ready:
+            logger.error(
+                "Embedding backend is not reachable (%s). Please start it and try again.",
+                embed_target or "unknown",
+            )
             return False
 
         if not check_embeddings:
             return True
 
         cli_emit_section_banner(
-            logger, "🔌", "Ollama & embed model", "context length, chunk size, model pull"
+            logger, "🔌", "LLM backend & embed model", "connection, context length, chunk size, model availability"
         )
 
         # Check Ollama connection
@@ -911,8 +1207,17 @@ class OasisScanner:
             self.embed_models = list(embed_models)
             self.primary_embed_model = primary_embed_model
         for embed_model in embed_models:
-            if not self.ollama_manager.ensure_model_available(embed_model):
+            if not self.embed_model_manager.ensure_model_available(embed_model):
+                logger.error(
+                    "Model %r not available on the embedding backend (%s) — aborting.",
+                    embed_model,
+                    embed_target or "unknown",
+                )
                 return False
+
+        report_model = getattr(self.args, "report_model", None)
+        if report_model and not self.ollama_manager.ensure_model_available(report_model):
+            return False
 
         # Apply the class chunk-size strategy (documented above ``_resolve_chunk_size_fallback``).
         self.args.chunk_size = self._resolve_effective_chunk_size_for_model(
@@ -936,8 +1241,8 @@ class OasisScanner:
             logger, "📂", "Source index & embeddings", "parse tree, cache, vectorize new files"
         )
 
-        # Initialize embedding manager
-        self.embedding_manager = EmbeddingManager(self.args, self.ollama_manager)
+        # Initialize embedding manager (embedding backend, independently routed)
+        self.embedding_manager = EmbeddingManager(self.args, self.embed_model_manager)
         self.report.embed_model = getattr(self.embedding_manager, "embedding_model", None)
         self.report.set_executive_summary_models(
             embedding_model=getattr(self.embedding_manager, "embedding_model", None)
@@ -973,7 +1278,7 @@ class OasisScanner:
         # Get available models
         available_models = self.ollama_manager.get_available_models()
         if not available_models:
-            logger.error("No models available. Please check Ollama installation.")
+            logger.error("No models available. Please check the LLM backend configuration (--provider / --api-base / --ollama-url).")
             return 1
 
         # Get selected models (either from args or interactive selection)
@@ -1051,6 +1356,74 @@ class OasisScanner:
         if not result:
             return 1
 
+        # Suppression registry hooks: candidate list + end-of-run summary
+        if getattr(self.args, "write_suppression_candidates", False):
+            try:
+                candidates_count = write_suppression_candidates(Path(self.report.output_dir))
+                logger.info("Suppression candidates: %d finding(s) listed", candidates_count)
+            except OSError as exc:
+                logger.warning("Suppression candidates generation failed: %s", exc)
+
+        registry = getattr(self.report, "suppressed_registry", None)
+        if registry:
+            suppressed_count = count_suppressed_findings(Path(self.report.output_dir), registry)
+            if suppressed_count:
+                logger.info(
+                    "Suppressed findings in this run: %d (exported with SARIF suppressions)",
+                    suppressed_count,
+                )
+
+        # Consolidated multi-model report (issue #60): merge per-model findings
+        # across the run and synthesize a narrative with the report model.
+        if getattr(self.args, "report_model", None):
+            try:
+                consolidated_doc = write_consolidated_report(
+                    Path(self.report.output_dir),
+                    source_models=main_models,
+                    backend=self.ollama_manager,
+                    report_model=self.args.report_model,
+                )
+            except OSError as exc:
+                logger.warning("Consolidated report generation failed: %s", exc)
+            else:
+                if consolidated_doc:
+                    consolidated_counts = consolidated_doc.get("counts") or {}
+                    logger.info(
+                        "Consolidated report: %s group(s) across %s model(s) "
+                        "(all=%s several=%s single=%s)",
+                        consolidated_counts.get("total_groups"),
+                        len(main_models),
+                        consolidated_counts.get("confirmed_by_all"),
+                        consolidated_counts.get("confirmed_by_several"),
+                        consolidated_counts.get("single_model"),
+                    )
+
+        # Baseline diff report (when requested) — written before the CI gate so
+        # an exit-3 threshold run still produces the diff artifacts.
+        diff_against = getattr(self.args, "diff_against", None)
+        if diff_against:
+            try:
+                diff_doc = write_diff_artifacts(Path(self.report.output_dir), Path(diff_against))
+            except OSError as exc:
+                logger.warning("Diff report generation failed: %s", exc)
+            else:
+                if diff_doc:
+                    counts = diff_doc.get("counts") or {}
+                    logger.info(
+                        "Scan diff vs baseline: new=%s fixed=%s persistent=%s severity_changes=%s",
+                        counts.get("new", 0),
+                        counts.get("fixed", 0),
+                        counts.get("persistent", 0),
+                        counts.get("severity_changes", 0),
+                    )
+
+        # CI gate: exit non-zero when findings meet the severity threshold
+        if getattr(self.args, "fail_on", None):
+            gate = evaluate_fail_on_gate(self.report.output_dir, self.args.fail_on)
+            log_fail_on_gate(gate)
+            if gate.get("tripped"):
+                return EXIT_FINDINGS_ABOVE_THRESHOLD
+
         # Output cache file location
         logger.info(f"\nCache file: {self.embedding_manager.cache_file}")
         return 0
@@ -1108,15 +1481,19 @@ class OasisScanner:
             False: Error occurred, program should exit with error code
         """
         try:
-            self._init_ollama(self.args.ollama_url, check_embeddings=False)
-                
-            logger.info("🔎 Querying available models from Ollama...")
+            if not self._init_ollama(self.args.ollama_url, check_embeddings=False):
+                logger.error(
+                    "Cannot reach the LLM backend; check --provider / --api-base / --ollama-url and that the server is running."
+                )
+                return False
+
+            logger.info("🔎 Querying available models from the LLM backend...")
             
             # Display formatted list of models
             available_models = self.ollama_manager.get_available_models(show_formatted=True)
             
             if not available_models:
-                logger.error("No models available. Please check your Ollama installation.")
+                logger.error("No models available. Please check your LLM backend configuration.")
             
             # Indicate special case handling was successful
             return None  # Special return value to indicate early termination

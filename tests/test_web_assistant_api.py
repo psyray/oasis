@@ -18,6 +18,16 @@ from oasis.config import OLLAMA_URL
 from oasis.report import Report
 from oasis.web import WebServer
 
+# Environment values neutralized when asserting the RAG embed resolution chain.
+_NEUTRALIZED_EMBED_ENV = {
+    "OASIS_WEB_EMBED_PROVIDER": "",
+    "OASIS_WEB_EMBED_OPENAI_BASE_URL": "",
+    "OASIS_WEB_EMBED_OPENAI_API_KEY": "",
+    "OASIS_EMBED_PROVIDER": "",
+    "OASIS_EMBED_OPENAI_BASE_URL": "",
+    "OASIS_EMBED_OPENAI_API_KEY": "",
+}
+
 
 class TestWebAssistantRoutes(unittest.TestCase):
     @staticmethod
@@ -478,6 +488,139 @@ class TestWebAssistantRoutes(unittest.TestCase):
             system_prompt = full_messages[0]["content"]
             self.assertIn("FINDING_VALIDATION_JSON", system_prompt)
             self.assertIn("confirmed_exploitable", system_prompt)
+
+    def test_assistant_chat_falls_back_to_scan_sidecar_validation(self):
+        """With no chat session carrying the verdict, the scan-time sidecar feeds
+        FINDING_VALIDATION_JSON so the assistant can discuss it right away."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            rel = "rep_scan_sidecar.json"
+            payload = {
+                "report_type": "vulnerability",
+                "schema_version": 4,
+                "title": "t",
+                "generated_at": "2026-01-01",
+                "model_name": "m1",
+                "vulnerability_name": "SQL Injection",
+                "files": [],
+                "stats": {"total_findings": 0},
+            }
+            resolved_report = (sec / rel)
+            resolved_report.write_text(json.dumps(payload), encoding="utf-8")
+
+            from oasis.helpers.assistant.web.persistence import (
+                merge_scan_finding_validations_sidecar,
+            )
+
+            merge_scan_finding_validations_sidecar(
+                resolved_report.resolve(),
+                "SQL Injection",
+                {
+                    '{"ci":0,"fi":0,"gi":0,"s":""}': {
+                        "vulnerability_name": "SQL Injection",
+                        "family": "flow",
+                        "status": "confirmed_exploitable",
+                        "confidence": 0.9,
+                        "summary": "scan-time deterministic verdict",
+                    }
+                },
+            )
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+            mock_om = server._get_assistant_ollama_manager()
+            resp = client.post(
+                "/api/assistant/chat",
+                data=json.dumps(
+                    {
+                        "messages": [{"role": "user", "content": "PoC?"}],
+                        "report_path": rel,
+                        "model": "m1",
+                        "file_index": 0,
+                        "chunk_index": 0,
+                        "finding_index": 0,
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resp.status_code, 200)
+            mock_om.chat.assert_called()
+            full_messages = mock_om.chat.call_args[0][1]
+            system_prompt = full_messages[0]["content"]
+            self.assertIn("FINDING_VALIDATION_JSON", system_prompt)
+            self.assertIn("confirmed_exploitable", system_prompt)
+
+    def test_assistant_finding_validations_endpoint(self):
+        """The sidecar endpoint returns scan-time payloads and guards the paths."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            server, _ = self._make_server(base)
+            sec = base / "security_reports"
+            rel = "rep_fv.json"
+            (sec / rel).write_text(json.dumps({"title": "t"}), encoding="utf-8")
+            scope_rel = "scope_vuln.json"
+            (sec / scope_rel).write_text(json.dumps({"title": "s"}), encoding="utf-8")
+
+            from oasis.helpers.assistant.web.persistence import (
+                merge_scan_finding_validations_sidecar,
+            )
+
+            fk = '{"ci":0,"fi":0,"gi":0,"s":""}'
+            merge_scan_finding_validations_sidecar(
+                (sec / rel).resolve(),
+                "SQL Injection",
+                {fk: {"status": "confirmed_exploitable"}},
+            )
+            merge_scan_finding_validations_sidecar(
+                (sec / scope_rel).resolve(),
+                "XSS",
+                {fk: {"status": "likely_exploitable"}},
+            )
+
+            app = Flask(__name__)
+            app.secret_key = "t"
+            server.register_routes(app, server, self._no_auth)
+            client = app.test_client()
+
+            resp = client.get(f"/api/assistant/finding-validations?report_path={rel}")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.get_json()
+            self.assertEqual(data["vulnerability_name"], "SQL Injection")
+            self.assertIn(fk, data["validations"])
+            self.assertEqual(data["validations"][fk]["status"], "confirmed_exploitable")
+
+            # Executive aggregate mode: the scope report's own sidecar wins.
+            resp_scope = client.get(
+                f"/api/assistant/finding-validations?report_path={rel}"
+                f"&finding_scope_report_path={scope_rel}"
+            )
+            self.assertEqual(resp_scope.status_code, 200)
+            data_scope = resp_scope.get_json()
+            self.assertEqual(data_scope["vulnerability_name"], "XSS")
+            self.assertEqual(data_scope["validations"][fk]["status"], "likely_exploitable")
+
+            # No sidecar yet -> empty map, still 200 so the UI can fall back silently.
+            (sec / "no_sidecar.json").write_text("{}", encoding="utf-8")
+            resp_empty = client.get(
+                "/api/assistant/finding-validations?report_path=no_sidecar.json"
+            )
+            self.assertEqual(resp_empty.status_code, 200)
+            self.assertEqual(resp_empty.get_json()["validations"], {})
+
+            # Guards.
+            self.assertEqual(
+                client.get("/api/assistant/finding-validations").status_code, 400
+            )
+            self.assertEqual(
+                client.get(
+                    "/api/assistant/finding-validations?report_path=missing.json"
+                ).status_code,
+                404,
+            )
 
     def test_assistant_chat_survives_validation_context_builder_failure(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1533,6 +1676,256 @@ class TestResolveAssistantOllamaUrl(unittest.TestCase):
         server._default_ollama_url = "   "
         with patch.dict(os.environ, {"OASIS_WEB_OLLAMA_URL": " \n "}):
             self.assertEqual(server._resolve_assistant_ollama_url(), str(OLLAMA_URL).strip())
+
+
+class TestResolveEmbedBackend(unittest.TestCase):
+    """RAG embedding backend resolution: independent from the chat backend."""
+
+    def _server(self, **kwargs):
+        server = WebServer.__new__(WebServer)
+        server.web_embed_provider = kwargs.get("web_embed_provider")
+        server.web_embed_api_base = kwargs.get("web_embed_api_base")
+        server.web_embed_api_key = kwargs.get("web_embed_api_key")
+        server._default_embed_provider = kwargs.get("default_embed_provider")
+        server._default_embed_api_base = kwargs.get("default_embed_api_base")
+        server._default_embed_api_key = kwargs.get("default_embed_api_key")
+        server.web_ollama_url = kwargs.get("web_ollama_url")
+        server._default_ollama_url = kwargs.get("default_ollama_url", "http://127.0.0.1:11434")
+        server.web_provider = kwargs.get("web_provider")
+        server.web_api_base = kwargs.get("web_api_base")
+        server.web_api_key = kwargs.get("web_api_key")
+        server._default_provider = kwargs.get("default_provider")
+        server._default_api_base = kwargs.get("default_api_base")
+        server._default_api_key = kwargs.get("default_api_key")
+        server._assistant_ollama_manager = None
+        server._embed_ollama_manager = None
+        return server
+
+    def test_embed_provider_inherits_chat_backend_when_no_embed_config(self):
+        server = self._server(
+            default_provider="openai",
+            default_api_base="https://llm.example.com/v1",
+            default_api_key="k-chat",
+        )
+        env = dict(_NEUTRALIZED_EMBED_ENV)
+        env["OASIS_WEB_LLM_PROVIDER"] = ""
+        env["OASIS_WEB_OPENAI_BASE_URL"] = ""
+        env["OASIS_WEB_OPENAI_API_KEY"] = ""
+        with patch.dict(os.environ, env):
+            self.assertEqual(server._resolve_embed_provider(), "openai")
+            self.assertEqual(server._resolve_embed_api_base(), "https://llm.example.com/v1")
+            self.assertEqual(server._resolve_embed_api_key(), "k-chat")
+
+    def test_embed_provider_inherits_web_chat_flags(self):
+        server = self._server(
+            web_provider="openai",
+            web_api_base="http://web-chat/v1",
+            web_api_key="k-web-chat",
+        )
+        env = dict(_NEUTRALIZED_EMBED_ENV)
+        env["OASIS_WEB_LLM_PROVIDER"] = ""
+        env["OASIS_WEB_OPENAI_BASE_URL"] = ""
+        env["OASIS_WEB_OPENAI_API_KEY"] = ""
+        with patch.dict(os.environ, env):
+            self.assertEqual(server._resolve_embed_provider(), "openai")
+            self.assertEqual(server._resolve_embed_api_base(), "http://web-chat/v1")
+            self.assertEqual(server._resolve_embed_api_key(), "k-web-chat")
+
+    def test_embed_provider_defaults_to_local_ollama_when_nothing_configured(self):
+        server = self._server()
+        env = dict(_NEUTRALIZED_EMBED_ENV)
+        env["OASIS_WEB_LLM_PROVIDER"] = ""
+        env["OASIS_LLM_PROVIDER"] = ""
+        env["OASIS_WEB_OPENAI_BASE_URL"] = ""
+        env["OASIS_WEB_OPENAI_API_KEY"] = ""
+        with patch.dict(os.environ, env):
+            self.assertEqual(server._resolve_embed_provider(), "ollama")
+
+    def test_scan_side_embed_defaults_cascade(self):
+        server = self._server(
+            default_embed_provider="openai",
+            default_embed_api_base="http://127.0.0.1:9999/v1",
+            default_embed_api_key="k-scan",
+        )
+        with patch.dict(os.environ, dict(_NEUTRALIZED_EMBED_ENV)):
+            self.assertEqual(server._resolve_embed_provider(), "openai")
+            self.assertEqual(server._resolve_embed_api_base(), "http://127.0.0.1:9999/v1")
+            self.assertEqual(server._resolve_embed_api_key(), "k-scan")
+
+    def test_web_embed_flags_win(self):
+        server = self._server(
+            web_embed_provider="openai",
+            web_embed_api_base="http://127.0.0.1:9998/v1",
+            web_embed_api_key="k-web",
+            default_embed_provider="openai",
+            default_embed_api_base="http://127.0.0.1:9999/v1",
+            default_embed_api_key="k-scan",
+        )
+        with patch.dict(os.environ, dict(_NEUTRALIZED_EMBED_ENV)):
+            self.assertEqual(server._resolve_embed_provider(), "openai")
+            self.assertEqual(server._resolve_embed_api_base(), "http://127.0.0.1:9998/v1")
+            self.assertEqual(server._resolve_embed_api_key(), "k-web")
+
+    def test_env_cascade_falls_back_to_scan_side_env(self):
+        server = self._server()
+        with patch.dict(
+            os.environ,
+            {"OASIS_EMBED_PROVIDER": "openai", "OASIS_EMBED_OPENAI_BASE_URL": "http://env-embed/v1"},
+        ):
+            self.assertEqual(server._resolve_embed_provider(), "openai")
+            self.assertEqual(server._resolve_embed_api_base(), "http://env-embed/v1")
+
+    def test_web_embed_env_wins_over_scan_side_env(self):
+        server = self._server()
+        with patch.dict(
+            os.environ,
+            {
+                "OASIS_WEB_EMBED_PROVIDER": "openai",
+                "OASIS_WEB_EMBED_OPENAI_BASE_URL": "http://web-embed/v1",
+                "OASIS_EMBED_PROVIDER": "ollama",
+                "OASIS_EMBED_OPENAI_BASE_URL": "http://scan-embed/v1",
+            },
+        ):
+            self.assertEqual(server._resolve_embed_provider(), "openai")
+            self.assertEqual(server._resolve_embed_api_base(), "http://web-embed/v1")
+
+    def test_embed_manager_built_with_resolved_values(self):
+        server = self._server(
+            default_embed_provider="openai",
+            default_embed_api_base="http://127.0.0.1:9999/v1",
+            default_embed_api_key="k-scan",
+        )
+        with patch.dict(os.environ, dict(_NEUTRALIZED_EMBED_ENV)), patch(
+            "oasis.web.create_embed_model_manager", return_value="fake-embed"
+        ) as factory:
+            self.assertEqual(server._get_embed_ollama_manager(), "fake-embed")
+        factory.assert_called_once_with(
+            provider="openai",
+            ollama_url="http://127.0.0.1:11434",
+            api_base="http://127.0.0.1:9999/v1",
+            api_key="k-scan",
+        )
+
+
+class TestConsolidatedDashboardEntry(unittest.TestCase):
+    """Dashboard index + preview for the run-level consolidated report (issue #60)."""
+
+    _NO_AUTH = staticmethod(lambda f: f)
+
+    def _write_run(self, run_dir: Path) -> None:
+        for model in ("m1", "m2"):
+            json_dir = run_dir / model / "json"
+            json_dir.mkdir(parents=True)
+            (json_dir / "sql_injection.json").write_text(
+                json.dumps(
+                    {
+                        "report_type": "vulnerability",
+                        "model_name": model,
+                        "vulnerability_name": "SQL Injection",
+                        "project": "demo",
+                        "analysis_root": "..",
+                        "files": [
+                            {
+                                "file_path": "app.py",
+                                "chunk_analyses": [
+                                    {
+                                        "findings": [
+                                            {
+                                                "title": "Finding",
+                                                "severity": "High",
+                                                "vulnerable_code": "cur.execute(sql)",
+                                            }
+                                        ]
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+        from oasis.helpers.report_consolidation import write_consolidated_report
+
+        self.assertIsNotNone(write_consolidated_report(run_dir))
+
+    def _make_server(self, base: Path):
+        inp = base / "scan_root"
+        inp.mkdir()
+        report = Report(str(inp), ["json"])
+        return WebServer(report, web_password="x", web_assistant_rag=False)
+
+    def test_collect_indexes_consolidated_row(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            server = self._make_server(base)
+            run_dir = server.security_dir / "20260909_090000"
+            self._write_run(run_dir)
+
+            rows = server._collect_reports_from_directories()
+
+            consolidated_rows = [r for r in rows if r.get("vulnerability_type") == "Consolidated Report"]
+            self.assertEqual(len(consolidated_rows), 1)
+            row = consolidated_rows[0]
+            self.assertEqual(row["model"], "Consolidated")
+            self.assertEqual(row["format"], "json")
+            self.assertTrue(row["path"].endswith("consolidated/consolidated_report.json"))
+            self.assertFalse(any(r.get("model") == "consolidated" for r in rows))
+
+    def test_consolidated_row_codebase_context_from_sources(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            server = self._make_server(base)
+            run_dir = server.security_dir / "20260909_090000"
+            self._write_run(run_dir)
+
+            rows = server._collect_reports_from_directories()
+
+            row = next(r for r in rows if r.get("vulnerability_type") == "Consolidated Report")
+            self.assertEqual(row["project"], "demo")
+            self.assertEqual(row["analysis_root"], "..")
+            self.assertTrue(row["codebase_accessible"])
+            self.assertIsNone(row["assistant_context_warning"])
+
+    def test_consolidated_row_backfills_legacy_artifact(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            server = self._make_server(base)
+            run_dir = server.security_dir / "20260909_090000"
+            self._write_run(run_dir)
+            # Simulate an artifact written before the consolidated document carried context
+            consolidated_path = run_dir / "consolidated" / "consolidated_report.json"
+            legacy = json.loads(consolidated_path.read_text(encoding="utf-8"))
+            legacy.pop("project", None)
+            legacy.pop("analysis_root", None)
+            consolidated_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+            rows = server._collect_reports_from_directories()
+
+            row = next(r for r in rows if r.get("vulnerability_type") == "Consolidated Report")
+            self.assertEqual(row["analysis_root"], "..")
+            self.assertTrue(row["codebase_accessible"])
+            self.assertIsNone(row["assistant_context_warning"])
+
+    def test_consolidated_html_preview_route(self):
+        from urllib.parse import quote
+
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            server = self._make_server(base)
+            run_dir = server.security_dir / "20260909_090000"
+            self._write_run(run_dir)
+
+            app = Flask(__name__)
+            server.register_routes(app, server, self._NO_AUTH)
+            client = app.test_client()
+            rel_path = "20260909_090000/consolidated/consolidated_report.json"
+            resp = client.get(f"/api/report-html?path={quote(rel_path)}")
+
+            data = resp.get_json()
+            self.assertEqual(resp.status_code, 200, data)
+            self.assertIn("Consolidated multi-model report", data["content"])
+            self.assertIn("Confirmed by all models", data["content"])
+            self.assertIn("sql injection", data["content"].lower())
 
 
 class TestAssistantRagRootResolution(unittest.TestCase):

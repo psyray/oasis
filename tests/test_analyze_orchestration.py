@@ -1,6 +1,7 @@
 """Unit tests for SecurityAnalyzer orchestration (LangGraph pipeline)."""
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -332,6 +333,223 @@ class TestAgentRouting(unittest.TestCase):
     def test_route_after_report_ends_when_poc_disabled(self):
         state = {"args": SimpleNamespace(poc_hints=False, poc_assist=False)}
         self.assertEqual(route_after_report(state), END)
+
+
+@unittest.skipIf(SecurityAnalyzer is None, "oasis.analyze dependencies are unavailable")
+class TestScanTimeFindingValidationHook(unittest.TestCase):
+    """Deep-pass hook embedding deterministic verdicts into findings."""
+
+    @staticmethod
+    def _make_analyzer(input_path: Path) -> SecurityAnalyzer:
+        analyzer = SecurityAnalyzer.__new__(SecurityAnalyzer)
+        analyzer.embedding_manager = SimpleNamespace(input_path=str(input_path))
+        return analyzer
+
+    def test_hook_calls_batch_with_scan_root_and_budget(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            analyzer = self._make_analyzer(root)
+            args = SimpleNamespace(validate_findings=True, validate_findings_budget=60.0)
+            rows = [{"file_path": "app.py", "structured_chunks": []}]
+            stats = {
+                "validated": 2,
+                "cached": 1,
+                "skipped_no_anchor": 0,
+                "statuses": {"confirmed_exploitable": 2},
+                "budget_exhausted": False,
+                "results_by_key": {'{"ci":0,"fi":0,"gi":0,"s":""}': {"status": "x"}},
+            }
+            with patch(
+                "oasis.helpers.assistant.batch.annotate_rows_with_validation",
+                return_value=stats,
+            ) as m_annotate:
+                analyzer._validate_findings_for_report("SQL Injection", rows, args)
+            m_annotate.assert_called_once()
+            kwargs = m_annotate.call_args.kwargs
+            self.assertEqual(kwargs["vulnerability_name"], "SQL Injection")
+            self.assertEqual(kwargs["scan_root"], root)
+            self.assertEqual(kwargs["total_budget_seconds"], 60.0)
+
+    def test_hook_skips_narrative_enrichment_by_default(self):
+        """Without --validate-findings-narrative the sidecar payloads stay deterministic."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            analyzer = self._make_analyzer(root)
+            args = SimpleNamespace(validate_findings=True, validate_findings_budget=60.0)
+            stats = {
+                "validated": 1,
+                "cached": 0,
+                "skipped_no_anchor": 0,
+                "statuses": {"confirmed_exploitable": 1},
+                "budget_exhausted": False,
+                "results_by_key": {"k": {"status": "confirmed_exploitable"}},
+            }
+            with patch(
+                "oasis.helpers.assistant.batch.annotate_rows_with_validation",
+                return_value=stats,
+            ), patch.object(analyzer, "_enrich_scan_validations_with_narrative") as m_narr:
+                analyzer._validate_findings_for_report("XSS", [], args)
+            m_narr.assert_not_called()
+
+    def test_hook_narrative_enriches_sidecar_payloads_when_flag_on(self):
+        """With the flag on, payloads gain narrative fields before the sidecar write."""
+        from oasis.schemas.analysis import AssistantInvestigationResult
+
+        base_payload = AssistantInvestigationResult(
+            vulnerability_name="XSS",
+            family="flow",
+            status="confirmed_exploitable",
+            confidence=0.9,
+            summary="deterministic",
+        ).model_dump()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            analyzer = self._make_analyzer(root)
+            analyzer.ollama_manager = SimpleNamespace()  # unused by the mocked synth
+            analyzer.llm_model = "deep-model"
+            args = SimpleNamespace(
+                validate_findings=True,
+                validate_findings_budget=60.0,
+                validate_findings_narrative=True,
+            )
+            stats = {
+                "validated": 1,
+                "cached": 0,
+                "skipped_no_anchor": 0,
+                "statuses": {"confirmed_exploitable": 1},
+                "budget_exhausted": False,
+                "results_by_key": {"k": base_payload},
+            }
+            synthetic = MagicMock(
+                narrative_markdown="LLM narrative",
+                narrative_thought_segments=["thought"],
+                synthesis_model="deep-model",
+                synthesis_error=None,
+            )
+            with patch(
+                "oasis.helpers.assistant.batch.annotate_rows_with_validation",
+                return_value=stats,
+            ), patch(
+                "oasis.helpers.assistant.think.investigation_synth."
+                "enrich_investigation_with_llm_narrative",
+                return_value=synthetic,
+            ) as m_narr:
+                returned = analyzer._validate_findings_for_report("XSS", [], args)
+            m_narr.assert_called_once()
+            self.assertEqual(returned["k"]["narrative_markdown"], "LLM narrative")
+            self.assertEqual(returned["k"]["narrative_thought_segments"], ["thought"])
+            self.assertEqual(returned["k"]["synthesis_model"], "deep-model")
+            self.assertEqual(returned["k"]["summary"], "deterministic")
+
+    def test_hook_narrative_skips_insufficient_signal_and_error(self):
+        from oasis.schemas.analysis import AssistantInvestigationResult
+
+        fp_payload = AssistantInvestigationResult(
+            vulnerability_name="XSS",
+            family="flow",
+            status="insufficient_signal",
+            confidence=0.2,
+            summary="fp",
+        ).model_dump()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            analyzer = self._make_analyzer(root)
+            analyzer.ollama_manager = SimpleNamespace()
+            analyzer.llm_model = "deep-model"
+            args = SimpleNamespace(
+                validate_findings=True,
+                validate_findings_budget=60.0,
+                validate_findings_narrative=True,
+            )
+            stats = {
+                "validated": 1,
+                "cached": 0,
+                "skipped_no_anchor": 0,
+                "statuses": {"insufficient_signal": 1},
+                "budget_exhausted": False,
+                "results_by_key": {"k": fp_payload},
+            }
+            with patch(
+                "oasis.helpers.assistant.batch.annotate_rows_with_validation",
+                return_value=stats,
+            ), patch(
+                "oasis.helpers.assistant.think.investigation_synth."
+                "enrich_investigation_with_llm_narrative"
+            ) as m_narr:
+                analyzer._validate_findings_for_report("XSS", [], args)
+            m_narr.assert_not_called()
+
+    def test_hook_returns_results_by_key_and_writes_sidecar_after_report(self):
+        """The hook hands the full payloads back and the sidecar is written beside the JSON report."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            root = base / "scan_root"
+            root.mkdir()
+            json_dir = base / "security_reports" / "proj" / "run" / "embed" / "json"
+            json_dir.mkdir(parents=True)
+            json_path = json_dir / "sql_injection.json"
+            json_path.write_text("{}", encoding="utf-8")
+            analyzer = self._make_analyzer(root)
+            args = SimpleNamespace(validate_findings=True, validate_findings_budget=60.0)
+            results_by_key = {'{"ci":0,"fi":0,"gi":0,"s":""}': {"status": "x"}}
+            with patch(
+                "oasis.helpers.assistant.batch.annotate_rows_with_validation",
+                return_value={
+                    "validated": 1,
+                    "cached": 0,
+                    "skipped_no_anchor": 0,
+                    "statuses": {"confirmed_exploitable": 1},
+                    "budget_exhausted": False,
+                    "results_by_key": results_by_key,
+                },
+            ), patch(
+                "oasis.helpers.assistant.web.persistence.merge_scan_finding_validations_sidecar",
+                return_value=1,
+            ) as m_sidecar:
+                returned = analyzer._validate_findings_for_report("SQL Injection", [], args)
+                self.assertEqual(returned, results_by_key)
+                analyzer._write_scan_finding_validations_sidecar(
+                    json_path, "SQL Injection", returned
+                )
+            m_sidecar.assert_called_once()
+            call_args = m_sidecar.call_args.args
+            self.assertEqual(call_args[0], json_path.resolve())
+            self.assertEqual(call_args[1], "SQL Injection")
+            self.assertEqual(call_args[2], results_by_key)
+
+    def test_hook_sidecar_skipped_when_no_json_report_written(self):
+        """When ``json`` is not among the requested formats the sidecar is a no-op."""
+        analyzer = self._make_analyzer(Path("/tmp/oasis-scan-time-hook"))
+        with patch(
+            "oasis.helpers.assistant.web.persistence.merge_scan_finding_validations_sidecar",
+            return_value=1,
+        ) as m_sidecar:
+            analyzer._write_scan_finding_validations_sidecar(None, "XSS", {"k": {}})
+        m_sidecar.assert_not_called()
+
+    def test_hook_swallows_batch_failure(self):
+        analyzer = self._make_analyzer(Path("/tmp/oasis-scan-time-hook"))
+        args = SimpleNamespace(validate_findings=True, validate_findings_budget=60.0)
+        with patch(
+            "oasis.helpers.assistant.batch.annotate_rows_with_validation",
+            side_effect=RuntimeError("boom"),
+        ):
+            analyzer._validate_findings_for_report("XSS", [], args)
+
+    def test_hook_silent_when_nothing_validated(self):
+        analyzer = self._make_analyzer(Path("/tmp/oasis-scan-time-hook"))
+        args = SimpleNamespace(validate_findings=True, validate_findings_budget=60.0)
+        with patch(
+            "oasis.helpers.assistant.batch.annotate_rows_with_validation",
+            return_value={
+                "validated": 0,
+                "cached": 0,
+                "skipped_no_anchor": 3,
+                "statuses": {},
+                "budget_exhausted": False,
+            },
+        ):
+            analyzer._validate_findings_for_report("XSS", [], args)
 
 
 if __name__ == "__main__":

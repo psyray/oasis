@@ -236,6 +236,13 @@ def scan_with_ripgrep(
     except (subprocess.SubprocessError, OSError):
         return None
 
+    # rg exit codes: 0 = matches found, 1 = no match, >= 2 = error (e.g. a
+    # pattern uses a feature rg's regex engine does not support — lookaround,
+    # backreferences). Fall back to the Python scanner on errors so patterns
+    # that only the `re` module can handle still produce hits.
+    if completed.returncode not in (0, 1):
+        return None
+
     hits: List[PatternMatch] = []
     pattern_compiled: List[Tuple[str, re.Pattern[str]]] = [
         (key, re.compile(pat)) for key, pat in patterns

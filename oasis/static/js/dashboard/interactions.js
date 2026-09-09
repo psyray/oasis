@@ -39,6 +39,13 @@ DashboardApp.filterByModel = function(model) {
         projects: [],
         dateRange: null
     };
+
+    // Persist the reset so a reload keeps the same state
+    DashboardApp.saveFilterListToStorage('models', DashboardApp.activeFilters.models);
+    DashboardApp.clearVulnerabilityFilterStorage();
+    DashboardApp.clearLanguageFilterStorage();
+    DashboardApp.clearProjectFilterStorage();
+    DashboardApp.clearSeverityFilterStorage();
     
     // Update UI to reflect the selected model
     document.querySelectorAll('.filter-checkbox[data-type="model"]').forEach(checkbox => {

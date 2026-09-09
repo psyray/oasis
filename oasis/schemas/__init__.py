@@ -10,6 +10,12 @@ from .analysis import (
     VulnerabilityFinding,
     VulnerabilityReportDocument,
 )
+from .consolidated_report import (
+    ConsolidatedCounts,
+    ConsolidatedFindingGroup,
+    ConsolidatedNarrative,
+    ConsolidatedReportDocument,
+)
 from .audit_report import (
     AUDIT_REPORT_DOCUMENT_VERSION,
     AuditMatchResult,

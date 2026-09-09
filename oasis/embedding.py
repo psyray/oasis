@@ -29,6 +29,7 @@ _OLLAMA_CONTEXT_ERROR_FRAGMENTS = (
 )
 
 # Import from other modules
+from .backends import create_embed_model_manager, ModelBackend
 from .ollama_manager import OllamaManager
 from .schemas.function_extract import FunctionExtractResponse
 from .tools import create_cache_dir, logger, chunk_content, sanitize_name, open_file
@@ -39,13 +40,13 @@ from .helpers.embedding import resolve_embed_models, resolve_valid_embedding_inp
 
 
 class EmbeddingManager:
-    def __init__(self, args, ollama_manager: OllamaManager):
+    def __init__(self, args, ollama_manager: ModelBackend):
         """
         Initialize the embedding manager
 
         Args:
             args: Arguments
-            ollama_manager: Ollama manager
+            ollama_manager: Model backend (Ollama or OpenAI-compatible)
         """
         try:
             self.ollama_manager = ollama_manager
@@ -150,7 +151,10 @@ class EmbeddingManager:
                 embed_model=self.embedding_model,
                 chunk_size=self.chunk_size,
                 analyze_by_function=self.analyze_by_function,
-                api_url=self.ollama_manager.api_url,
+                ollama_url=getattr(self.ollama_manager, "api_url", None),
+                embed_provider=getattr(self.ollama_manager, "provider", None),
+                embed_api_base=getattr(self.ollama_manager, "api_base", None),
+                embed_api_key=getattr(self.ollama_manager, "api_key", None),
             )
             for file_path in files
             if self.analyze_by_function or str(file_path) not in self.code_base
@@ -1001,8 +1005,8 @@ def process_file_parallel(args: tuple) -> Tuple[str, str, List[float], bool, Opt
         Tuple of (file_path, content, embedding, is_function_analysis, function_embeddings)
     """
     try:
-        # Create a new Ollama client for each process
-        ollama_manager = OllamaManager(args.api_url)
+        # Create a new embedding backend for each process
+        ollama_manager = create_embed_model_manager(args)
 
         # Read file content
         if not (content := open_file(args.input_path)):
@@ -1165,58 +1169,62 @@ def _aggregate_chunk_embeddings(
     return [sum(col) / len(col) for col in zip(*chunk_embeddings)]
 
 
-def _embed_short_content_with_context_fallback(
+def _chunked_embedding_with_context_retry(
     ollama_client: Any,
     *,
     model: str,
-    content: str,
-    chunk_size: int,
+    text: str,
+    chunk_limit: int,
 ) -> Optional[List[float]]:
     """
-    One full-text embedding call, then chunked aggregation if the provider signals
-    context length / token limits (character-based chunk_size can exceed real context).
-    """
-    try:
-        return _single_embedding(ollama_client, model=model, prompt=content)
-    except RuntimeError as single_error:
-        if not _is_context_length_error(single_error):
-            logger.exception(f"Error generating embedding: {str(single_error)}")
-            return None
+    Aggregate chunk embeddings, halving the chunk limit while the provider reports
+    context-length / token-limit errors (character-based chunk sizes can exceed the
+    real runtime context, issue #58).
 
-        fallback_chunk_size = max(EMBEDDING_FALLBACK_MIN_CHUNK_SIZE, int(chunk_size * 0.5))
-        logger.warning(
-            "Embedding prompt exceeded context for model %s; retrying with chunk size %s",
-            model,
-            fallback_chunk_size,
-        )
+    Single canonical retry path shared by the long-content and short-content flows
+    so an oversized chunk degrades to smaller chunks instead of dropping the file
+    embedding. Catches broad provider errors on purpose: non-context failures are
+    logged and yield ``None``, context errors drive the halving loop.
+    """
+    current_limit = max(int(chunk_limit), 1)
+    while True:
         try:
             return _aggregate_chunk_embeddings(
-                ollama_client,
-                model=model,
-                text=content,
-                chunk_limit=fallback_chunk_size,
+                ollama_client, model=model, text=text, chunk_limit=current_limit
             )
-        except Exception as e:
-            logger.exception(f"Error generating embedding: {str(e)}")
-            return None
-    except Exception as e:
-        logger.exception(f"Error generating embedding: {str(e)}")
-        return None
+        except Exception as error:
+            if not _is_context_length_error(error):
+                logger.exception(f"Error generating embedding: {str(error)}")
+                return None
+            next_limit = max(EMBEDDING_FALLBACK_MIN_CHUNK_SIZE, int(current_limit * 0.5))
+            if next_limit >= current_limit:
+                # Already at the floor: shrinking cannot help, surface the failure.
+                logger.exception(f"Error generating embedding: {str(error)}")
+                return None
+            logger.warning(
+                "Embedding prompt exceeded context for model %s; retrying with chunk size %s",
+                model,
+                next_limit,
+            )
+            current_limit = next_limit
 
 
 def generate_content_embedding(
     content: str,
     model: str,
     chunk_size: int = DEFAULT_ARGS['CHUNK_SIZE'],
-    ollama_manager: OllamaManager = None,
+    ollama_manager: ModelBackend = None,
 ) -> Optional[List[float]]:
     """
     Generate embedding for content.
 
     Flow:
     - If ``len(content) > chunk_size``, embed only via chunked aggregation (no single-call path).
-    - Else call ``_embed_short_content_with_context_fallback``: one request, then chunked
-      retry with a reduced limit when the provider reports context / token limits.
+    - Else try one full-text request first.
+    - Both paths share the same context-aware chunked retry: when the provider reports
+      a context / token limit, the chunk limit halves and aggregation retries (a
+      character-based chunk_size can exceed the real runtime context, issue #58).
+      Non-context errors drop the embedding (``None``).
 
     Args:
         content: Content to embed
@@ -1233,17 +1241,25 @@ def generate_content_embedding(
     client = ollama_manager.get_client()
 
     if len(content) > chunk_size:
-        try:
-            return _aggregate_chunk_embeddings(client, model=model, text=content, chunk_limit=chunk_size)
-        except Exception as e:
-            logger.exception(f"Error generating embedding: {str(e)}")
+        return _chunked_embedding_with_context_retry(
+            client, model=model, text=content, chunk_limit=chunk_size
+        )
+
+    try:
+        return _single_embedding(client, model=model, prompt=content)
+    except Exception as error:
+        if not _is_context_length_error(error):
+            logger.exception(f"Error generating embedding: {str(error)}")
             return None
 
-    return _embed_short_content_with_context_fallback(
-        client, model=model, content=content, chunk_size=chunk_size
+    return _chunked_embedding_with_context_retry(
+        client,
+        model=model,
+        text=content,
+        chunk_limit=max(EMBEDDING_FALLBACK_MIN_CHUNK_SIZE, int(chunk_size * 0.5)),
     )
 
-def extract_functions_from_file(file_path: str, content: str, extraction_model: str = EXTRACT_FUNCTIONS['MODEL'], ollama_manager: OllamaManager = None) -> Dict[str, str]:
+def extract_functions_from_file(file_path: str, content: str, extraction_model: str = EXTRACT_FUNCTIONS['MODEL'], ollama_manager: ModelBackend = None) -> Dict[str, str]:
     """
     Extract functions from file content
     

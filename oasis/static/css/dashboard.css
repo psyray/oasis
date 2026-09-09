@@ -409,6 +409,48 @@ body {
     overflow: hidden;
 }
 
+/* Multi-model progress: one tab per model + overall (current / done / pending states) */
+.progress-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.progress-tab {
+    border: 1px solid var(--light-gray);
+    background: transparent;
+    border-radius: 14px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--dark-blue);
+}
+
+.progress-tab.is-selected {
+    border-color: var(--turquoise);
+    background-color: var(--turquoise);
+    color: #ffffff;
+}
+
+.progress-tab.is-pending {
+    opacity: 0.5;
+}
+
+.progress-tab-count {
+    opacity: 0.85;
+}
+
+.progress-models-total {
+    font-size: 12px;
+    color: var(--dark-blue);
+    margin-bottom: 8px;
+}
+
+.progress-panel[hidden] {
+    display: none;
+}
+
 .progress-fill {
     height: 100%;
     background-color: var(--turquoise);
@@ -2455,6 +2497,13 @@ body.modal-open {
     font-size: 0.85rem;
     box-sizing: border-box;
 }
+.oasis-assistant-finding-picker-field {
+    flex: 1 1 100%;
+}
+.oasis-assistant-finding-picker-field select {
+    width: 100%;
+    max-width: none;
+}
 .oasis-assistant-chips {
     display: flex;
     flex-wrap: wrap;
@@ -2876,6 +2925,26 @@ pre.http-raw {
     max-width: 24rem;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+.oasis-assistant-validate-origin {
+    display: inline-block;
+    padding: 0.12rem 0.45rem;
+    border-radius: 10px;
+    background: rgba(64, 180, 196, 0.14);
+    color: var(--turquoise);
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+.oasis-assistant-validate-narrative-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0.55rem;
+}
+.oasis-assistant-validate-narrative-btn {
+    font-size: 0.8rem;
 }
 .oasis-assistant-validate-status {
     display: inline-block;

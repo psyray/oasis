@@ -359,7 +359,10 @@ def display_logo():
     """
     Display the OASIS logo
     """
-    logo = """
+    # r-string obligatoire : l'art ASCII est dessiné avec des backslashes
+    # littéraux ; sans le préfixe r, Python les interprète deux par deux et
+    # décale l'alignement des lettres.
+    logo = r"""
      .d88b.    db    .d8888.  _\\\\|//_ .d8888. 
     .8P  Y8.  d88b   88'  YP    \\\\//  88'  YP 
     88    88 d8'`8b  `8bo.       ||     `8bo.   
@@ -368,7 +371,7 @@ def display_logo():
      `Y88P'  YP  YP  `8888Y' __/_||_\\_ `8888Y' 
 
 ╔════════════════════════════════════════════════╗
-║ Ollama Automated Security Intelligence Scanner ║
+║ Open Automated Security Intelligence Scanner   ║
 ╚════════════════════════════════════════════════╝
 """
     logger.info(logo)

@@ -140,6 +140,11 @@ _Source lines {{ chunk.start_line }}-{{ chunk.end_line }} (1-based, inclusive)._
 
 {{ finding.remediation }}
 {% endif %}
+{% if finding.validation %}
+##### Validation (deterministic)
+
+**{{ finding.validation.status }}** (confidence {{ "%.2f"|format(finding.validation.confidence) }}){% if finding.validation.summary %} — {{ finding.validation.summary }}{% endif %}
+{% endif %}
 {% if finding.secure_code_example %}
 ##### Secure Example
 

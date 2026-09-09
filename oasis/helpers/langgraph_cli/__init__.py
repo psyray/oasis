@@ -157,6 +157,7 @@ LG_NODE_DEEP_QUEUE = "🪲 queue node_deep · expand_iterations=%s (deep block f
 LG_LLM_SELECTED = "🤖 LLM for deep pass: %s"
 LG_DEEP_VULN_FINISHED = "🏁 Deep done · %s · %.1fs"
 LG_VERIFY = "🔎 Verify result · retry_pending=%s · expand_it=%s/%s"
+LG_FINDING_VALIDATION = "🛡️ Finding validation · %s · %s"
 LG_POC = "🔧 PoC assist (optional)"
 LG_AFTER_VERIFY = "🚀 Route after verify · next=%s"
 LG_DEBUG_SEPARATOR = "🪲 %s"

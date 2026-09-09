@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from oasis.config import MAX_CHUNK_SIZE
 from oasis.ollama_manager import OllamaManager
 
 
@@ -21,7 +22,7 @@ class TestOllamaManagerResilience(unittest.TestCase):
         fake_client = MagicMock()
         fake_client.list.side_effect = RuntimeError("simulated transport failure")
 
-        with patch("oasis.ollama_manager.ollama.Client", return_value=fake_client):
+        with patch("oasis.backends.ollama_backend.ollama.Client", return_value=fake_client):
             mgr.client = None
             with self.assertRaises(ConnectionError) as ctx:
                 mgr.get_client()
@@ -32,7 +33,7 @@ class TestOllamaManagerResilience(unittest.TestCase):
         fake_client = MagicMock()
         fake_client.list.side_effect = ConnectionError("connection refused")
 
-        with patch("oasis.ollama_manager.ollama.Client", return_value=fake_client):
+        with patch("oasis.backends.ollama_backend.ollama.Client", return_value=fake_client):
             mgr.client = None
             self.assertFalse(mgr.check_connection())
 
@@ -202,6 +203,7 @@ class TestModelInfoNumCtx(unittest.TestCase):
 
     def test_detect_optimal_chunk_size_uses_num_ctx(self):
         mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr.get_running_num_ctx = MagicMock(return_value=None)
         mgr._get_model_info = MagicMock(
             return_value={"parameters": {"num_ctx": 1000}}
         )
@@ -209,10 +211,43 @@ class TestModelInfoNumCtx(unittest.TestCase):
 
     def test_detect_optimal_chunk_size_uses_modelinfo_without_parameters(self):
         mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr.get_running_num_ctx = MagicMock(return_value=None)
         mgr._get_model_info = MagicMock(
             return_value={"modelinfo": {"embed.context_length": 10000}}
         )
         self.assertEqual(mgr._detect_optimal_chunk_size("embed"), int(10000 * 0.9))
+
+
+class TestDetectChunkSizePrefersRuntimePs(unittest.TestCase):
+    """Chunk sizing must trust the runtime-loaded context over declarative
+    metadata, which can exceed what the embeddings runner actually enforces
+    (issue #58: show() reported 8192 while the runtime enforced 2048)."""
+
+    def test_runtime_ps_context_wins_over_metadata(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr.get_running_num_ctx = MagicMock(return_value=2048)
+        mgr._get_model_info = MagicMock(
+            return_value={"parameters": {"num_ctx": 8192}}
+        )
+        self.assertEqual(
+            mgr._detect_optimal_chunk_size("nomic-embed-text"), int(2048 * 0.9)
+        )
+
+    def test_metadata_fallback_when_model_not_loaded(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr.get_running_num_ctx = MagicMock(return_value=None)
+        mgr._get_model_info = MagicMock(
+            return_value={"parameters": {"num_ctx": 8192}}
+        )
+        self.assertEqual(
+            mgr._detect_optimal_chunk_size("nomic-embed-text"), int(8192 * 0.9)
+        )
+
+    def test_default_chunk_size_when_no_context_source(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr.get_running_num_ctx = MagicMock(return_value=None)
+        mgr._get_model_info = MagicMock(return_value={})
+        self.assertEqual(mgr._detect_optimal_chunk_size("m"), MAX_CHUNK_SIZE)
 
 
 class TestModelAvailabilityNormalization(unittest.TestCase):
@@ -264,6 +299,46 @@ class TestParameterCountNumeric(unittest.TestCase):
 
     def test_unknown_returns_zero(self):
         self.assertEqual(OllamaManager._parameter_count_numeric({}), 0.0)
+
+
+class TestModelDisplayKeepsTag(unittest.TestCase):
+    """Selection-list labels must keep the Ollama version tag so variants of the
+    same base model stay distinguishable (issue #61)."""
+
+    def test_build_formatted_string_keeps_version_tag(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        out = mgr._build_formatted_string(
+            "qwen2.5-coder:7b", "🤖 ", "7.6B params", "32k ctx", "🤖 qwen2.5"
+        )
+        self.assertIn("qwen2.5-coder:7b", out)
+        self.assertIn("based on 🤖 qwen2.5", out)
+
+    def test_format_model_display_keeps_tag_with_model_info(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr._get_model_info = MagicMock(
+            return_value={
+                "parameters": {"num_ctx": 32768},
+                "details": {"parameter_size": "7.6B"},
+            }
+        )
+        self.assertIn("qwen2.5-coder:7b", mgr.format_model_display("qwen2.5-coder:7b"))
+
+    def test_format_model_display_keeps_tag_when_api_fails(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        mgr._get_model_info = MagicMock(side_effect=RuntimeError("boom"))
+        self.assertIn("deepseek-coder-v2:16b", mgr.format_model_display("deepseek-coder-v2:16b"))
+
+    def test_same_base_with_different_tags_formats_differently(self):
+        mgr = OllamaManager(api_url="http://127.0.0.1:11434")
+        info = {
+            "parameters": {"num_ctx": 32768},
+            "details": {"parameter_size": "7.6B"},
+        }
+        mgr._get_model_info = MagicMock(return_value=info)
+        first = mgr.format_model_display("qwen2.5-coder:7b")
+        second = mgr.format_model_display("qwen2.5-coder:14b")
+        self.assertNotEqual(first, second)
+        self.assertIn("qwen2.5-coder:14b", second)
 
 
 class TestEffectiveContextSource(unittest.TestCase):

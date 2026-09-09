@@ -26,6 +26,8 @@ Section overview:
 
 - **Ollama / HTTP client** — chunk LLM timeouts, structured ``num_predict`` ceiling, HTTP client
   timeout, slow-call warning (model I/O and transport).
+- **Model backends (providers)** — Ollama native or OpenAI-compatible servers (vLLM, LM Studio,
+  llama.cpp server, LocalAI, ...): ``OASIS_LLM_PROVIDER``, ``OASIS_OPENAI_*``.
 - **Structured-output degeneracy** — heuristics when validating deep structured JSON from models.
 - **LangGraph context expansion** — padding and max chars around suspicious spans.
 - **Heuristic tuning (grouped)** — ties structured-output degeneracy and ``POC_*`` caps; read
@@ -69,6 +71,25 @@ CLI debug only (orthogonal to reports):
 Transport / diagnostics (same file, separate concern):
 
 - ``OASIS_OLLAMA_HTTP_CLIENT_TIMEOUT_SEC``, ``OASIS_OLLAMA_SLOW_CALL_WARNING_SEC``
+
+Model backends / providers (see ``oasis/backends/``):
+
+- ``OASIS_LLM_PROVIDER`` (``ollama`` | ``openai``)
+- ``OASIS_OPENAI_BASE_URL`` (e.g. ``https://llm.example/v1``)
+- ``OASIS_OPENAI_API_KEY``
+- ``OASIS_OPENAI_CTX_TOKENS``
+- ``OASIS_OPENAI_HTTP_TIMEOUT_SEC``
+- ``OASIS_OPENAI_STRUCTURED_OUTPUT`` (``auto`` | ``on`` | ``off``)
+- ``OASIS_EMBED_PROVIDER`` (``ollama`` | ``openai``) — embedding backend, resolved
+  independently from the chat backend (local Ollama by default), so chat and
+  embedding workloads can be routed to separate servers (e.g. a dedicated RAG server)
+- ``OASIS_EMBED_OPENAI_BASE_URL`` / ``OASIS_EMBED_OPENAI_API_KEY`` — embedding
+  server settings when ``OASIS_EMBED_PROVIDER=openai``
+- ``OASIS_WEB_EMBED_PROVIDER`` / ``OASIS_WEB_EMBED_OPENAI_BASE_URL`` /
+  ``OASIS_WEB_EMBED_OPENAI_API_KEY`` — dashboard assistant RAG embeddings
+  (fall back to the scan-side embedding backend)
+- ``OASIS_REPORT_CONSOLIDATION_DIGEST_MAX_CHARS`` — character budget of the
+  compact digest fed to the consolidation model (``--report-model``, issue #60)
 
 Static lists (extensions, models, languages, …) follow those sections.
 """
@@ -296,6 +317,73 @@ OLLAMA_SLOW_CALL_WARNING_SEC = _parse_env_float(
     45.0,
     minimum=1.0,
 )
+
+# =============================================================================
+# Model backends — provider selection (Ollama native or OpenAI-compatible server)
+# =============================================================================
+# The OpenAI-compatible backend covers vLLM, LM Studio, llama.cpp server,
+# LocalAI, LiteLLM, ... (anything exposing /v1/chat/completions).
+LLM_PROVIDER_OLLAMA = "ollama"
+LLM_PROVIDER_OPENAI = "openai"
+LLM_PROVIDER_CHOICES = (LLM_PROVIDER_OLLAMA, LLM_PROVIDER_OPENAI)
+LLM_PROVIDER_ENV: Optional[str] = os.environ.get("OASIS_LLM_PROVIDER", "").strip().lower() or None
+
+# OpenAI-compatible server settings (CLI --api-base / --api-key override these).
+OPENAI_COMPAT_BASE_URL = os.environ.get("OASIS_OPENAI_BASE_URL", "").strip() or "http://localhost:8000/v1"
+# Local servers commonly ignore auth (vLLM accepts any bearer); keep a stable dummy.
+OPENAI_COMPAT_API_KEY = os.environ.get("OASIS_OPENAI_API_KEY", "").strip() or "local"
+
+# Embedding backend — resolved independently from the chat backend (local by
+# default, even when the chat backend targets an OpenAI-compatible server), so
+# chat and embedding workloads can be routed to separate servers.
+EMBED_PROVIDER_ENV: Optional[str] = os.environ.get("OASIS_EMBED_PROVIDER", "").strip().lower() or None
+# Empty string means "inherit the shared OpenAI-compatible default at factory time".
+EMBED_OPENAI_BASE_URL = os.environ.get("OASIS_EMBED_OPENAI_BASE_URL", "").strip() or None
+EMBED_OPENAI_API_KEY = os.environ.get("OASIS_EMBED_OPENAI_API_KEY", "").strip() or None
+
+# Consolidated multi-model report: character budget for the compact digest fed
+# to the consolidation model (issue #60).
+REPORT_CONSOLIDATION_DIGEST_MAX_CHARS = _parse_env_int(
+    "OASIS_REPORT_CONSOLIDATION_DIGEST_MAX_CHARS", 24000, minimum=1000
+)
+
+# OpenAI-compatible servers do not expose per-model context windows over the
+# protocol; deployments declare the value here (0 = unknown, fallbacks apply).
+OPENAI_CTX_TOKENS = _parse_env_int("OASIS_OPENAI_CTX_TOKENS", 0, minimum=0)
+
+_openai_http_timeout = max(CHUNK_ANALYZE_TIMEOUT + 120, 240)
+OPENAI_HTTP_CLIENT_TIMEOUT_SEC = _parse_env_int(
+    "OASIS_OPENAI_HTTP_TIMEOUT_SEC",
+    _openai_http_timeout,
+    minimum=max(60, CHUNK_ANALYZE_TIMEOUT),
+)
+
+# Structured-output enforcement on OpenAI-compatible servers:
+#   "auto" — send response_format JSON schema; on HTTP 400/404/422 retry once
+#            without it and append the schema to the prompt (server compat).
+#   "on"   — always send response_format, surface server errors.
+#   "off"  — never send response_format; schema hint goes into the prompt.
+_raw_openai_structured = os.environ.get("OASIS_OPENAI_STRUCTURED_OUTPUT", "auto").strip().lower()
+OPENAI_STRUCTURED_OUTPUT: str = _raw_openai_structured if _raw_openai_structured in ("auto", "on", "off") else "auto"
+if os.environ.get("OASIS_OPENAI_STRUCTURED_OUTPUT", "auto").strip().lower() not in ("auto", "on", "off"):
+    logger.warning(
+        "Invalid OASIS_OPENAI_STRUCTURED_OUTPUT=%r; expected auto|on|off. Using 'auto'.",
+        _raw_openai_structured,
+    )
+
+# Thinking transport on OpenAI-compatible servers (reasoning models, e.g. Qwen3 on
+# vLLM, expose their thinking toggle through ``chat_template_kwargs``):
+#   "auto" — translate the OASIS ``think`` flag into ``chat_template_kwargs``;
+#            on HTTP 4xx retry once without it (server compat, mirrors structured).
+#   "on"   — always translate when ``think`` is set, surface server errors.
+#   "off"  — never send it (strict servers that reject unknown payload fields).
+_raw_openai_thinking = os.environ.get("OASIS_OPENAI_THINKING_KWARGS", "auto").strip().lower()
+OPENAI_THINKING_KWARGS: str = _raw_openai_thinking if _raw_openai_thinking in ("auto", "on", "off") else "auto"
+if os.environ.get("OASIS_OPENAI_THINKING_KWARGS", "auto").strip().lower() not in ("auto", "on", "off"):
+    logger.warning(
+        "Invalid OASIS_OPENAI_THINKING_KWARGS=%r; expected auto|on|off. Using 'auto'.",
+        _raw_openai_thinking,
+    )
 
 # =============================================================================
 # Heuristic tuning — structured-output degeneracy + PoC pipeline (read before changing one knob)
@@ -768,7 +856,9 @@ REPORT = {
     'DASHBOARD_FORMAT_DISPLAY_ORDER': ['html', 'pdf', 'md', 'json', 'sarif'],
     # Realtime dashboard behavior
     'DASHBOARD_REALTIME_ENABLED': True,
-    'DASHBOARD_SOCKETIO_CLIENT_URL': 'https://cdn.socket.io/4.7.5/socket.io.min.js',
+    # Socket.IO client is bundled with the dashboard (self-hosted, no CDN dependency);
+    # override only to point at a custom build or an external CDN.
+    'DASHBOARD_SOCKETIO_CLIENT_URL': '/static/js/vendor/socket.io.min.js',
     'DASHBOARD_SOCKETIO_ASYNC_MODE': 'auto',
     # Optional extra Socket.IO origins (use {port} for the dashboard port). Runtime always
     # adds http://127.0.0.1:{port}, http://localhost:{port}, and when web_expose is not

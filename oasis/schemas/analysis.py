@@ -11,7 +11,22 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 # Bump when changing chunk or report shapes (cache invalidation).
-ANALYSIS_SCHEMA_VERSION = 5
+ANALYSIS_SCHEMA_VERSION = 6
+
+
+class FindingValidationSummary(BaseModel):
+    """Compact deterministic verdict embedded per finding at scan time.
+
+    Produced by the scan-time finding validator (``oasis.helpers.assistant.batch``);
+    the full investigation evidence stays available on demand through the
+    dashboard ``/api/assistant/investigate`` endpoint.
+    """
+
+    status: str = Field(description="Deterministic verdict status (e.g. confirmed_exploitable)")
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    summary: str = ""
+    family: str = Field(default="", description="Validation family (flow/access/config)")
+    validation_backend: str = Field(default="", description="Validator backend (graph/sequential)")
 
 
 class ScanVerdict(BaseModel):
@@ -64,6 +79,10 @@ class VulnerabilityFinding(BaseModel):
             "Optional raw HTTP request lines for Burp Suite / OWASP ZAP repeater "
             "(one full request per string when applicable)"
         ),
+    )
+    validation: Optional[FindingValidationSummary] = Field(
+        default=None,
+        description="Deterministic scan-time validation verdict, when the finding validator ran",
     )
 
 
@@ -153,6 +172,60 @@ class VulnerabilityReportDocument(BaseModel):
         default=None,
         description="Project label: scanned directory basename, or the folder name when --input is a file.",
     )
+
+
+class DiffFindingRef(BaseModel):
+    """One finding referenced in a diff report (baseline or current run)."""
+
+    file_path: str
+    vulnerability_name: str
+    title: str = ""
+    severity: str = ""
+    snippet: str = ""
+    fingerprint: str = Field(description="Stable content hash across runs (file + vuln type + snippet)")
+
+
+class DiffSeverityChange(BaseModel):
+    """Severity regression/upgrade for a finding present in both runs."""
+
+    fingerprint: str
+    file_path: str
+    vulnerability_name: str
+    title: str = ""
+    baseline_severity: str = ""
+    current_severity: str = ""
+
+
+class DiffCounts(BaseModel):
+    """Bucket sizes for a diff report."""
+
+    new: int = 0
+    fixed: int = 0
+    persistent: int = 0
+    severity_changes: int = 0
+
+
+class DiffReportDocument(BaseModel):
+    """Canonical diff report comparing a scan run against a baseline run.
+
+    Buckets are computed from stable finding fingerprints: ``new`` findings
+    appear only in the current run, ``fixed`` only in the baseline, and
+    ``persistent`` in both. Severity changes are tracked separately and their
+    findings remain listed under ``persistent``.
+    """
+
+    schema_version: int = Field(default=ANALYSIS_SCHEMA_VERSION)
+    report_type: Literal["diff"] = "diff"
+    title: str = "Scan diff report"
+    generated_at: str
+    baseline_path: str = Field(default="", description="Baseline run path provided via --diff-against")
+    current_path: str = Field(default="", description="Current run output directory")
+    new: List[DiffFindingRef] = Field(default_factory=list)
+    fixed: List[DiffFindingRef] = Field(default_factory=list)
+    persistent: List[DiffFindingRef] = Field(default_factory=list)
+    severity_changes: List[DiffSeverityChange] = Field(default_factory=list)
+    counts: DiffCounts = Field(default_factory=DiffCounts)
+
 
 
 class Citation(BaseModel):
@@ -285,6 +358,13 @@ class AssistantInvestigationResult(BaseModel):
         default=None,
         description="Chat model used for narrative_markdown when synthesis succeeded.",
     )
+    narrative_thought_segments: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Reasoning segments captured from the narrative synthesis call "
+            "(``thinking`` channel or inline think tags); empty when thinking is off."
+        ),
+    )
     synthesis_error: Optional[str] = Field(
         default=None,
         description="Set when narrative synthesis was requested but failed or was skipped.",
@@ -298,11 +378,28 @@ class AssistantInvestigationResult(BaseModel):
     )
 
 
+class FindingValidationsSidecar(BaseModel):
+    """On-disk scan-time finding validations (sibling of a vulnerability report JSON).
+
+    Lives at ``<report_dir>/<stem>/finding_validations.json`` (next to the per-report
+    chat directory) and maps the same stable ``finding_validation_storage_key`` keys
+    used by chat sessions to full ``AssistantInvestigationResult`` payloads produced
+    by the scan-time batch validation.
+    """
+
+    schema_version: int = Field(default=ANALYSIS_SCHEMA_VERSION)
+    report_type: Literal["finding_validations"] = "finding_validations"
+    generated_at: str
+    vulnerability_name: str = ""
+    validations: Dict[str, AssistantInvestigationResult] = Field(default_factory=dict)
+
+
 ScanVerdict.model_rebuild()
 VulnerabilityFinding.model_rebuild()
 ChunkDeepAnalysis.model_rebuild()
 FileReportEntry.model_rebuild()
 VulnerabilityReportDocument.model_rebuild()
+FindingValidationsSidecar.model_rebuild()
 Citation.model_rebuild()
 EntryPointHit.model_rebuild()
 CallHop.model_rebuild()

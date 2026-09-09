@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "oasis"
-version = "0.6.1"
-description = "Ollama Automated Security Intelligence Scanner"
+version = "0.7.0"
+description = "Open Automated Security Intelligence Scanner"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "GPL-3.0-only"

@@ -134,13 +134,25 @@
 {% endblock %}
 
 {% block scripts %}
-    {% if dashboard_realtime_enabled %}
-    {% if dashboard_socketio_client_url %}
-    <script src="{{ dashboard_socketio_client_url }}"></script>
+    {% if dashboard_realtime_enabled and dashboard_socketio_client_url %}
+    <script defer src="{{ dashboard_socketio_client_url }}"></script>
     {% endif %}
-    {% endif %}
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
-    <!-- Include only the main app file - it will load the other modules -->
-    <script src="{{ url_for('static', filename='js/dashboard-app.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/vendor/marked.min.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/vendor/chart.umd.min.js') }}"></script>
+    <!-- Dashboard modules ship as ordered defer scripts (data-oasis-dashboard-module):
+         downloads run in parallel during parsing and execution stays in document
+         order, all before DOMContentLoaded — DashboardApp.init() finds every
+         module already loaded and skips the legacy sequential injector. -->
+    <script defer src="{{ url_for('static', filename='js/dashboard-app.js') }}"></script>
+    <script defer data-oasis-dashboard-module="bootstrap.js" src="{{ url_for('static', filename='js/dashboard/bootstrap.js') }}"></script>
+    <script defer data-oasis-dashboard-module="utils.js" src="{{ url_for('static', filename='js/dashboard/utils.js') }}"></script>
+    <script defer data-oasis-dashboard-module="audit-report-paths.js" src="{{ url_for('static', filename='js/dashboard/audit-report-paths.js') }}"></script>
+    <script defer data-oasis-dashboard-module="filters.js" src="{{ url_for('static', filename='js/dashboard/filters.js') }}"></script>
+    <script defer data-oasis-dashboard-module="views.js" src="{{ url_for('static', filename='js/dashboard/views.js') }}"></script>
+    <script defer data-oasis-dashboard-module="api.js" src="{{ url_for('static', filename='js/dashboard/api.js') }}"></script>
+    <script defer data-oasis-dashboard-module="modal.js" src="{{ url_for('static', filename='js/dashboard/modal.js') }}"></script>
+    <script defer data-oasis-dashboard-module="executive-preview.js" src="{{ url_for('static', filename='js/dashboard/executive-preview.js') }}"></script>
+    <script defer data-oasis-dashboard-module="assistant-constants.js" src="{{ url_for('static', filename='js/dashboard/assistant-constants.js') }}"></script>
+    <script defer data-oasis-dashboard-module="assistant.js" src="{{ url_for('static', filename='js/dashboard/assistant.js') }}"></script>
+    <script defer data-oasis-dashboard-module="interactions.js" src="{{ url_for('static', filename='js/dashboard/interactions.js') }}"></script>
 {% endblock %} 

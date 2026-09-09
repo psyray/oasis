@@ -35,7 +35,9 @@ try:
     from oasis.schemas.analysis import (
         ChunkDeepAnalysis,
         DashboardStats,
+        DiffReportDocument,
         FileReportEntry,
+        FindingValidationSummary,
         MediumRiskAnalysis,
         ScanVerdict,
         VulnerabilityFinding,
@@ -55,6 +57,7 @@ except ModuleNotFoundError:
     _spec.loader.exec_module(_analysis)
     ChunkDeepAnalysis = _analysis.ChunkDeepAnalysis
     DashboardStats = _analysis.DashboardStats
+    DiffReportDocument = _analysis.DiffReportDocument
     FileReportEntry = _analysis.FileReportEntry
     MediumRiskAnalysis = _analysis.MediumRiskAnalysis
     ScanVerdict = _analysis.ScanVerdict
@@ -319,6 +322,69 @@ class TestReportSchema(unittest.TestCase):
         self.assertEqual(len(restored.files), 1)
         self.assertEqual(restored.schema_version, doc.schema_version)
         self.assertEqual(restored.stats.files_analyzed, doc.stats.files_analyzed)
+
+    def test_finding_validation_summary_roundtrip(self):
+        """Scan-time verdicts survive the canonical JSON round-trip."""
+        validation = FindingValidationSummary(
+            status="confirmed_exploitable",
+            confidence=0.9,
+            summary="User input reaches the vulnerable sink",
+            family="flow",
+            validation_backend="graph",
+        )
+        doc = VulnerabilityReportDocument(
+            title="SQL Injection Security Analysis",
+            generated_at="2026-01-01 12:00:00",
+            model_name="test-model",
+            vulnerability_name="SQL Injection",
+            vulnerability={"name": "SQL Injection"},
+            files=[
+                FileReportEntry(
+                    file_path="app.py",
+                    similarity_score=0.85,
+                    chunk_analyses=[
+                        ChunkDeepAnalysis(
+                            findings=[
+                                VulnerabilityFinding(
+                                    title="SQLi",
+                                    snippet_start_line=6,
+                                    validation=validation,
+                                )
+                            ]
+                        )
+                    ],
+                )
+            ],
+            stats=DashboardStats(files_analyzed=1),
+        )
+        restored = VulnerabilityReportDocument.model_validate_json(doc.model_dump_json())
+        embedded = restored.files[0].chunk_analyses[0].findings[0].validation
+        self.assertIsNotNone(embedded)
+        self.assertEqual(embedded.status, "confirmed_exploitable")
+        self.assertEqual(embedded.confidence, 0.9)
+        self.assertEqual(embedded.validation_backend, "graph")
+
+    def test_finding_validation_defaults_to_none_for_legacy_payloads(self):
+        """Reports written before scan-time validation still validate cleanly."""
+        doc = VulnerabilityReportDocument.model_validate(
+            {
+                "title": "Legacy",
+                "generated_at": "2026-01-01 12:00:00",
+                "model_name": "m",
+                "vulnerability_name": "XSS",
+                "vulnerability": {"name": "XSS"},
+                "files": [
+                    {
+                        "file_path": "app.py",
+                        "similarity_score": 0.5,
+                        "chunk_analyses": [{"findings": [{"title": "f"}]}],
+                    }
+                ],
+                "stats": {"files_analyzed": 1},
+            }
+        )
+        finding = doc.files[0].chunk_analyses[0].findings[0]
+        self.assertIsNone(finding.validation)
 
     def test_audit_report_document_roundtrip(self):
         doc = AuditReportDocument(
@@ -724,6 +790,115 @@ class TestReportSchema(unittest.TestCase):
         self.assertNotIn("</code></li></ul><code>", html)
 
     @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_render_report_html_from_json_payload_renders_validation_badge(self):
+        """Scan-time verdicts render as a status badge (summary + body) in the modal HTML."""
+        report = Report(input_path=".", output_format=["md"])
+        payload = {
+            "report_type": "vulnerability",
+            "schema_version": 6,
+            "title": "Badge Rendering",
+            "generated_at": "2026-01-01",
+            "model_name": "m1",
+            "vulnerability_name": "SQL Injection",
+            "vulnerability": {"name": "SQL Injection"},
+            "files": [
+                {
+                    "file_path": "app.py",
+                    "similarity_score": 0.9,
+                    "chunk_analyses": [
+                        {
+                            "start_line": 1,
+                            "findings": [
+                                {
+                                    "title": "Confirmed finding",
+                                    "severity": "High",
+                                    "explanation": "e",
+                                    "validation": {
+                                        "status": "confirmed_exploitable",
+                                        "confidence": 0.9,
+                                        "summary": "Reachable <script>alert(1)</script>",
+                                        "family": "flow",
+                                        "validation_backend": "graph",
+                                    },
+                                },
+                                {
+                                    "title": "Unknown status finding",
+                                    "severity": "Low",
+                                    "explanation": "e",
+                                    "validation": {"status": "weird_status", "confidence": 0.1},
+                                },
+                                {
+                                    "title": "Unvalidated finding",
+                                    "severity": "Medium",
+                                    "explanation": "e",
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "stats": {"total_findings": 3, "files_analyzed": 1},
+        }
+
+        html = report.render_report_html_from_json_payload(payload)
+        self.assertIn("report-validation-badge--confirmed_exploitable", html)
+        self.assertIn("report-validation-badge--unknown", html)
+        self.assertIn("confidence 0.90", html)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+        self.assertNotIn("<script>alert(1)</script>", html)
+
+        # Findings without a scan-time verdict render no badge markup.
+        for finding in payload["files"][0]["chunk_analyses"][0]["findings"]:
+            finding.pop("validation", None)
+        html_plain = report.render_report_html_from_json_payload(payload)
+        self.assertNotIn('<span class="report-validation-badge', html_plain)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_render_report_html_from_json_payload_ask_ai_button_dashboard_only(self):
+        """Per-finding Ask AI buttons carry 0-based indices in dashboard previews
+        only (exported/saved reports stay button-free)."""
+        report = Report(input_path=".", output_format=["md"])
+        finding = {
+            "title": "SQLi via search",
+            "severity": "High",
+            "explanation": "e",
+        }
+        payload = {
+            "report_type": "vulnerability",
+            "schema_version": 6,
+            "title": "Ask AI",
+            "generated_at": "2026-01-01",
+            "model_name": "m1",
+            "vulnerability_name": "SQL Injection",
+            "vulnerability": {"name": "SQL Injection"},
+            "files": [
+                {
+                    "file_path": "app.py",
+                    "similarity_score": 0.9,
+                    "chunk_analyses": [
+                        {"start_line": 1, "findings": [finding]},
+                        {"start_line": 20, "findings": [dict(finding)]},
+                    ],
+                }
+            ],
+            "stats": {"total_findings": 2, "files_analyzed": 1},
+        }
+
+        # Exported/saved reports: no assistant mounted, no button.
+        html_export = report.render_report_html_from_json_payload(payload)
+        self.assertNotIn("data-oasis-fi=", html_export)
+        self.assertNotIn('<button type="button" class="report-finding-ask-ai"', html_export)
+
+        # Dashboard preview: button with 0-based indices (file 0, chunk 1, finding 0).
+        html_dash = report.render_report_html_from_json_payload(
+            payload, preview_context={"assistant_enabled": True}
+        )
+        self.assertIn('data-oasis-fi="0"', html_dash)
+        self.assertIn('data-oasis-ci="1"', html_dash)
+        self.assertIn('data-oasis-gi="0"', html_dash)
+        self.assertIn("report-finding-ask-ai", html_dash)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
     def test_render_report_html_from_json_payload_whitelists_severity_css_suffix(self):
         report = Report(input_path=".", output_format=["md"])
         template = report.template_env.get_template("reports/vulnerability_from_json.html.j2")
@@ -944,6 +1119,45 @@ class TestReportSchema(unittest.TestCase):
             self.assertIn("Small model: small-model", content)
             self.assertIn("Embedding model: embed-model", content)
             self.assertNotIn("Risk Findings", content)
+
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_executive_summary_writes_canonical_json_and_sidecar_for_json_only_runs(self):
+        """JSON-only output still gets the canonical summary + progress sidecar (live tabs)."""
+        report = Report.__new__(Report)
+        report.output_format = ["json"]
+        report.output_base_dir = Path("/tmp")
+        report.current_model = "test-model"
+        report.executive_summary_scan_model = "small-model"
+        report.executive_summary_embedding_model = "embed-model"
+        report._executive_summary_sidecar_write_failed = False
+        report.report_dirs = {"test_model": {"json": Path("/tmp")}}
+        report.create_header = lambda title, model_name: [f"# {title}", f"Model: {model_name}"]
+        with tempfile.TemporaryDirectory() as td:
+            run_json = Path(td) / "embed_model" / "json" / "_executive_summary.json"
+            run_json.parent.mkdir(parents=True)
+            report.filter_output_files = lambda safe_name: {"json": run_json}
+            report._generate_and_save_report = lambda output_files, report_content, report_type=None: None
+
+            all_results = {"SQL Injection": [{"file_path": "app.py", "similarity_score": 0.9}]}
+            report.generate_executive_summary(
+                all_results,
+                "test-model",
+                progress={"completed_vulnerabilities": 1, "total_vulnerabilities": 3, "is_partial": True},
+            )
+
+            canon = run_json
+            self.assertTrue(canon.is_file())
+            parsed = json.loads(canon.read_text(encoding="utf-8"))
+            self.assertEqual(parsed.get("report_type"), "executive_summary")
+            self.assertEqual(parsed.get("model_name"), "test-model")
+            self.assertIn("progress", parsed)
+            self.assertEqual(parsed["progress"]["completed_vulnerabilities"], 1)
+
+            sidecar = Path(td) / "embed_model" / "json" / "_executive_summary.progress.json"
+            self.assertTrue(sidecar.is_file())
+            sidecar_doc = json.loads(sidecar.read_text(encoding="utf-8"))
+            self.assertEqual(sidecar_doc["progress"]["completed_vulnerabilities"], 1)
+            self.assertEqual(sidecar_doc.get("model"), "test-model")
 
     @unittest.skipIf(publish_incremental_summary is None, "oasis.report dependencies are unavailable")
     def test_publish_incremental_summary_strips_unknown_progress_extras(self):
@@ -2017,6 +2231,161 @@ Not a table line anymore.
         self.assertEqual(emitted["payload"]["event_version"], 2)
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_latest_scan_progress_prefers_fresh_updated_at_within_same_run(self):
+        """Same-run models share the row date: the freshest sidecar (in-progress model) wins."""
+        rows = [
+            {
+                "format": "json",
+                "vulnerability_type": "Executive Summary",
+                "progress": {
+                    "completed_vulnerabilities": 4,
+                    "total_vulnerabilities": 4,
+                    "is_partial": False,
+                    "status": "complete",
+                    "updated_at": "2026-04-17T10:30:00.000Z",
+                },
+                "model": "Model A",
+                "date": "2026-04-17 10:00:00",
+                "path": "20260417_100000/model_a/json/_executive_summary.json",
+            },
+            {
+                "format": "json",
+                "vulnerability_type": "Executive Summary",
+                "progress": {
+                    "completed_vulnerabilities": 1,
+                    "total_vulnerabilities": 4,
+                    "is_partial": True,
+                    "status": "in_progress",
+                    "updated_at": "2026-04-17T10:35:00.000Z",
+                },
+                "model": "Model B",
+                "date": "2026-04-17 10:00:00",
+                "path": "20260417_100000/model_b/json/_executive_summary.json",
+            },
+        ]
+
+        latest = WebServer._latest_scan_progress_from_reports(rows)
+
+        self.assertEqual(latest.get("model"), "Model B")
+        self.assertEqual(latest.get("status"), "in_progress")
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_models_progress_aggregates_run_models_with_pending_state(self):
+        """Multi-model run: per-model states (done / current / pending) + overall totals."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            run_dir = base / "20260417_100000"
+            for model_dir in ("model_a", "model_b", "model_c"):
+                (run_dir / model_dir / "json").mkdir(parents=True)
+
+            server = WebServer.__new__(WebServer)
+            server.security_dir = base
+            server.report_data = [
+                {
+                    "format": "json",
+                    "vulnerability_type": "Executive Summary",
+                    "progress": {
+                        "completed_vulnerabilities": 4,
+                        "total_vulnerabilities": 4,
+                        "is_partial": False,
+                        "status": "complete",
+                        "updated_at": "2026-04-17T10:30:00.000Z",
+                    },
+                    "model": "Model A",
+                    "date": "2026-04-17 10:00:00",
+                    "path": "20260417_100000/model_a/json/_executive_summary.json",
+                },
+                {
+                    "format": "json",
+                    "vulnerability_type": "Executive Summary",
+                    "progress": {
+                        "completed_vulnerabilities": 1,
+                        "total_vulnerabilities": 4,
+                        "is_partial": True,
+                        "status": "in_progress",
+                        "updated_at": "2026-04-17T10:35:00.000Z",
+                    },
+                    "model": "Model B",
+                    "date": "2026-04-17 10:00:00",
+                    "path": "20260417_100000/model_b/json/_executive_summary.json",
+                },
+            ]
+
+            models_progress = server._aggregate_models_scan_progress(server.report_data)
+
+            states = {entry["model"]: entry["state"] for entry in models_progress}
+            self.assertEqual(states, {"Model A": "complete", "Model B": "in_progress", "Model C": "pending"})
+            pending = next(entry for entry in models_progress if entry["model"] == "Model C")
+            self.assertEqual(pending["completed_vulnerabilities"], 0)
+            self.assertEqual(pending["total_vulnerabilities"], 0)
+
+            overall = server._overall_scan_progress(models_progress)
+            self.assertEqual(overall["completed_vulnerabilities"], 5)
+            self.assertEqual(overall["total_vulnerabilities"], 12)
+            self.assertEqual(overall["status"], "in_progress")
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_models_progress_scopes_to_latest_run(self):
+        """Sidecars of older runs must not leak into the current run's tab list."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            run_dir = base / "20260417_100000"
+            (run_dir / "model_a" / "json").mkdir(parents=True)
+
+            server = WebServer.__new__(WebServer)
+            server.security_dir = base
+            server.report_data = [
+                {
+                    "format": "json",
+                    "vulnerability_type": "Executive Summary",
+                    "progress": {
+                        "completed_vulnerabilities": 2,
+                        "total_vulnerabilities": 4,
+                        "is_partial": True,
+                        "status": "in_progress",
+                        "updated_at": "2026-04-17T10:30:00.000Z",
+                    },
+                    "model": "Model A",
+                    "date": "2026-04-17 10:00:00",
+                    "path": "20260417_100000/model_a/json/_executive_summary.json",
+                },
+                {
+                    "format": "json",
+                    "vulnerability_type": "Executive Summary",
+                    "progress": {
+                        "completed_vulnerabilities": 4,
+                        "total_vulnerabilities": 4,
+                        "is_partial": False,
+                        "status": "complete",
+                        "updated_at": "2026-04-16T09:00:00.000Z",
+                    },
+                    "model": "Old Model",
+                    "date": "2026-04-16 09:00:00",
+                    "path": "20260416_090000/old_model/json/_executive_summary.json",
+                },
+            ]
+
+            models_progress = server._aggregate_models_scan_progress(server.report_data)
+
+            self.assertEqual([entry["model"] for entry in models_progress], ["Model A"])
+            self.assertEqual(models_progress[0]["state"], "in_progress")
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_progress_monitor_key_changes_with_model_state(self):
+        payload_a = {
+            "models_progress": [
+                {"model": "A", "state": "in_progress", "completed_vulnerabilities": 1, "total_vulnerabilities": 4, "updated_at": "t1"}
+            ]
+        }
+        payload_b = {
+            "models_progress": [
+                {"model": "A", "state": "complete", "completed_vulnerabilities": 4, "total_vulnerabilities": 4, "updated_at": "t2"}
+            ]
+        }
+        self.assertNotEqual(WebServer._progress_monitor_key(payload_a), WebServer._progress_monitor_key(payload_b))
+        self.assertIsNone(WebServer._progress_monitor_key(None))
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_filter_reports_keeps_executive_summary_visible_with_vulnerability_filter(self):
         server = WebServer.__new__(WebServer)
         server.report_data = [
@@ -2416,6 +2785,25 @@ Not a table line anymore.
         ids = [r.get("id") for r in phases]
         self.assertIn("graph_discover", ids)
         self.assertIn("graph_verify", ids)
+
+
+class TestDiffReportSchema(unittest.TestCase):
+    def test_diff_document_round_trip_and_defaults(self):
+        doc = DiffReportDocument(
+            generated_at="2026-01-01T00:00:00",
+            baseline_path="security_reports/proj/20260101_000000",
+            current_path="security_reports/proj/20260102_000000",
+        )
+        self.assertEqual(doc.report_type, "diff")
+        self.assertEqual(doc.counts.new, 0)
+        self.assertEqual(doc.new, [])
+        payload = json.loads(doc.model_dump_json())
+        restored = DiffReportDocument.model_validate(payload)
+        self.assertEqual(restored, doc)
+
+    def test_diff_document_rejects_other_report_types(self):
+        with self.assertRaises(ValueError):
+            DiffReportDocument(generated_at="x", report_type="vulnerability")
 
 
 if __name__ == "__main__":

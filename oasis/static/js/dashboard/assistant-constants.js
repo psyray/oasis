@@ -73,8 +73,18 @@ DashboardApp.ASSISTANT_UI = {
         'Scanned codebase directory is not reachable from this dashboard.',
     codebaseUnavailableDetail:
         'The scanned codebase directory could not be resolved or read at the expected location relative to security_reports. Move or restore security_reports and .oasis_cache alongside the scanned project folder (same parent layout as when the scan ran). Until then, assistant and RAG cannot reliably use source files and embeddings.',
+    ragUnavailableTitle: 'RAG unavailable for this answer',
+    ragUnavailableDetail:
+        'The embedding backend could not be reached, or the embed model is not served by it. This answer was generated without codebase retrieval. Check the embedding provider configuration (--embed-* / --web-embed-*) and the backend model list.',
     validateTargetScopeLabel: 'Report',
     validateTargetIncomplete: 'Select file, chunk, and finding for validation scope.',
+    findingPickerLabel: 'Finding',
+    ariaFindingPicker: 'Pick a finding',
+    findingPickerEmpty: 'No findings in this report',
+    validateScanTimeOrigin: 'Scan-time',
+    validateScanTimeTitle: 'Deterministic validation computed automatically during the scan.',
+    validateGenerateNarrative: 'Generate narrative with AI',
+    validateGenerating: 'Generating…',
 };
 
 /** CSS suffixes for ``oasis-assistant-validate-sev--*`` (must match ``ConfigFinding.severity`` in ``oasis/schemas/analysis.py``). */

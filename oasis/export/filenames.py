@@ -1,8 +1,17 @@
 """Filename helpers for report artifacts (single place for format-specific naming)."""
 
 # Stem for embedding audit reports (``audit_report.md``, ``audit_report.json``, …).
-# Keep aligned with ``Report.filter_output_files(\"audit_report\")`` and dashboard JS.
+# Keep aligned with ``Report.filter_output_files("audit_report")`` and dashboard JS.
 AUDIT_REPORT_ARTIFACT_STEM = "audit_report"
+
+# Stem for the consolidated multi-model report (``consolidated/consolidated_report.json`` +
+# ``.md`` under the run directory; issue #60). Keep aligned with ``oasis.helpers.report_consolidation``
+# and dashboard JS.
+CONSOLIDATED_REPORT_ARTIFACT_STEM = "consolidated_report"
+
+# Run-level artifact subdirectories that must not be mistaken for model directories
+# when the dashboard indexes ``security_reports`` runs.
+RUN_ARTIFACT_SUBDIR_NAMES = frozenset({"consolidated", "diff", "logs"})
 
 
 def artifact_filename(stem: str, fmt: str) -> str:

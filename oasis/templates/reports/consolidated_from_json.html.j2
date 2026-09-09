@@ -1,0 +1,90 @@
+{% import "reports/_macros.html.j2" as macros %}
+{% set preview = preview if preview is defined else {} %}
+
+<article class="report-consolidated-json">
+  <h1 id="consolidated-title">{{ document.title | default('Consolidated multi-model report') }}</h1>
+  <p><strong>Generated at:</strong> {{ document.generated_at | default('') }}</p>
+  <p><strong>Models compared:</strong> {{ document.source_models | join(', ') }}</p>
+
+  <nav class="report-toc" aria-label="Table of contents">
+    <h2 id="table-of-contents" class="report-toc-title">Table of contents</h2>
+    <ul class="report-toc-list">
+      <li><a class="report-toc-btn" href="#consolidated-summary"><span class="report-toc-icon" aria-hidden="true">📊</span><span class="report-toc-label">Summary</span></a></li>
+      <li><a class="report-toc-btn" href="#consolidated-narrative"><span class="report-toc-icon" aria-hidden="true">🧠</span><span class="report-toc-label">Narrative</span></a></li>
+      <li><a class="report-toc-btn" href="#consolidated-confirmed-all"><span class="report-toc-icon" aria-hidden="true">✅</span><span class="report-toc-label">Confirmed by all models</span></a></li>
+      <li><a class="report-toc-btn" href="#consolidated-confirmed-several"><span class="report-toc-icon" aria-hidden="true">🤝</span><span class="report-toc-label">Confirmed by several models</span></a></li>
+      <li><a class="report-toc-btn" href="#consolidated-single-model"><span class="report-toc-icon" aria-hidden="true">🔍</span><span class="report-toc-label">Single-model findings</span></a></li>
+    </ul>
+  </nav>
+
+  <h2 id="consolidated-summary">Summary</h2>
+  <table class="summary-table">
+    <thead><tr><th>Bucket</th><th>Groups</th></tr></thead>
+    <tbody>
+      <tr><td>Total finding groups</td><td>{{ document.counts.total_groups | default(0, true) }}</td></tr>
+      <tr><td>Confirmed by all models</td><td>{{ document.counts.confirmed_by_all | default(0, true) }}</td></tr>
+      <tr><td>Confirmed by several models</td><td>{{ document.counts.confirmed_by_several | default(0, true) }}</td></tr>
+      <tr><td>Single-model findings</td><td>{{ document.counts.single_model | default(0, true) }}</td></tr>
+    </tbody>
+  </table>
+  {{ macros.render_return_to_toc() }}
+
+  <h2 id="consolidated-narrative">Narrative</h2>
+  {% if document.narrative %}
+    {% if document.narrative.overview %}
+    <section id="consolidated-narrative-overview">
+      <h3>Overview</h3>
+      <p>{{ document.narrative.overview }}</p>
+    </section>
+    {% endif %}
+    {% if document.narrative.priorities_html %}
+    <section id="consolidated-narrative-priorities">
+      <h3>Priorities</h3>
+      <div class="consolidated-narrative-block">{{ document.narrative.priorities_html | safe }}</div>
+    </section>
+    {% endif %}
+    {% if document.narrative.guidance_html %}
+    <section id="consolidated-narrative-guidance">
+      <h3>Remediation guidance</h3>
+      <div class="consolidated-narrative-block">{{ document.narrative.guidance_html | safe }}</div>
+    </section>
+    {% endif %}
+  {% else %}
+  <p><em>Narrative unavailable — the deterministic grouping below stands on its own.</em></p>
+  {% endif %}
+  {{ macros.render_return_to_toc() }}
+
+  {% macro consolidated_group_table(groups) %}
+    {% if groups %}
+    <table class="summary-table">
+      <thead><tr><th>Severity</th><th>Vulnerability</th><th>File</th><th>Title</th><th>Models</th></tr></thead>
+      <tbody>
+        {% for group in groups %}
+        <tr>
+          <td>{{ group.worst_severity | default('-', true) }}</td>
+          <td>{{ group.vulnerability_name }}</td>
+          <td><code class="report-meta-code">{{ group.file_path }}</code></td>
+          <td>{{ group.title | default('-', true) }}</td>
+          <td>{{ group.confirming_models | join(', ') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p><em>(none)</em></p>
+    {% endif %}
+  {% endmacro %}
+
+  <h2 id="consolidated-confirmed-all">Confirmed by all models</h2>
+  {{ consolidated_group_table(document.confirmed_by_all_models or []) }}
+  {{ macros.render_return_to_toc() }}
+
+  <h2 id="consolidated-confirmed-several">Confirmed by several models</h2>
+  <p class="consolidated-bucket-hint">Groups seen by at least two models but not by all of them.</p>
+  {{ consolidated_group_table(document.confirmed_by_several_models or []) }}
+  {{ macros.render_return_to_toc() }}
+
+  <h2 id="consolidated-single-model">Single-model findings</h2>
+  {{ consolidated_group_table(document.single_model_groups or []) }}
+  {{ macros.render_return_to_toc() }}
+</article>

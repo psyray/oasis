@@ -27,7 +27,10 @@ from .config import (
 
 # Import from other modules
 from .ollama_manager import OllamaManager
+from .backends import create_model_manager, ModelBackend
 from .helpers.misc import absolute_snippet_lines_in_file
+from .helpers.findings_dedupe import deduplicate_rows_findings
+from .helpers.ignore_markers import drop_inline_ignored_findings
 from .tools import chunk_content_with_spans, logger, calculate_similarity, sanitize_name
 from .report import (
     Report,
@@ -42,6 +45,7 @@ from .helpers import (
 from .helpers.langgraph_cli import (
     LG_DEBUG_SEPARATOR,
     LG_DEEP_VULN_FINISHED,
+    LG_FINDING_VALIDATION,
     LG_LLM_SELECTED,
     LG_SCAN_TASK_COMPLETE,
     cli_bold,
@@ -198,7 +202,7 @@ class SecurityAnalyzer:
     Entry: ``process_analysis_with_model`` → ``invoke_oasis_langgraph``.
     """
 
-    def __init__(self, args, llm_model: str, embedding_manager: EmbeddingManager, ollama_manager: OllamaManager,
+    def __init__(self, args, llm_model: str, embedding_manager: EmbeddingManager, ollama_manager: ModelBackend,
                  scan_model: str = None,
                  structured_output_failure_handler: Optional[StructuredOutputFailureHandler] = None):
         """
@@ -208,7 +212,7 @@ class SecurityAnalyzer:
             args: Command line arguments
             llm_model: Main model to use for deep analysis
             embedding_manager: Embedding manager to use for embeddings
-            ollama_manager: Ollama manager for model interactions
+            ollama_manager: Model backend for LLM interactions (Ollama or OpenAI-compatible)
             scan_model: Lightweight model for initial scanning (if None, uses llm_model)
         """
         try:
@@ -1506,13 +1510,57 @@ FINDINGS SUMMARY (valid JSON envelope; ``truncated_for_llm_prompt_budget`` may b
                 # Store results for this vulnerability
                 all_results[vuln_name] = detailed_results
 
+                # Transverse dedup: same file + identical snippet or overlapping
+                # resolved lines → keep the best finding of each cluster (runs
+                # before validation/report so all consumers see the deduped list)
+                if detailed_results:
+                    dedupe_stats = deduplicate_rows_findings(detailed_results, vuln_name)
+                    if dedupe_stats.get("duplicates_removed"):
+                        logger.info(
+                            "🧹 Finding dedup · %s · %d duplicate(s) removed",
+                            cli_bold(vuln_name),
+                            dedupe_stats["duplicates_removed"],
+                        )
+
+                # Inline ignore markers ("# noqa", "# oasisignore", …): drop
+                # findings whose source lines are annotated. Runs after dedup
+                # and before validation/report so ignored findings consume no
+                # validation budget and never reach the reports.
+                inline_scan_root = getattr(getattr(self, "embedding_manager", None), "input_path", None)
+                if detailed_results and getattr(args, "inline_ignore", True) and inline_scan_root:
+                    inline_stats = drop_inline_ignored_findings(
+                        detailed_results,
+                        scan_root=Path(inline_scan_root).resolve(),
+                        tokens=getattr(args, "inline_ignore_tokens", None),
+                    )
+                    if inline_stats.get("dropped"):
+                        logger.info(
+                            "🚫 Inline ignore · %s · %d finding(s) skipped (source markers)",
+                            cli_bold(vuln_name),
+                            inline_stats["dropped"],
+                        )
+
+                # Scan-time deterministic validation (verdicts embedded in reports)
+                scan_validation_results: Optional[Dict[str, Dict[str, Any]]] = None
+                if detailed_results and getattr(args, "validate_findings", True):
+                    scan_validation_results = self._validate_findings_for_report(
+                        vuln_name, detailed_results, args, pbar=deep_vuln_pbar
+                    )
+
                 # Generate vulnerability report
                 if detailed_results:
-                    report.generate_vulnerability_report(
+                    written = report.generate_vulnerability_report(
                         vulnerability=vuln,
                         results=detailed_results,
                         model_name=self.llm_model,
                     )
+                    json_path = (
+                        written.get("json") if isinstance(written, dict) else None
+                    )
+                    if scan_validation_results and json_path:
+                        self._write_scan_finding_validations_sidecar(
+                            json_path, vuln_name, scan_validation_results
+                        )
                 else:
                     logger.info(f"No suspicious code found for {cli_bold(vuln_name)}")
 
@@ -1538,7 +1586,148 @@ FINDINGS SUMMARY (valid JSON envelope; ``truncated_for_llm_prompt_budget`` may b
                     main_pbar.update(1)
 
         return all_results
-    
+
+    def _validate_findings_for_report(
+        self,
+        vuln_name: str,
+        detailed_results: List[Dict[str, Any]],
+        args: Any,
+        pbar=None,
+    ) -> Optional[Dict[str, Dict[str, Any]]]:
+        """Run scan-time deterministic validation and annotate findings in place.
+
+        Verdicts land in ``finding.validation`` so the canonical reports embed
+        them; the full investigation payloads are returned keyed by the stable
+        session storage key for the sidecar writer. Failures are logged and
+        never abort the deep pass.
+        """
+        try:
+            from oasis.helpers.assistant.batch import (
+                annotate_rows_with_validation,
+                summarize_validation_stats,
+            )
+
+            stats = annotate_rows_with_validation(
+                detailed_results,
+                vulnerability_name=vuln_name,
+                scan_root=Path(self.embedding_manager.input_path).resolve(),
+                total_budget_seconds=float(
+                    getattr(args, "validate_findings_budget", 120.0) or 120.0
+                ),
+            )
+        except Exception:
+            logger.warning("Scan-time finding validation failed for %s", vuln_name, exc_info=True)
+            return None
+        if stats.get("validated"):
+            langgraph_emit(
+                logger,
+                logging.INFO,
+                LG_FINDING_VALIDATION,
+                cli_bold(vuln_name),
+                summarize_validation_stats(vuln_name, stats),
+                pbar=pbar,
+            )
+        results_by_key = stats.get("results_by_key")
+        if not isinstance(results_by_key, dict) or not results_by_key:
+            return None
+        if getattr(args, "validate_findings_narrative", False):
+            self._enrich_scan_validations_with_narrative(
+                vuln_name, results_by_key, args, pbar=pbar
+            )
+        return results_by_key
+
+    def _enrich_scan_validations_with_narrative(
+        self,
+        vuln_name: str,
+        results_by_key: Dict[str, Dict[str, Any]],
+        args: Any,
+        pbar=None,
+    ) -> None:
+        """Best-effort thinking-enabled LLM narrative per scan-time verdict.
+
+        Gated by ``--validate-findings-narrative``; updates the sidecar payloads
+        in place (deterministic verdicts stay authoritative). Verdicts a
+        narrative cannot help with (false positives, insufficient signal) are
+        skipped, and the narrative phase stops at the same wall-clock budget
+        as the deterministic validation.
+        """
+        from oasis.schemas.analysis import AssistantInvestigationResult
+        from oasis.helpers.assistant.think.investigation_synth import (
+            enrich_investigation_with_llm_narrative,
+        )
+
+        budget = float(getattr(args, "validate_findings_budget", 120.0) or 120.0)
+        deadline = time_module.monotonic() + budget
+        # Verdicts a narrative cannot help triage: no signal to explain.
+        skipped_statuses = {"insufficient_signal", "error"}
+        enriched = 0
+        for key, payload in results_by_key.items():
+            if time_module.monotonic() >= deadline:
+                logger.warning(
+                    "Scan-time finding narratives budget exhausted for %s after %d narrative(s)",
+                    cli_bold(vuln_name),
+                    enriched,
+                )
+                break
+            try:
+                result = AssistantInvestigationResult.model_validate(payload)
+            except Exception:
+                logger.debug(
+                    "Scan-time narrative skipped for %s: invalid payload key=%s",
+                    vuln_name,
+                    key,
+                )
+                continue
+            if result.status in skipped_statuses:
+                continue
+            enriched_result = enrich_investigation_with_llm_narrative(
+                result,
+                ollama_manager=self.ollama_manager,
+                chat_model=self.llm_model,
+            )
+            if not enriched_result.narrative_markdown:
+                continue
+            payload.update(
+                {
+                    "narrative_markdown": enriched_result.narrative_markdown,
+                    "narrative_thought_segments": enriched_result.narrative_thought_segments,
+                    "synthesis_model": enriched_result.synthesis_model,
+                    "synthesis_error": enriched_result.synthesis_error,
+                }
+            )
+            enriched += 1
+        if enriched:
+            logger.info(
+                "🧠 LLM narratives · %s · %d verdict(s) narrated (thinking on)",
+                cli_bold(vuln_name),
+                enriched,
+            )
+
+    def _write_scan_finding_validations_sidecar(
+        self,
+        json_path: Any,
+        vuln_name: str,
+        results_by_key: Dict[str, Dict[str, Any]],
+    ) -> None:
+        """Persist full scan-time validation results beside the report JSON."""
+        try:
+            from oasis.helpers.assistant.web.persistence import (
+                merge_scan_finding_validations_sidecar,
+            )
+
+            written = merge_scan_finding_validations_sidecar(
+                Path(json_path).resolve(), vuln_name, results_by_key
+            )
+        except Exception:
+            logger.warning(
+                "Scan-time finding validations sidecar failed for %s", vuln_name, exc_info=True
+            )
+            return
+        if written:
+            logger.info(
+                "🛡️ Finding validations sidecar · %s · %d verdict(s)", cli_bold(vuln_name), written
+            )
+
     def _analyze_vulnerability_deep(self, vuln, vuln_name, all_suspicious_chunks, silent=False):
         """
         Perform deep analysis for a specific vulnerability across all files
@@ -2006,7 +2195,10 @@ class EmbeddingAnalyzer:
         common_args = {
             "vulnerability": vuln,
             "embedding_model": self.embedding_model,
-            "api_url": self.ollama_manager.api_url
+            "api_url": self.ollama_manager.api_url,
+            "provider": getattr(self.ollama_manager, "provider", None),
+            "api_base": getattr(self.ollama_manager, "api_base", None),
+            "api_key": getattr(self.ollama_manager, "api_key", None),
         }
         
         # Process each element based on analysis mode
@@ -2112,8 +2304,8 @@ def analyze_item_parallel(args: tuple) -> Dict:
         Dict with analysis results
     """
     try:
-        # Create a new Ollama client for each process
-        client = OllamaManager(args.api_url).get_client()
+        # Create a new backend client for each process
+        client = create_model_manager(args).get_client()
         
         # Build vulnerability embedding prompt directly
         vuln_data = args.vulnerability
