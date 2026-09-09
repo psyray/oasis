@@ -30,6 +30,7 @@
 - 🤖 **Model selection list**: interactive selection (and the preloaded list) shows the **full model name including the version tag** (e.g. `qwen2.5-coder:7b`) instead of truncating after `:` (issue #61).
 - 🏝️ **ASCII logo alignment**: the startup banner now renders through a raw string, so the palm-tree backslashes display verbatim instead of being halved by Python escape processing — the letters of OASIS keep their column alignment.
 - 🧹 **Dashboard filter persistence**: the **model filter now survives a page reload** (localStorage save/restore/clear like the other facets, checkboxes pre-checked on render), and the first load no longer prunes the filter option lists — every facet (model, vulnerability, severity, format, language, project) keeps all its checkboxes visible even when a restored filter is active (the initial stats fetch omits each facet's own filter; counts stay cross-filtered after interactions).
+- 📡 **Live progress for JSON-only scans**: output formats without `md` now still write the executive summary canonical JSON and its progress sidecar (the canonical path derives from the json artifact when MD is absent), so `-of json` runs get the same live progress tabs as any other output format.
 
 ### ⚡ Changed
 

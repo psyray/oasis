@@ -1120,6 +1120,45 @@ class TestReportSchema(unittest.TestCase):
             self.assertIn("Embedding model: embed-model", content)
             self.assertNotIn("Risk Findings", content)
 
+    @unittest.skipIf(Report is None, "oasis.report dependencies are unavailable")
+    def test_executive_summary_writes_canonical_json_and_sidecar_for_json_only_runs(self):
+        """JSON-only output still gets the canonical summary + progress sidecar (live tabs)."""
+        report = Report.__new__(Report)
+        report.output_format = ["json"]
+        report.output_base_dir = Path("/tmp")
+        report.current_model = "test-model"
+        report.executive_summary_scan_model = "small-model"
+        report.executive_summary_embedding_model = "embed-model"
+        report._executive_summary_sidecar_write_failed = False
+        report.report_dirs = {"test_model": {"json": Path("/tmp")}}
+        report.create_header = lambda title, model_name: [f"# {title}", f"Model: {model_name}"]
+        with tempfile.TemporaryDirectory() as td:
+            run_json = Path(td) / "embed_model" / "json" / "_executive_summary.json"
+            run_json.parent.mkdir(parents=True)
+            report.filter_output_files = lambda safe_name: {"json": run_json}
+            report._generate_and_save_report = lambda output_files, report_content, report_type=None: None
+
+            all_results = {"SQL Injection": [{"file_path": "app.py", "similarity_score": 0.9}]}
+            report.generate_executive_summary(
+                all_results,
+                "test-model",
+                progress={"completed_vulnerabilities": 1, "total_vulnerabilities": 3, "is_partial": True},
+            )
+
+            canon = run_json
+            self.assertTrue(canon.is_file())
+            parsed = json.loads(canon.read_text(encoding="utf-8"))
+            self.assertEqual(parsed.get("report_type"), "executive_summary")
+            self.assertEqual(parsed.get("model_name"), "test-model")
+            self.assertIn("progress", parsed)
+            self.assertEqual(parsed["progress"]["completed_vulnerabilities"], 1)
+
+            sidecar = Path(td) / "embed_model" / "json" / "_executive_summary.progress.json"
+            self.assertTrue(sidecar.is_file())
+            sidecar_doc = json.loads(sidecar.read_text(encoding="utf-8"))
+            self.assertEqual(sidecar_doc["progress"]["completed_vulnerabilities"], 1)
+            self.assertEqual(sidecar_doc.get("model"), "test-model")
+
     @unittest.skipIf(publish_incremental_summary is None, "oasis.report dependencies are unavailable")
     def test_publish_incremental_summary_strips_unknown_progress_extras(self):
         progresses: list = []

@@ -947,7 +947,14 @@ class Report:
         return deep_model_name, scan_model_name, embedding_model_name
 
     def _executive_summary_canonical_json_path(self, output_files: Dict[str, Path]) -> Optional[Path]:
-        """``model_dir/json/_executive_summary.json`` when MD lives under ``model_dir/md/``."""
+        """``model_dir/json/_executive_summary.json`` for json-only and md-based layouts.
+
+        JSON-only runs carry the json artifact in ``output_files`` directly; MD-based
+        runs derive the path from the MD location (``model_dir/md/…``).
+        """
+        json_output = output_files.get("json")
+        if json_output is not None:
+            return Path(json_output)
         md_path = output_files.get("md")
         if md_path is None:
             return None
