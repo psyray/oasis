@@ -105,9 +105,12 @@ DashboardApp.urlWithActiveFilters = function(baseUrl, options = {}) {
     return `${pathPart}${mergedQuery ? `?${mergedQuery}` : ''}${hashFragment}`;
 };
 
-DashboardApp.fetchReports = function() {
+DashboardApp.fetchReports = function(options = {}) {
+    const quiet = Boolean(options && options.quiet);
     DashboardApp.debug("Fetching reports...");
-    DashboardApp.showLoading('reports-container');
+    if (!quiet) {
+        DashboardApp.showLoading('reports-container');
+    }
     
     // Use the utility function to build parameters
     const params = DashboardApp.buildFilterParams();
@@ -145,8 +148,11 @@ DashboardApp.fetchReports = function() {
 };
 
 DashboardApp.fetchStats = function(forceRefresh = false, options = {}) {
+    const quiet = Boolean(options && options.quiet);
     DashboardApp.debug("Fetching stats...");
-    DashboardApp.showLoading('stats-container');
+    if (!quiet) {
+        DashboardApp.showLoading('stats-container');
+    }
     
     // Use the utility function to build parameters
     const params = DashboardApp.buildFilterParams(options);
@@ -169,15 +175,21 @@ DashboardApp.fetchStats = function(forceRefresh = false, options = {}) {
         .then(data => {
             DashboardApp.stats = data;
             
-            // Render the statistics
-            DashboardApp.renderStats();
-            
             // Update filter counts but not change selected filters
             if (!DashboardApp.filtersPopulated) {
                 DashboardApp.populateFilters();
                 DashboardApp.filtersPopulated = true;
             } else {
                 DashboardApp.updateFilterCounts();
+            }
+            
+            if (quiet) {
+                // Lightweight update: the stats card numbers are patched in place —
+                // no full re-render, no spinner, no Chart.js re-creation.
+                DashboardApp.patchStatsCardsInPlace();
+            } else {
+                // Render the statistics
+                DashboardApp.renderStats();
             }
         })
         .catch(error => {
@@ -302,6 +314,7 @@ DashboardApp.applyProgressPayload = function(payload) {
         return;
     }
 
+    const previousState = DashboardApp.progressState;
     // Stale guard — must stay aligned with oasis.report.progress_timestamp_iso() docstring:
     // compare ``updated_at`` strings lexicographically (UTC ISO-8601 with optional fractional
     // seconds, ``Z`` suffix). Lexical order matches chronological order for ISO-8601 shapes; if the
@@ -347,6 +360,9 @@ DashboardApp.applyProgressPayload = function(payload) {
         active_phase: payload.active_phase || '',
         phases: summaryPhaseRows,
         overall: payload.overall && typeof payload.overall === 'object' ? payload.overall : null,
+        models_progress: Array.isArray(payload.models_progress)
+            ? payload.models_progress.filter((entry) => entry && typeof entry === 'object')
+            : [],
         scan_mode: payload.scan_mode || '',
         event_version: typeof payload.event_version === 'number' ? payload.event_version : Number(payload.event_version || 0) || 0,
         vulnerability_types_total:
@@ -356,10 +372,91 @@ DashboardApp.applyProgressPayload = function(payload) {
                   ? payload.vulnerability_types_total
                   : Number(payload.vulnerability_types_total),
     };
-    // Avoid rendering before `refreshDashboard` / `fetchStats` sets `stats` (socket can win the race).
-    if (typeof DashboardApp.renderStats === 'function' && DashboardApp.hasRenderableStats()) {
+    // Targeted re-render: only the progress card (charts and other cards stay stable).
+    if (typeof DashboardApp.renderProgressCard === 'function') {
+        DashboardApp.renderProgressCard();
+    } else if (typeof DashboardApp.renderStats === 'function' && DashboardApp.hasRenderableStats()) {
         DashboardApp.renderStats();
     }
+    // Live scan: new findings or model transitions refresh option lists + report view.
+    if (DashboardApp.shouldLiveRefreshAfterProgress(previousState, DashboardApp.progressState)) {
+        DashboardApp.scheduleLiveDashboardRefresh();
+    }
+};
+
+/**
+ * True when a fresh progress payload signals data worth re-indexing in the UI:
+ * more completed vulnerabilities, or a per-model state change (new model started,
+ * transition, …) — the trigger for live filter/report updates during a scan.
+ */
+DashboardApp.shouldLiveRefreshAfterProgress = function (previousState, nextState) {
+    if (!nextState || !nextState.has_progress) {
+        return false;
+    }
+    const digest = (entries) =>
+        Array.isArray(entries)
+            ? entries.map((entry) => `${entry.model || ''}:${entry.state || ''}`).join('|')
+            : '';
+    const prevCompleted = previousState ? Number(previousState.completed_vulnerabilities || 0) : 0;
+    const nextCompleted = Number(nextState.completed_vulnerabilities || 0);
+    if (nextCompleted > prevCompleted) {
+        return true;
+    }
+    return digest(previousState && previousState.models_progress) !== digest(nextState.models_progress);
+};
+
+/** Debounced live refresh: rebuild filter option lists and the report view. */
+DashboardApp.scheduleLiveDashboardRefresh = function (delayMs = 2000) {
+    if (DashboardApp._liveRefreshTimer) {
+        return;
+    }
+    DashboardApp._liveRefreshTimer = setTimeout(function () {
+        DashboardApp._liveRefreshTimer = null;
+        DashboardApp.refreshLiveDashboardData();
+    }, delayMs);
+};
+
+DashboardApp.refreshLiveDashboardData = function () {
+    // Lightweight live update while the scan streams results: refresh the filter
+    // option lists + counts and the stats card numbers WITHOUT the full re-render
+    // (no loading spinner, no Chart.js re-creation, no report-list spinner).
+    DashboardApp.filtersPopulated = false;
+    DashboardApp.fetchStats(true, {
+        quiet: true,
+        includeModel: false,
+        includeVulnerability: false,
+        includeSeverity: false,
+        includeFormat: false,
+        includeLanguage: false,
+        includeProject: false,
+    });
+    DashboardApp.fetchReports({ quiet: true });
+};
+
+/** Fallback aggregate when the server payload lacks ``overall`` (older server). */
+DashboardApp.computeOverallProgress = function (modelsProgress) {
+    const entries = Array.isArray(modelsProgress) ? modelsProgress : [];
+    if (!entries.length) {
+        return {};
+    }
+    const knownTotals = entries
+        .filter((entry) => entry.state !== 'pending')
+        .map((entry) => Math.max(0, Number(entry.total_vulnerabilities || 0)));
+    const perModelTotal = knownTotals.length ? Math.max.apply(null, knownTotals) : 0;
+    const completed = entries.reduce((sum, entry) => sum + Math.max(0, Number(entry.completed_vulnerabilities || 0)), 0);
+    const states = new Set(entries.map((entry) => String(entry.state || '')));
+    let status = 'in_progress';
+    if (entries.every((entry) => entry.state === 'complete')) {
+        status = 'complete';
+    } else if (!entries.some((entry) => entry.state === 'in_progress')) {
+        status = states.has('failed') ? 'failed' : states.has('aborted') ? 'aborted' : 'in_progress';
+    }
+    return {
+        completed_vulnerabilities: completed,
+        total_vulnerabilities: perModelTotal * entries.length,
+        status: status,
+        is_partial: status !== 'complete',
+    };
 };
 
 DashboardApp.fetchProgress = function(forceRefresh = false) {

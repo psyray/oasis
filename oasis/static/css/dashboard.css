@@ -409,6 +409,48 @@ body {
     overflow: hidden;
 }
 
+/* Multi-model progress: one tab per model + overall (current / done / pending states) */
+.progress-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.progress-tab {
+    border: 1px solid var(--light-gray);
+    background: transparent;
+    border-radius: 14px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--dark-blue);
+}
+
+.progress-tab.is-selected {
+    border-color: var(--turquoise);
+    background-color: var(--turquoise);
+    color: #ffffff;
+}
+
+.progress-tab.is-pending {
+    opacity: 0.5;
+}
+
+.progress-tab-count {
+    opacity: 0.85;
+}
+
+.progress-models-total {
+    font-size: 12px;
+    color: var(--dark-blue);
+    margin-bottom: 8px;
+}
+
+.progress-panel[hidden] {
+    display: none;
+}
+
 .progress-fill {
     height: 100%;
     background-color: var(--turquoise);

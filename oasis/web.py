@@ -524,24 +524,42 @@ class WebServer:
             try:
                 self.collect_report_data()
                 payload = self._build_scan_progress_payload()
-                progress_key = (
-                    payload.get("completed_vulnerabilities"),
-                    payload.get("total_vulnerabilities"),
-                    payload.get("is_partial"),
-                    str(payload.get("status") or ""),
-                    payload.get("model"),
-                    payload.get("path"),
-                    payload.get("updated_at"),
-                    payload.get("active_phase"),
-                    repr(payload.get("phases")),
-                    repr(payload.get("adaptive_subphases")),
-                ) if payload else None
+                progress_key = self._progress_monitor_key(payload)
                 if payload and progress_key != self._last_emitted_progress_key:
                     self.socketio.emit("scan_progress", payload)
                     self._last_emitted_progress_key = progress_key
             except Exception:
                 logger.debug("Progress monitor loop failed", exc_info=True)
             self.socketio.sleep(self._progress_monitor_interval_seconds())
+
+    @staticmethod
+    def _progress_monitor_key(payload: dict | None):
+        """Dedup key for the realtime monitor; sensitive to every model's state."""
+        if not payload:
+            return None
+        models_digest = tuple(
+            (
+                entry.get("model"),
+                entry.get("state"),
+                entry.get("completed_vulnerabilities"),
+                entry.get("total_vulnerabilities"),
+                entry.get("updated_at"),
+            )
+            for entry in (payload.get("models_progress") or [])
+        )
+        return (
+            payload.get("completed_vulnerabilities"),
+            payload.get("total_vulnerabilities"),
+            payload.get("is_partial"),
+            str(payload.get("status") or ""),
+            payload.get("model"),
+            payload.get("path"),
+            payload.get("updated_at"),
+            payload.get("active_phase"),
+            repr(payload.get("phases")),
+            repr(payload.get("adaptive_subphases")),
+            models_digest,
+        )
 
     def emit_scan_progress(self, progress: dict) -> None:
         if not self.socketio:
@@ -551,6 +569,14 @@ class WebServer:
         else:
             return
 
+    def _attach_models_progress(self, payload: dict) -> dict:
+        """Attach per-model progress entries + overall aggregate for multi-model runs."""
+        models_progress = self._aggregate_models_scan_progress(getattr(self, "report_data", None) or [])
+        if models_progress:
+            payload["models_progress"] = models_progress
+            payload["overall"] = self._overall_scan_progress(models_progress)
+        return payload
+
     def _build_scan_progress_payload(self, progress: dict | None = None) -> dict:
         """Build realtime progress event payload from explicit or latest report progress."""
         if progress is None:
@@ -559,7 +585,7 @@ class WebServer:
             return {}
         payload = self._normalize_scan_progress_payload(progress, has_progress=True)
         payload["event_version"] = coerce_scan_progress_event_version(payload.get("event_version"))
-        return payload
+        return self._attach_models_progress(payload)
 
     @staticmethod
     def _progress_monitor_interval_seconds() -> float:
@@ -702,7 +728,13 @@ class WebServer:
             if report.get("vulnerability_type") == "Executive Summary"
             and report.get("progress")
         ]
-        summary_reports.sort(key=lambda report: report.get("date") or "", reverse=True)
+        summary_reports.sort(
+            key=lambda report: (
+                report.get("date") or "",
+                WebServer._progress_updated_at(report.get("progress")),
+            ),
+            reverse=True,
+        )
         if not summary_reports:
             return {}
         latest = summary_reports[0]
@@ -711,6 +743,159 @@ class WebServer:
         progress["date"] = latest.get("date")
         progress["path"] = latest.get("path")
         return progress
+
+    @staticmethod
+    def _progress_updated_at(progress: Any) -> str:
+        """Inner ``updated_at`` of a sidecar progress dict (tie-break within a run)."""
+        if isinstance(progress, dict):
+            value = progress.get("updated_at")
+            if isinstance(value, str):
+                return value.strip()
+        return ""
+
+    @staticmethod
+    def _run_dir_from_row_path(security_dir: Path, row_path: Any) -> Optional[Path]:
+        """Run directory for an indexed report row (``<run>/<model>/json/…`` layouts)."""
+        rel = str(row_path or "").strip().replace("\\", "/").strip("/")
+        if not rel:
+            return None
+        parts = [part for part in rel.split("/") if part]
+        if not any(is_run_timestamp_dirname(part) for part in parts):
+            return None
+        run_idx = max(i for i, part in enumerate(parts) if is_run_timestamp_dirname(part))
+        # A project slug may precede the run timestamp (nested layout): keep it so the
+        # resolved directory is security_dir/<project>/<run> when present.
+        segments = parts[: run_idx + 1]
+        return (Path(security_dir) / Path(*segments)).resolve(strict=False)
+
+    def _aggregate_models_scan_progress(self, reports: list[dict]) -> list[dict]:
+        """Per-model scan progress for the latest run (tabbed dashboard view).
+
+        Models come from the run directory layout (created upfront for every
+        deep model), so models that have not started yet appear as ``pending``;
+        started models keep their latest executive-summary sidecar state.
+        """
+        summary_rows = [
+            report
+            for report in (reports or [])
+            if report.get("vulnerability_type") == "Executive Summary" and report.get("progress")
+        ]
+        if not summary_rows:
+            return []
+        latest = self._latest_scan_progress_from_reports(summary_rows)
+        security_dir = getattr(self, "security_dir", None)
+        if security_dir is None:
+            return []
+        run_dir = self._run_dir_from_row_path(Path(security_dir), latest.get("path"))
+        if run_dir is None or not run_dir.is_dir():
+            return []
+
+        run_prefix = ""
+        try:
+            run_prefix = str(run_dir.relative_to(self.security_dir.resolve()))
+        except (ValueError, OSError):
+            return []
+        run_rows = [
+            report
+            for report in summary_rows
+            if str(report.get("path") or "").replace("\\", "/").startswith(run_prefix + "/")
+        ]
+
+        latest_by_model: Dict[str, dict] = {}
+        for row in run_rows:
+            model = str(row.get("model") or "").strip()
+            if not model:
+                continue
+            current = latest_by_model.get(model)
+            if current is None or WebServer._progress_updated_at(row.get("progress")) > WebServer._progress_updated_at(
+                current.get("progress")
+            ):
+                latest_by_model[model] = row
+
+        try:
+            model_dir_names = sorted(
+                d.name
+                for d in run_dir.iterdir()
+                if d.is_dir() and d.name not in RUN_ARTIFACT_SUBDIR_NAMES
+            )
+        except OSError:
+            model_dir_names = []
+        models = [self._desanitize_name(name) for name in model_dir_names]
+        for model in latest_by_model:
+            if model not in models:
+                models.append(model)
+
+        entries: list[dict] = []
+        for model in models:
+            row = latest_by_model.get(model)
+            if row is None:
+                entries.append(
+                    {
+                        "model": model,
+                        "state": "pending",
+                        "status": "pending",
+                        "completed_vulnerabilities": 0,
+                        "total_vulnerabilities": 0,
+                        "is_partial": True,
+                        "current_vulnerability": "",
+                        "tested_vulnerabilities": [],
+                        "phases": [],
+                        "updated_at": "",
+                        "date": latest.get("date"),
+                        "path": "",
+                    }
+                )
+                continue
+            entry = self._normalize_scan_progress_payload(
+                {**dict(row.get("progress") or {}), "model": model, "date": row.get("date"), "path": row.get("path")},
+                has_progress=True,
+            )
+            status_key = str(entry.get("status") or "").lower()
+            if status_key in {"complete", "finished", "succeeded"}:
+                entry["state"] = "complete"
+            elif status_key in {"failed", "aborted"}:
+                entry["state"] = status_key
+            else:
+                entry["state"] = "in_progress"
+            entries.append(entry)
+        return entries
+
+    @staticmethod
+    def _overall_scan_progress(models_progress: list[dict]) -> dict:
+        """Aggregate progress across the models of one run (equal weight per vuln type).
+
+        Models scan the same vulnerability list, so the overall denominator is the
+        known per-model total times the number of models in the run; pending models
+        contribute zero completed vulnerabilities.
+        """
+        if not models_progress:
+            return {}
+        known_totals = [
+            int(entry.get("total_vulnerabilities") or 0)
+            for entry in models_progress
+            if entry.get("state") != "pending"
+        ]
+        per_model_total = max(known_totals, default=0)
+        completed = sum(int(entry.get("completed_vulnerabilities") or 0) for entry in models_progress)
+        total = per_model_total * len(models_progress)
+        states = {str(entry.get("state") or "") for entry in models_progress}
+        if states and states <= {"complete"}:
+            status = "complete"
+        elif "failed" in states or "aborted" in states:
+            status = "in_progress" if any(entry.get("state") == "in_progress" for entry in models_progress) else (
+                "failed" if "failed" in states else "aborted"
+            )
+        else:
+            status = "in_progress"
+        return {
+            "completed_vulnerabilities": completed,
+            "total_vulnerabilities": total,
+            "status": status,
+            "is_partial": status != "complete",
+        }
+
+    def _scan_progress_models_total(self, models_progress: list[dict]) -> int:
+        return len(models_progress)
 
     def _generate_random_password(self, length=10):
         """Generate a random password with letters, digits and special characters"""
@@ -3385,7 +3570,7 @@ class WebServer:
         normalized = self._normalize_scan_progress_payload(progress, has_progress=True)
         if "event_version" in normalized:
             normalized["event_version"] = coerce_scan_progress_event_version(normalized.get("event_version"))
-        return normalized
+        return self._attach_models_progress(normalized)
 
     @staticmethod
     def _latest_scan_progress_from_filtered_reports(reports_to_analyze) -> dict:

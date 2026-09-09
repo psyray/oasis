@@ -2192,6 +2192,161 @@ Not a table line anymore.
         self.assertEqual(emitted["payload"]["event_version"], 2)
 
     @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_latest_scan_progress_prefers_fresh_updated_at_within_same_run(self):
+        """Same-run models share the row date: the freshest sidecar (in-progress model) wins."""
+        rows = [
+            {
+                "format": "json",
+                "vulnerability_type": "Executive Summary",
+                "progress": {
+                    "completed_vulnerabilities": 4,
+                    "total_vulnerabilities": 4,
+                    "is_partial": False,
+                    "status": "complete",
+                    "updated_at": "2026-04-17T10:30:00.000Z",
+                },
+                "model": "Model A",
+                "date": "2026-04-17 10:00:00",
+                "path": "20260417_100000/model_a/json/_executive_summary.json",
+            },
+            {
+                "format": "json",
+                "vulnerability_type": "Executive Summary",
+                "progress": {
+                    "completed_vulnerabilities": 1,
+                    "total_vulnerabilities": 4,
+                    "is_partial": True,
+                    "status": "in_progress",
+                    "updated_at": "2026-04-17T10:35:00.000Z",
+                },
+                "model": "Model B",
+                "date": "2026-04-17 10:00:00",
+                "path": "20260417_100000/model_b/json/_executive_summary.json",
+            },
+        ]
+
+        latest = WebServer._latest_scan_progress_from_reports(rows)
+
+        self.assertEqual(latest.get("model"), "Model B")
+        self.assertEqual(latest.get("status"), "in_progress")
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_models_progress_aggregates_run_models_with_pending_state(self):
+        """Multi-model run: per-model states (done / current / pending) + overall totals."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            run_dir = base / "20260417_100000"
+            for model_dir in ("model_a", "model_b", "model_c"):
+                (run_dir / model_dir / "json").mkdir(parents=True)
+
+            server = WebServer.__new__(WebServer)
+            server.security_dir = base
+            server.report_data = [
+                {
+                    "format": "json",
+                    "vulnerability_type": "Executive Summary",
+                    "progress": {
+                        "completed_vulnerabilities": 4,
+                        "total_vulnerabilities": 4,
+                        "is_partial": False,
+                        "status": "complete",
+                        "updated_at": "2026-04-17T10:30:00.000Z",
+                    },
+                    "model": "Model A",
+                    "date": "2026-04-17 10:00:00",
+                    "path": "20260417_100000/model_a/json/_executive_summary.json",
+                },
+                {
+                    "format": "json",
+                    "vulnerability_type": "Executive Summary",
+                    "progress": {
+                        "completed_vulnerabilities": 1,
+                        "total_vulnerabilities": 4,
+                        "is_partial": True,
+                        "status": "in_progress",
+                        "updated_at": "2026-04-17T10:35:00.000Z",
+                    },
+                    "model": "Model B",
+                    "date": "2026-04-17 10:00:00",
+                    "path": "20260417_100000/model_b/json/_executive_summary.json",
+                },
+            ]
+
+            models_progress = server._aggregate_models_scan_progress(server.report_data)
+
+            states = {entry["model"]: entry["state"] for entry in models_progress}
+            self.assertEqual(states, {"Model A": "complete", "Model B": "in_progress", "Model C": "pending"})
+            pending = next(entry for entry in models_progress if entry["model"] == "Model C")
+            self.assertEqual(pending["completed_vulnerabilities"], 0)
+            self.assertEqual(pending["total_vulnerabilities"], 0)
+
+            overall = server._overall_scan_progress(models_progress)
+            self.assertEqual(overall["completed_vulnerabilities"], 5)
+            self.assertEqual(overall["total_vulnerabilities"], 12)
+            self.assertEqual(overall["status"], "in_progress")
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_models_progress_scopes_to_latest_run(self):
+        """Sidecars of older runs must not leak into the current run's tab list."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            run_dir = base / "20260417_100000"
+            (run_dir / "model_a" / "json").mkdir(parents=True)
+
+            server = WebServer.__new__(WebServer)
+            server.security_dir = base
+            server.report_data = [
+                {
+                    "format": "json",
+                    "vulnerability_type": "Executive Summary",
+                    "progress": {
+                        "completed_vulnerabilities": 2,
+                        "total_vulnerabilities": 4,
+                        "is_partial": True,
+                        "status": "in_progress",
+                        "updated_at": "2026-04-17T10:30:00.000Z",
+                    },
+                    "model": "Model A",
+                    "date": "2026-04-17 10:00:00",
+                    "path": "20260417_100000/model_a/json/_executive_summary.json",
+                },
+                {
+                    "format": "json",
+                    "vulnerability_type": "Executive Summary",
+                    "progress": {
+                        "completed_vulnerabilities": 4,
+                        "total_vulnerabilities": 4,
+                        "is_partial": False,
+                        "status": "complete",
+                        "updated_at": "2026-04-16T09:00:00.000Z",
+                    },
+                    "model": "Old Model",
+                    "date": "2026-04-16 09:00:00",
+                    "path": "20260416_090000/old_model/json/_executive_summary.json",
+                },
+            ]
+
+            models_progress = server._aggregate_models_scan_progress(server.report_data)
+
+            self.assertEqual([entry["model"] for entry in models_progress], ["Model A"])
+            self.assertEqual(models_progress[0]["state"], "in_progress")
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
+    def test_web_progress_monitor_key_changes_with_model_state(self):
+        payload_a = {
+            "models_progress": [
+                {"model": "A", "state": "in_progress", "completed_vulnerabilities": 1, "total_vulnerabilities": 4, "updated_at": "t1"}
+            ]
+        }
+        payload_b = {
+            "models_progress": [
+                {"model": "A", "state": "complete", "completed_vulnerabilities": 4, "total_vulnerabilities": 4, "updated_at": "t2"}
+            ]
+        }
+        self.assertNotEqual(WebServer._progress_monitor_key(payload_a), WebServer._progress_monitor_key(payload_b))
+        self.assertIsNone(WebServer._progress_monitor_key(None))
+
+    @unittest.skipIf(WebServer is None, "oasis.web dependencies are unavailable")
     def test_filter_reports_keeps_executive_summary_visible_with_vulnerability_filter(self):
         server = WebServer.__new__(WebServer)
         server.report_data = [

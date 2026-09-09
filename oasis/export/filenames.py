@@ -11,7 +11,7 @@ CONSOLIDATED_REPORT_ARTIFACT_STEM = "consolidated_report"
 
 # Run-level artifact subdirectories that must not be mistaken for model directories
 # when the dashboard indexes ``security_reports`` runs.
-RUN_ARTIFACT_SUBDIR_NAMES = frozenset({"consolidated", "diff"})
+RUN_ARTIFACT_SUBDIR_NAMES = frozenset({"consolidated", "diff", "logs"})
 
 
 def artifact_filename(stem: str, fmt: str) -> str:
