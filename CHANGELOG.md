@@ -27,6 +27,7 @@
 - 🧠 **Embedding context auto-detection & retry (issue #58)**: chunk sizing prefers the **runtime context from Ollama `ps()`** over declarative `num_ctx` / GGUF metadata, with a shared retry halving the chunk limit on context-length errors — embeddings no longer silently drop a file on `input length exceeds the context length`.
 - 🤖 **Model selection list**: interactive selection (and the preloaded list) shows the **full model name including the version tag** (e.g. `qwen2.5-coder:7b`) instead of truncating after `:` (issue #61).
 - 🏝️ **ASCII logo alignment**: the startup banner now renders through a raw string, so the palm-tree backslashes display verbatim instead of being halved by Python escape processing — the letters of OASIS keep their column alignment.
+- 🤝 **Consolidated report grouping & context**: findings quoted by different models with different amounts of surrounding context (same vulnerable line) now merge into one group — a deterministic snippet-containment pass on top of the exact fingerprint — instead of splitting into single-model buckets; the consolidated document also carries `project` / `analysis_root` (and the dashboard backfills it for artifacts written before), so its card no longer flags the scanned codebase as unreachable.
 
 ### ⚡ Changed
 

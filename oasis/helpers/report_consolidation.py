@@ -46,6 +46,25 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _first_source_document_meta(run_dir: Path) -> tuple[Optional[str], Optional[str]]:
+    """First ``(project, analysis_root)`` among the run's canonical source documents.
+
+    Every per-model document of a run shares the same scanned root, so the first
+    readable one provides the context the dashboard needs (codebase reachability).
+    """
+    for path in iter_json_document_paths(run_dir):
+        doc = load_json_document(path)
+        if doc is None or str(doc.get("report_type") or "") != "vulnerability":
+            continue
+        project = doc.get("project")
+        analysis_root = doc.get("analysis_root")
+        return (
+            project.strip() if isinstance(project, str) and project.strip() else None,
+            analysis_root.strip() if isinstance(analysis_root, str) and analysis_root.strip() else None,
+        )
+    return None, None
+
+
 def collect_model_findings(output_dir: Path) -> Dict[str, List[Dict[str, str]]]:
     """Fingerprinted finding refs grouped by the ``model_name`` of each document."""
     refs_by_model: Dict[str, List[Dict[str, str]]] = {}
@@ -58,6 +77,52 @@ def collect_model_findings(output_dir: Path) -> Dict[str, List[Dict[str, str]]]:
             continue
         refs_by_model.setdefault(model, []).extend(iter_findings_from_document(doc))
     return refs_by_model
+
+
+def _collapsed_snippet(snippet: Any) -> str:
+    """Whitespace-collapsed snippet text for containment matching."""
+    return " ".join(str(snippet or "").split())
+
+
+def _snippets_overlap(first: Any, second: Any) -> bool:
+    """True when either snippet contains the other (same finding, different quoted context)."""
+    left, right = _collapsed_snippet(first), _collapsed_snippet(second)
+    if not left or not right:
+        return False
+    return left in right or right in left
+
+
+def _merge_overlapping_groups(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Second consolidation pass: merge same-location groups whose snippets overlap.
+
+    Models quote different amounts of context around the same vulnerable line, so
+    exact snippet fingerprints can split one finding into several groups
+    (e.g. one line vs. the same line plus its assignment). Containment in either
+    direction on whitespace-collapsed snippets re-joins them deterministically;
+    the presentation of the group confirming on more models wins on merge.
+    """
+    merged: List[Dict[str, Any]] = []
+    for group in groups:
+        target = next(
+            (
+                existing for existing in merged
+                if existing["file_path"] == group["file_path"]
+                and existing["vulnerability_name"] == group["vulnerability_name"]
+                and _snippets_overlap(existing["snippet"], group["snippet"])
+            ),
+            None,
+        )
+        if target is None:
+            merged.append(group)
+            continue
+        if len(group["confirming_models"]) > len(target["confirming_models"]):
+            for key in ("fingerprint", "title", "snippet"):
+                target[key] = group[key]
+        for model, severity in group["severity_by_model"].items():
+            if model not in target["confirming_models"]:
+                target["confirming_models"].append(model)
+            target["severity_by_model"][model] = str(severity)
+    return merged
 
 
 def group_findings(refs_by_model: Dict[str, List[Dict[str, str]]]) -> List[ConsolidatedFindingGroup]:
@@ -91,7 +156,10 @@ def group_findings(refs_by_model: Dict[str, List[Dict[str, str]]]) -> List[Conso
         )
         return (-len(group["confirming_models"]), -best_severity, group["file_path"], group["vulnerability_name"])
 
-    return [ConsolidatedFindingGroup(**group) for group in sorted(merged.values(), key=_order_key)]
+    return [
+        ConsolidatedFindingGroup(**group)
+        for group in sorted(_merge_overlapping_groups(list(merged.values())), key=_order_key)
+    ]
 
 
 def _consolidated_counts(groups: List[ConsolidatedFindingGroup], model_count: int) -> ConsolidatedCounts:
@@ -266,9 +334,12 @@ def write_consolidated_report(
             backend, report_model=report_model, digest=digest, source_models=model_names
         )
 
+    project, analysis_root = _first_source_document_meta(run_dir)
     doc = ConsolidatedReportDocument(
         generated_at=generate_timestamp(),
         source_models=model_names,
+        project=project,
+        analysis_root=analysis_root,
         counts=_consolidated_counts(groups, len(model_names)),
         groups=groups,
         narrative=narrative,

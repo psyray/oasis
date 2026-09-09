@@ -2832,7 +2832,7 @@ class WebServer:
         json_path = run_dir / "consolidated" / f"{CONSOLIDATED_REPORT_ARTIFACT_STEM}.json"
         if not json_path.is_file():
             return []
-        return [
+        rows = [
             self._process_report_file(
                 json_path,
                 _CONSOLIDATED_DASHBOARD_MODEL_NAME,
@@ -2842,6 +2842,36 @@ class WebServer:
                 run_dir / "consolidated",
             )
         ]
+        self._backfill_consolidated_row_context(run_dir, rows[0])
+        return rows
+
+    def _backfill_consolidated_row_context(self, run_dir: Path, row: Dict[str, Any]) -> None:
+        """Inherit ``project``/``analysis_root`` for consolidated artifacts written before
+        the fields existed, instead of flagging the codebase unreachable (⚠️ badge)."""
+        ar_current = row.get("analysis_root")
+        if isinstance(ar_current, str) and ar_current.strip():
+            return
+        try:
+            model_dirs = [
+                d for d in run_dir.iterdir()
+                if d.is_dir() and d.name not in RUN_ARTIFACT_SUBDIR_NAMES
+            ]
+        except OSError:
+            return
+        for model_dir in model_dirs:
+            for json_file in sorted((model_dir / "json").glob("*.json")):
+                project, analysis_root_raw = self._canonical_json_fields_from_path(json_file)
+                if not project and not analysis_root_raw:
+                    continue
+                resolved_root, codebase_ok = self._cached_codebase_access_state(analysis_root_raw)
+                if project and not str(row.get("project") or "").strip():
+                    row["project"] = project
+                if analysis_root_raw:
+                    row["analysis_root"] = analysis_root_raw
+                    row["analysis_root_resolved"] = str(resolved_root) if resolved_root else None
+                    row["codebase_accessible"] = codebase_ok
+                    row["assistant_context_warning"] = assistant_context_warning(not codebase_ok)
+                return
 
     def _iter_run_directories(self, security_reports_dir: Path):
         """

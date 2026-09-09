@@ -1786,6 +1786,8 @@ class TestConsolidatedDashboardEntry(unittest.TestCase):
                         "report_type": "vulnerability",
                         "model_name": model,
                         "vulnerability_name": "SQL Injection",
+                        "project": "demo",
+                        "analysis_root": "..",
                         "files": [
                             {
                                 "file_path": "app.py",
@@ -1832,6 +1834,41 @@ class TestConsolidatedDashboardEntry(unittest.TestCase):
             self.assertEqual(row["format"], "json")
             self.assertTrue(row["path"].endswith("consolidated/consolidated_report.json"))
             self.assertFalse(any(r.get("model") == "consolidated" for r in rows))
+
+    def test_consolidated_row_codebase_context_from_sources(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            server = self._make_server(base)
+            run_dir = server.security_dir / "20260909_090000"
+            self._write_run(run_dir)
+
+            rows = server._collect_reports_from_directories()
+
+            row = next(r for r in rows if r.get("vulnerability_type") == "Consolidated Report")
+            self.assertEqual(row["project"], "demo")
+            self.assertEqual(row["analysis_root"], "..")
+            self.assertTrue(row["codebase_accessible"])
+            self.assertIsNone(row["assistant_context_warning"])
+
+    def test_consolidated_row_backfills_legacy_artifact(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            server = self._make_server(base)
+            run_dir = server.security_dir / "20260909_090000"
+            self._write_run(run_dir)
+            # Simulate an artifact written before the consolidated document carried context
+            consolidated_path = run_dir / "consolidated" / "consolidated_report.json"
+            legacy = json.loads(consolidated_path.read_text(encoding="utf-8"))
+            legacy.pop("project", None)
+            legacy.pop("analysis_root", None)
+            consolidated_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+            rows = server._collect_reports_from_directories()
+
+            row = next(r for r in rows if r.get("vulnerability_type") == "Consolidated Report")
+            self.assertEqual(row["analysis_root"], "..")
+            self.assertTrue(row["codebase_accessible"])
+            self.assertIsNone(row["assistant_context_warning"])
 
     def test_consolidated_html_preview_route(self):
         from urllib.parse import quote

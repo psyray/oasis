@@ -31,9 +31,11 @@ def _vuln_doc(
     title: str = "Finding",
     severity: str = "High",
     snippet: str = "cur.execute(sql)",
+    project: str | None = None,
+    analysis_root: str | None = None,
 ) -> dict:
     """Minimal canonical vulnerability document for consolidation tests."""
-    return {
+    doc = {
         "report_type": "vulnerability",
         "model_name": model,
         "vulnerability_name": vuln_name,
@@ -51,6 +53,11 @@ def _vuln_doc(
             }
         ],
     }
+    if project is not None:
+        doc["project"] = project
+    if analysis_root is not None:
+        doc["analysis_root"] = analysis_root
+    return doc
 
 
 class _RunDir:
@@ -102,6 +109,58 @@ class TestGroupFindings(unittest.TestCase):
     def test_empty_fingerprint_refs_skipped(self):
         groups = group_findings({"m1": [{"fingerprint": "", "file_path": "a.py"}]})
         self.assertEqual(groups, [])
+
+    def test_same_finding_different_quoted_context_merges(self):
+        from oasis.helpers.report_diff import finding_fingerprint
+
+        wide = '$host = $_GET[\'host\'] ?? \'\';\nreturn shell_exec("ping -c 1 $host");'
+        refs_by_model = {
+            "m1": [{
+                "fingerprint": finding_fingerprint("a.php", "Remote Code Execution", 'return shell_exec("ping -c 1 $host");'),
+                "file_path": "a.php",
+                "vulnerability_name": "Remote Code Execution",
+                "title": "RCE via Shell Injection",
+                "severity": "Critical",
+                "snippet": 'return shell_exec("ping -c 1 $host");',
+            }],
+            "m2": [{
+                "fingerprint": finding_fingerprint("a.php", "Remote Code Execution", wide),
+                "file_path": "a.php",
+                "vulnerability_name": "Remote Code Execution",
+                "title": "RCE via shell_exec",
+                "severity": "Critical",
+                "snippet": wide,
+            }],
+        }
+        groups = group_findings(refs_by_model)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].confirming_models, ["m1", "m2"])
+        self.assertEqual(groups[0].severity_by_model, {"m1": "Critical", "m2": "Critical"})
+
+    def test_distinct_findings_same_file_stay_split(self):
+        from oasis.helpers.report_diff import finding_fingerprint
+
+        def _ref(fp: str, snippet: str) -> dict:
+            return {
+                "fingerprint": fp,
+                "file_path": "a.php",
+                "vulnerability_name": "Remote Code Execution",
+                "title": f"T-{fp}",
+                "severity": "High",
+                "snippet": snippet,
+            }
+
+        refs_by_model = {
+            "m1": [
+                _ref(finding_fingerprint("a.php", "Remote Code Execution", "shell_exec($cmd);"), "shell_exec($cmd);"),
+                _ref(finding_fingerprint("a.php", "Remote Code Execution", "eval($input);"), "eval($input);"),
+            ],
+            "m2": [
+                _ref(finding_fingerprint("a.php", "Remote Code Execution", "system($cmd);"), "system($cmd);"),
+            ],
+        }
+        groups = group_findings(refs_by_model)
+        self.assertEqual(len(groups), 3)
 
 
 class TestCollectModelFindings(unittest.TestCase):
@@ -186,6 +245,25 @@ class TestWriteConsolidatedReport(unittest.TestCase):
             doc = write_consolidated_report(run.path, source_models=["m1", "m2"])
             assert doc is not None  # type narrowing for the checker
             self.assertEqual(doc["source_models"], ["m1", "m2"])
+
+    def test_source_context_propagated_to_document(self):
+        with _RunDir(
+            {
+                "m1": [_vuln_doc("m1", project="myapp", analysis_root="../myapp")],
+                "m2": [_vuln_doc("m2", project="myapp", analysis_root="../myapp")],
+            }
+        ) as run:
+            doc = write_consolidated_report(run.path)
+            assert doc is not None  # type narrowing for the checker
+            self.assertEqual(doc["project"], "myapp")
+            self.assertEqual(doc["analysis_root"], "../myapp")
+
+    def test_source_context_defaults_to_none(self):
+        with _RunDir({"m1": [_vuln_doc("m1")], "m2": [_vuln_doc("m2")]}) as run:
+            doc = write_consolidated_report(run.path)
+            assert doc is not None  # type narrowing for the checker
+            self.assertIsNone(doc["project"])
+            self.assertIsNone(doc["analysis_root"])
 
     def test_llm_narrative_success(self):
         narrative = {"overview": "All good.", "priorities_markdown": "- Fix XSS", "guidance_markdown": "Escape output."}

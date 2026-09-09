@@ -56,6 +56,14 @@ class ConsolidatedReportDocument(BaseModel):
     report_type: Literal["consolidated"] = "consolidated"
     title: str = "Consolidated multi-model report"
     generated_at: str
+    project: Optional[str] = Field(default=None, description="Project label (dashboard grouping)")
+    analysis_root: Optional[str] = Field(
+        default=None,
+        description=(
+            "Scanned codebase root stored relative to security_reports "
+            "(same encoding as canonical vulnerability documents)"
+        ),
+    )
     source_models: List[str] = Field(default_factory=list)
     counts: ConsolidatedCounts = Field(default_factory=ConsolidatedCounts)
     groups: List[ConsolidatedFindingGroup] = Field(default_factory=list)
