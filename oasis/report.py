@@ -32,6 +32,10 @@ from .schemas.audit_report import (
     AuditReportDocument,
     AuditVulnerabilitySection,
 )
+from .schemas.consolidated_report import ConsolidatedReportDocument
+
+# Highest severity wins for consolidated group display (aligned with findings_dedupe ranking).
+_CONSOLIDATED_SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1}
 from .tools import extract_clean_path, logger, sanitize_name, generate_timestamp
 from .helpers.analysis_root_path import encode_analysis_root_for_storage
 from .helpers.report_project import (
@@ -458,6 +462,36 @@ class Report:
         template = self.template_env.get_template("reports/executive_summary_from_json.html.j2")
         return template.render(payload=safe_payload, preview=preview_context or {})
 
+    def _render_consolidated_inner_html(
+        self,
+        doc: ConsolidatedReportDocument,
+        preview_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        payload = doc.model_dump(mode="json")
+        groups = payload.get("groups") or []
+        model_count = len(payload.get("source_models") or [])
+        buckets: Dict[str, List[Dict[str, Any]]] = {"all": [], "several": [], "single": []}
+        for group in groups:
+            severities = [str(s).strip().lower() for s in (group.get("severity_by_model") or {}).values()]
+            best = max(severities, key=lambda s: _CONSOLIDATED_SEVERITY_RANK.get(s, 0), default="")
+            group["worst_severity"] = best.capitalize() if best else "-"
+            seen = len(group.get("confirming_models") or [])
+            bucket = "all" if seen >= model_count else ("single" if seen == 1 else "several")
+            buckets[bucket].append(group)
+        payload["confirmed_by_all_models"] = buckets["all"]
+        payload["confirmed_by_several_models"] = buckets["several"]
+        payload["single_model_groups"] = buckets["single"]
+        narrative = payload.get("narrative")
+        if narrative:
+            for key in ("priorities_markdown", "guidance_markdown"):
+                narrative[f"{key.removesuffix('_markdown')}_html"] = markdown.markdown(
+                    str(narrative.get(key) or ""),
+                    extensions=["tables", "fenced_code"],
+                )
+        payload["narrative"] = narrative
+        template = self.template_env.get_template("reports/consolidated_from_json.html.j2")
+        return template.render(document=payload, preview=preview_context or {})
+
     def render_report_html_from_json_payload(
         self,
         payload: Dict,
@@ -480,6 +514,10 @@ class Report:
         if report_type == "audit":
             doc = AuditReportDocument.model_validate(payload)
             inner_html = self._render_audit_inner_html(doc, pc)
+            return self.render_template(inner_html)
+        if report_type == "consolidated":
+            doc = ConsolidatedReportDocument.model_validate(payload)
+            inner_html = self._render_consolidated_inner_html(doc, pc)
             return self.render_template(inner_html)
         raise ValueError(f"Unsupported canonical report type: {report_type}")
 

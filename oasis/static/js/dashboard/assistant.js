@@ -857,7 +857,12 @@ DashboardApp._truncateAssistantLabel = function (text, maxLen) {
 
 /** True for _executive_summary report path (md or json) under security-reports. */
 DashboardApp.isExecutiveSummaryPath = function (reportPath) {
-    return /(^|\/)_executive_summary\.(json|md)$/i.test(String(reportPath || ''));
+    return /(^|\/)\_executive_summary\.(json|md)$/i.test(String(reportPath || ''));
+};
+
+/** True for the run-level consolidated multi-model report path (issue #60). */
+DashboardApp.isConsolidatedReportPath = function (reportPath) {
+    return /(^|\/)consolidated\/consolidated_report\.json$/i.test(String(reportPath || ''));
 };
 
 /** Map sibling md/json paths (same stem) so assistant API sees the canonical JSON path. */
@@ -1353,6 +1358,12 @@ DashboardApp.mountReportAssistantPanel = function () {
     const canonicalPath = DashboardApp.canonicalAssistantReportPath(rawPath);
     const execSummary = DashboardApp.isExecutiveSummaryPath(canonicalPath);
     if (rms.currentFormat !== 'json' && !execSummary) {
+        return;
+    }
+    // Consolidated multi-model reports stay assistant-free for now: the chat
+    // contract expects vulnerability/executive payload shapes (issue #60).
+    if (typeof DashboardApp.isConsolidatedReportPath === 'function'
+        && DashboardApp.isConsolidatedReportPath(canonicalPath)) {
         return;
     }
 

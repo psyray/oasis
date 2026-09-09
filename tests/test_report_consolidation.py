@@ -234,5 +234,50 @@ class TestWriteConsolidatedReport(unittest.TestCase):
         self.assertEqual(len(reparsed.groups), doc["counts"]["total_groups"])
 
 
+class TestConsolidatedHtmlRender(unittest.TestCase):
+    def test_render_report_html_from_json_payload(self):
+        from unittest.mock import MagicMock
+
+        from oasis.report import Report
+
+        with _RunDir({"m1": [_vuln_doc("m1")], "m2": [_vuln_doc("m2")]}) as run:
+            doc = write_consolidated_report(
+                run.path,
+                backend=MagicMock(
+                    chat=MagicMock(
+                        return_value={
+                            "message": {"content": json.dumps(
+                                {"overview": "All good.", "priorities_markdown": "- Fix XSS", "guidance_markdown": "Escape output."}
+                            )}
+                        }
+                    )
+                ),
+                report_model="reporter",
+            )
+            assert doc is not None  # type narrowing for the checker
+            report = Report(str(run.path), ["json"])
+            html = report.render_report_html_from_json_payload(doc)
+
+        self.assertIn("Consolidated multi-model report", html)
+        self.assertIn("Confirmed by all models", html)
+        self.assertIn("Single-model findings", html)
+        self.assertIn("All good.", html)
+        self.assertIn("Fix XSS", html)
+
+
+class TestConsolidatedHtmlRenderNarrativeFailure(unittest.TestCase):
+    def test_render_html_without_narrative(self):
+        from oasis.report import Report
+
+        with _RunDir({"m1": [_vuln_doc("m1")], "m2": [_vuln_doc("m2")]}) as run:
+            doc = write_consolidated_report(run.path)
+            assert doc is not None  # type narrowing for the checker
+            report = Report(str(run.path), ["json"])
+            html = report.render_report_html_from_json_payload(doc)
+
+        self.assertIn("Narrative unavailable", html)
+        self.assertIn("Confirmed by all models", html)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1771,6 +1771,90 @@ class TestResolveEmbedBackend(unittest.TestCase):
         )
 
 
+class TestConsolidatedDashboardEntry(unittest.TestCase):
+    """Dashboard index + preview for the run-level consolidated report (issue #60)."""
+
+    _NO_AUTH = staticmethod(lambda f: f)
+
+    def _write_run(self, run_dir: Path) -> None:
+        for model in ("m1", "m2"):
+            json_dir = run_dir / model / "json"
+            json_dir.mkdir(parents=True)
+            (json_dir / "sql_injection.json").write_text(
+                json.dumps(
+                    {
+                        "report_type": "vulnerability",
+                        "model_name": model,
+                        "vulnerability_name": "SQL Injection",
+                        "files": [
+                            {
+                                "file_path": "app.py",
+                                "chunk_analyses": [
+                                    {
+                                        "findings": [
+                                            {
+                                                "title": "Finding",
+                                                "severity": "High",
+                                                "vulnerable_code": "cur.execute(sql)",
+                                            }
+                                        ]
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+        from oasis.helpers.report_consolidation import write_consolidated_report
+
+        self.assertIsNotNone(write_consolidated_report(run_dir))
+
+    def _make_server(self, base: Path):
+        inp = base / "scan_root"
+        inp.mkdir()
+        report = Report(str(inp), ["json"])
+        return WebServer(report, web_password="x", web_assistant_rag=False)
+
+    def test_collect_indexes_consolidated_row(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            server = self._make_server(base)
+            run_dir = server.security_dir / "20260909_090000"
+            self._write_run(run_dir)
+
+            rows = server._collect_reports_from_directories()
+
+            consolidated_rows = [r for r in rows if r.get("vulnerability_type") == "Consolidated Report"]
+            self.assertEqual(len(consolidated_rows), 1)
+            row = consolidated_rows[0]
+            self.assertEqual(row["model"], "Consolidated")
+            self.assertEqual(row["format"], "json")
+            self.assertTrue(row["path"].endswith("consolidated/consolidated_report.json"))
+            self.assertFalse(any(r.get("model") == "consolidated" for r in rows))
+
+    def test_consolidated_html_preview_route(self):
+        from urllib.parse import quote
+
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            server = self._make_server(base)
+            run_dir = server.security_dir / "20260909_090000"
+            self._write_run(run_dir)
+
+            app = Flask(__name__)
+            server.register_routes(app, server, self._NO_AUTH)
+            client = app.test_client()
+            rel_path = "20260909_090000/consolidated/consolidated_report.json"
+            resp = client.get(f"/api/report-html?path={quote(rel_path)}")
+
+            data = resp.get_json()
+            self.assertEqual(resp.status_code, 200, data)
+            self.assertIn("Consolidated multi-model report", data["content"])
+            self.assertIn("Confirmed by all models", data["content"])
+            self.assertIn("sql injection", data["content"].lower())
+
+
 class TestAssistantRagRootResolution(unittest.TestCase):
     def test_resolve_assistant_cache_root_falls_back_for_stale_root(self):
         from oasis.helpers.assistant.web.rag import resolve_assistant_cache_root

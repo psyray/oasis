@@ -21,6 +21,7 @@ from pydantic import ValidationError
 
 from ..backends.base import ModelBackend
 from ..config import REPORT_CONSOLIDATION_DIGEST_MAX_CHARS
+from ..export.filenames import CONSOLIDATED_REPORT_ARTIFACT_STEM
 from ..export.writers import write_utf8_text
 from ..schemas.consolidated_report import (
     ConsolidatedCounts,
@@ -33,8 +34,6 @@ from .misc import load_json_document
 from .report_diff import iter_findings_from_document, iter_json_document_paths
 
 logger = logging.getLogger(__name__)
-
-_CONSOLIDATED_ARTIFACT_STEM = "consolidated_report"
 
 _SEVERITY_RANK: Dict[str, int] = {"critical": 4, "high": 3, "medium": 2, "low": 1}
 
@@ -277,11 +276,11 @@ def write_consolidated_report(
 
     consolidated_dir = run_dir / "consolidated"
     consolidated_dir.mkdir(parents=True, exist_ok=True)
-    write_utf8_text(consolidated_dir / f"{_CONSOLIDATED_ARTIFACT_STEM}.json", doc.model_dump_json(indent=2))
+    write_utf8_text(consolidated_dir / f"{CONSOLIDATED_REPORT_ARTIFACT_STEM}.json", doc.model_dump_json(indent=2))
     write_utf8_text(
-        consolidated_dir / f"{_CONSOLIDATED_ARTIFACT_STEM}.md", "\n".join(_consolidated_markdown_lines(doc))
+        consolidated_dir / f"{CONSOLIDATED_REPORT_ARTIFACT_STEM}.md", "\n".join(_consolidated_markdown_lines(doc))
     )
-    logger.info("Consolidated report written to %s", consolidated_dir / f"{_CONSOLIDATED_ARTIFACT_STEM}.json")
+    logger.info("Consolidated report written to %s", consolidated_dir / f"{CONSOLIDATED_REPORT_ARTIFACT_STEM}.json")
     return doc.model_dump(mode="json")
 
 

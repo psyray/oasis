@@ -933,6 +933,8 @@ oasis -i ./my-project -m qwen2.5-coder:32b,deepseek-r1:32b -rm qwen2.5-coder:14b
 
 Runs with a single model skip the feature (a log line explains it). The digest sent to the model is capped by **`OASIS_REPORT_CONSOLIDATION_DIGEST_MAX_CHARS`** (default 24000, best-confirmed groups kept first). The per-model reports stay untouched — the consolidated document is an additive, cross-model view.
 
+The dashboard lists it under the **`Consolidated`** pseudo-model; opening it renders the canonical JSON preview (TOC, summary buckets, narrative, per-bucket group tables).
+
 <p align="right"><a href="#readme-contents">↑ Back to contents</a></p>
 
 <a id="readme-web"></a>

@@ -53,6 +53,8 @@ from .config import DEFAULT_ARGS, REPORT, VULNERABILITY_MAPPING, MODEL_EMOJIS, V
 from .config import OLLAMA_URL
 from .export.filenames import (
     AUDIT_REPORT_ARTIFACT_STEM,
+    CONSOLIDATED_REPORT_ARTIFACT_STEM,
+    RUN_ARTIFACT_SUBDIR_NAMES,
     artifact_filename,
     report_dir_glob_for_format,
 )
@@ -185,6 +187,10 @@ from .tools import parse_iso_date, parse_report_date
 logger = logging.getLogger(__name__)
 
 _CODEBASE_ACCESS_STATE_CACHE_MAX = 512
+
+# Pseudo-model name under which run-level consolidated multi-model reports are
+# listed in the dashboard (issue #60).
+_CONSOLIDATED_DASHBOARD_MODEL_NAME = "Consolidated"
 
 
 def normalize_dashboard_project_key(value: Any) -> str:
@@ -2801,13 +2807,16 @@ class WebServer:
             return reports
 
         for run_dir, run_key, report_date in self._iter_run_directories(security_reports_dir):
-            for model_dir in (d for d in run_dir.iterdir() if d.is_dir()):
+            for model_dir in (
+                d for d in run_dir.iterdir() if d.is_dir() and d.name not in RUN_ARTIFACT_SUBDIR_NAMES
+            ):
                 model_name = self._desanitize_name(model_dir.name)
                 reports.extend(
                     self._process_model_directory(
                         model_dir, model_name, report_date, run_key
                     )
                 )
+            reports.extend(self._consolidated_report_rows(run_dir, report_date, run_key))
 
         reports.sort(key=lambda x: x["date"] or "", reverse=True)
         return reports
@@ -2817,6 +2826,22 @@ class WebServer:
         reports = self._collect_reports_from_directories()
         self.report_data = reports
         self.global_stats = self._calculate_global_statistics(reports)
+
+    def _consolidated_report_rows(self, run_dir: Path, report_date, run_key: str):
+        """Dashboard rows for the run-level consolidated multi-model report (issue #60)."""
+        json_path = run_dir / "consolidated" / f"{CONSOLIDATED_REPORT_ARTIFACT_STEM}.json"
+        if not json_path.is_file():
+            return []
+        return [
+            self._process_report_file(
+                json_path,
+                _CONSOLIDATED_DASHBOARD_MODEL_NAME,
+                "json",
+                report_date,
+                run_key,
+                run_dir / "consolidated",
+            )
+        ]
 
     def _iter_run_directories(self, security_reports_dir: Path):
         """
@@ -3131,6 +3156,10 @@ class WebServer:
         # Handle audit report (stem ``AUDIT_REPORT_ARTIFACT_STEM``; see export.filenames).
         if AUDIT_REPORT_ARTIFACT_STEM in filename:
             return 'Audit Report'
+
+        # Handle consolidated multi-model report (run-level artifact; issue #60).
+        if CONSOLIDATED_REPORT_ARTIFACT_STEM in filename:
+            return 'Consolidated Report'
 
         vulnerability_patterns = {
             VULNERABILITY_MAPPING[vulnerability]['name'].lower().replace(' ', '_'): VULNERABILITY_MAPPING[vulnerability]['name']
