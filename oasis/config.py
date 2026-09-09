@@ -856,7 +856,9 @@ REPORT = {
     'DASHBOARD_FORMAT_DISPLAY_ORDER': ['html', 'pdf', 'md', 'json', 'sarif'],
     # Realtime dashboard behavior
     'DASHBOARD_REALTIME_ENABLED': True,
-    'DASHBOARD_SOCKETIO_CLIENT_URL': 'https://cdn.socket.io/4.7.5/socket.io.min.js',
+    # Socket.IO client is bundled with the dashboard (self-hosted, no CDN dependency);
+    # override only to point at a custom build or an external CDN.
+    'DASHBOARD_SOCKETIO_CLIENT_URL': '/static/js/vendor/socket.io.min.js',
     'DASHBOARD_SOCKETIO_ASYNC_MODE': 'auto',
     # Optional extra Socket.IO origins (use {port} for the dashboard port). Runtime always
     # adds http://127.0.0.1:{port}, http://localhost:{port}, and when web_expose is not
