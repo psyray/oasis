@@ -11,6 +11,7 @@ import re
 import secrets
 import socket
 import string
+import threading
 from threading import Thread
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -359,6 +360,11 @@ class WebServer:
         self._codebase_access_state_cache: OrderedDict[
             Tuple[Optional[str], Path], Tuple[Optional[Path], bool]
         ] = OrderedDict()
+        # Single-flight guard: concurrent dashboard requests (three parallel
+        # ``force=1`` fetches, the progress monitor) must not each walk the
+        # report tree; the first requester collects, later arrivals reuse it.
+        self._collect_lock = threading.Lock()
+        self._collect_epoch = 0
         if not isinstance(report, Report):
             raise ValueError("Report must be an instance of Report")
         
@@ -418,6 +424,7 @@ class WebServer:
         self._assistant_ollama_manager = None
         self._canonical_json_fields_cache.clear()
         self._codebase_access_state_cache.clear()
+        self._collect_epoch = 0
 
         app = Flask(
             __name__, template_folder=str(Path(__file__).parent / "templates"),
@@ -3010,10 +3017,23 @@ class WebServer:
         return reports
 
     def collect_report_data(self) -> None:
-        """Refresh ``report_data`` and ``global_stats`` from ``security_reports`` layout."""
-        reports = self._collect_reports_from_directories()
-        self.report_data = reports
-        self.global_stats = self._calculate_global_statistics(reports)
+        """Refresh ``report_data`` and ``global_stats`` from ``security_reports`` layout.
+
+        Single-flighted: concurrent callers (three parallel ``force=1``
+        dashboard fetches, the progress monitor, an explicit reload) share one
+        directory walk — callers arriving while a collect is in flight reuse
+        its result, which is already fresher than their own start.
+        """
+        epoch_on_entry = self._collect_epoch
+        with self._collect_lock:
+            if self._collect_epoch != epoch_on_entry:
+                # A concurrent collect completed while this caller waited on
+                # the lock; its snapshot is at least as fresh as our entry.
+                return
+            reports = self._collect_reports_from_directories()
+            self.report_data = reports
+            self.global_stats = self._calculate_global_statistics(reports)
+            self._collect_epoch += 1
 
     def _consolidated_report_rows(self, run_dir: Path, report_date, run_key: str):
         """Dashboard rows for the run-level consolidated multi-model report (issue #60)."""

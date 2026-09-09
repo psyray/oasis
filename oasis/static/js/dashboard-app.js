@@ -269,7 +269,11 @@ const DashboardApp = {
                 this.initializeFilters();
                 // First-load stats omit every facet's own filter so the filter option
                 // lists stay complete even when a persisted filter is restored.
+                // No force on first load: the server collected report data at startup
+                // and the progress monitor keeps it fresh (<= 2s old), so the initial
+                // render reads warm in-memory data instead of re-walking the tree.
                 this.refreshDashboard({
+                    force: false,
                     statsIncludeModel: false,
                     statsIncludeVulnerability: false,
                     statsIncludeSeverity: false,

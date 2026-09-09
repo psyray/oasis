@@ -558,6 +558,7 @@ DashboardApp.ensureRealtimeProgress = function() {
 
 DashboardApp.refreshDashboard = function(options = {}) {
     const {
+        force = true,
         statsIncludeModel = true,
         statsIncludeVulnerability = true,
         statsIncludeSeverity = true,
@@ -572,7 +573,9 @@ DashboardApp.refreshDashboard = function(options = {}) {
     this.showLoading('reports-container');
     
     const fullParams = new URLSearchParams(DashboardApp.buildFilterParams());
-    fullParams.append('force', '1');
+    if (force) {
+        fullParams.append('force', '1');
+    }
     const statsParams = new URLSearchParams(
         DashboardApp.buildFilterParams({
             includeModel: statsIncludeModel,
@@ -583,7 +586,9 @@ DashboardApp.refreshDashboard = function(options = {}) {
             includeProject: statsIncludeProject,
         })
     );
-    statsParams.append('force', '1');
+    if (force) {
+        statsParams.append('force', '1');
+    }
     const reportsParams = new URLSearchParams(fullParams);
     reportsParams.append('md_dates_only', '1');
 
