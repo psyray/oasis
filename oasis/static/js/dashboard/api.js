@@ -15,20 +15,33 @@ DashboardApp.appendActiveSeverityToSearchParams = function(params, options = {})
 DashboardApp.buildFilterParams = function(options = {}) {
     // Create and return URLSearchParams object with active filters
     const {
+        includeModel = true,
         includeVulnerability = true,
         includeSeverity = true,
+        includeFormat = true,
+        includeLanguage = true,
+        includeProject = true,
     } = options;
     const params = new URLSearchParams();
     
-    if (DashboardApp.activeFilters.models && DashboardApp.activeFilters.models.length > 0) {
+    if (
+        includeModel &&
+        DashboardApp.activeFilters.models && DashboardApp.activeFilters.models.length > 0
+    ) {
         params.append('model', DashboardApp.activeFilters.models.join(','));
     }
     
-    if (DashboardApp.activeFilters.formats && DashboardApp.activeFilters.formats.length > 0) {
+    if (
+        includeFormat &&
+        DashboardApp.activeFilters.formats && DashboardApp.activeFilters.formats.length > 0
+    ) {
         params.append('format', DashboardApp.activeFilters.formats.join(','));
     }
 
-    if (DashboardApp.activeFilters.languages && DashboardApp.activeFilters.languages.length > 0) {
+    if (
+        includeLanguage &&
+        DashboardApp.activeFilters.languages && DashboardApp.activeFilters.languages.length > 0
+    ) {
         params.append('language', DashboardApp.activeFilters.languages.join(','));
     }
     
@@ -40,7 +53,10 @@ DashboardApp.buildFilterParams = function(options = {}) {
         params.append('vulnerability', DashboardApp.activeFilters.vulnerabilities.join(','));
     }
 
-    if (DashboardApp.activeFilters.projects && DashboardApp.activeFilters.projects.length > 0) {
+    if (
+        includeProject &&
+        DashboardApp.activeFilters.projects && DashboardApp.activeFilters.projects.length > 0
+    ) {
         params.append('project', DashboardApp.activeFilters.projects.join(','));
     }
 
@@ -445,8 +461,12 @@ DashboardApp.ensureRealtimeProgress = function() {
 
 DashboardApp.refreshDashboard = function(options = {}) {
     const {
+        statsIncludeModel = true,
         statsIncludeVulnerability = true,
         statsIncludeSeverity = true,
+        statsIncludeFormat = true,
+        statsIncludeLanguage = true,
+        statsIncludeProject = true,
     } = options;
     DashboardApp.debug("Refreshing dashboard...");
     
@@ -458,8 +478,12 @@ DashboardApp.refreshDashboard = function(options = {}) {
     fullParams.append('force', '1');
     const statsParams = new URLSearchParams(
         DashboardApp.buildFilterParams({
+            includeModel: statsIncludeModel,
             includeVulnerability: statsIncludeVulnerability,
             includeSeverity: statsIncludeSeverity,
+            includeFormat: statsIncludeFormat,
+            includeLanguage: statsIncludeLanguage,
+            includeProject: statsIncludeProject,
         })
     );
     statsParams.append('force', '1');

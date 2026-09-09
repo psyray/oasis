@@ -1,10 +1,12 @@
 // Filter management functions
+DashboardApp.MODEL_FILTER_STORAGE_KEY = 'oasis.dashboard.modelFilters';
 DashboardApp.VULNERABILITY_FILTER_STORAGE_KEY = 'oasis.dashboard.vulnerabilityFilters';
 DashboardApp.LANGUAGE_FILTER_STORAGE_KEY = 'oasis.dashboard.languageFilters';
 DashboardApp.PROJECT_FILTER_STORAGE_KEY = 'oasis.dashboard.projectFilters';
 DashboardApp.SEVERITY_FILTER_STORAGE_KEY = 'oasis.dashboard.severityFilters';
 DashboardApp.SEVERITY_FILTER_ORDER = ['critical', 'high', 'medium', 'low'];
 DashboardApp.FILTER_STORAGE_KEYS = {
+    models: DashboardApp.MODEL_FILTER_STORAGE_KEY,
     vulnerabilities: DashboardApp.VULNERABILITY_FILTER_STORAGE_KEY,
     languages: DashboardApp.LANGUAGE_FILTER_STORAGE_KEY,
     projects: DashboardApp.PROJECT_FILTER_STORAGE_KEY,
@@ -34,6 +36,30 @@ DashboardApp.saveFilterListToStorage = function(filterName, values) {
 
 DashboardApp.saveVulnerabilityFiltersToStorage = function(vulnerabilityFilters) {
     DashboardApp.saveFilterListToStorage('vulnerabilities', vulnerabilityFilters);
+};
+
+DashboardApp.loadModelFiltersFromStorage = function() {
+    try {
+        const rawFilters = localStorage.getItem(DashboardApp.MODEL_FILTER_STORAGE_KEY);
+        if (!rawFilters) {
+            DashboardApp.activeFilters.models = [];
+            return;
+        }
+
+        const parsedFilters = JSON.parse(rawFilters);
+        DashboardApp.activeFilters.models = DashboardApp.normalizeFilterList(parsedFilters);
+    } catch (error) {
+        DashboardApp.activeFilters.models = [];
+        DashboardApp.debug('Unable to load model filters from localStorage:', error);
+    }
+};
+
+DashboardApp.clearModelFilterStorage = function() {
+    try {
+        localStorage.removeItem(DashboardApp.MODEL_FILTER_STORAGE_KEY);
+    } catch (error) {
+        DashboardApp.debug('Unable to clear model filters from localStorage:', error);
+    }
 };
 
 DashboardApp.loadVulnerabilityFiltersFromStorage = function() {
@@ -180,10 +206,11 @@ DashboardApp.populateFilters = function() {
     Object.keys(DashboardApp.stats.models || {}).sort().forEach(model => {
         const count = DashboardApp.stats.models[model];
         const formattedModel = DashboardApp.formatDisplayName(model, 'model');
+        const isChecked = DashboardApp.activeFilters.models.includes(model) ? 'checked' : '';
         modelFiltersHtml += `
             <div class="filter-option" data-type="model" data-value="${model}">
                 <label>
-                    <input type="checkbox" class="filter-checkbox" data-type="model" data-value="${model}">
+                    <input type="checkbox" class="filter-checkbox" data-type="model" data-value="${model}" ${isChecked}>
                     ${formattedModel} <span class="filter-count">(${count})</span>
                 </label>
             </div>
@@ -381,6 +408,9 @@ DashboardApp.populateFilters = function() {
                 DashboardApp.activeFilters[filterType] = DashboardApp.activeFilters[filterType].filter(item => item !== value);
             }
 
+            if (type === 'model') {
+                DashboardApp.saveFilterListToStorage('models', DashboardApp.activeFilters.models);
+            }
             if (type === 'vulnerability') {
                 DashboardApp.saveVulnerabilityFiltersToStorage(DashboardApp.activeFilters.vulnerabilities);
             }
@@ -577,13 +607,16 @@ DashboardApp.initializeFilters = function() {
                 DashboardApp.activeFilters[filterType] = DashboardApp.activeFilters[filterType].filter(item => item !== value);
             }
 
+            if (type === 'model') {
+                DashboardApp.saveFilterListToStorage('models', DashboardApp.activeFilters.models);
+            }
             if (type === 'severity') {
                 DashboardApp.saveFilterListToStorage('severities', DashboardApp.activeFilters.severities);
             }
             if (type === 'project') {
                 DashboardApp.saveFilterListToStorage('projects', DashboardApp.activeFilters.projects);
             }
-            
+
             // Pour le débogage
             DashboardApp.debug("Updated filters:", DashboardApp.activeFilters);
             
@@ -605,16 +638,17 @@ DashboardApp.initializeFilters = function() {
             DashboardApp.activeFilters.severities = [];
             DashboardApp.activeFilters.projects = [];
             DashboardApp.activeFilters.dateRange = null;
+            DashboardApp.clearModelFilterStorage();
             DashboardApp.clearVulnerabilityFilterStorage();
             DashboardApp.clearLanguageFilterStorage();
             DashboardApp.clearProjectFilterStorage();
             DashboardApp.clearSeverityFilterStorage();
-            
+
             // Reset checkboxes
             document.querySelectorAll('.filter-checkbox').forEach(checkbox => {
                 checkbox.checked = false;
             });
-            
+
             // Reset date fields
             document.getElementById('date-start').value = '';
             document.getElementById('date-end').value = '';
@@ -643,11 +677,12 @@ DashboardApp.clearFilters = function() {
         projects: [],
         dateRange: null
     };
+    DashboardApp.clearModelFilterStorage();
     DashboardApp.clearVulnerabilityFilterStorage();
     DashboardApp.clearLanguageFilterStorage();
     DashboardApp.clearProjectFilterStorage();
     DashboardApp.clearSeverityFilterStorage();
-    
+
     // Refresh reports only - stats will be calculated from reports
     DashboardApp.fetchReports();
 };

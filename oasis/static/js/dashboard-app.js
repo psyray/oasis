@@ -248,7 +248,10 @@ const DashboardApp = {
         // Load templates first
         this.initTemplates()
             .then(() => {
-                // Restore persisted vulnerability filters before first API calls.
+                // Restore persisted filters before first API calls.
+                if (typeof this.loadModelFiltersFromStorage === 'function') {
+                    this.loadModelFiltersFromStorage();
+                }
                 if (typeof this.loadVulnerabilityFiltersFromStorage === 'function') {
                     this.loadVulnerabilityFiltersFromStorage();
                 }
@@ -264,8 +267,16 @@ const DashboardApp = {
 
                 // Initialize the dashboard only after templates are loaded
                 this.initializeFilters();
-                // Match previous startup: stats omit vulnerability in the query so filter options stay complete.
-                this.refreshDashboard({ statsIncludeVulnerability: false, statsIncludeSeverity: false });
+                // First-load stats omit every facet's own filter so the filter option
+                // lists stay complete even when a persisted filter is restored.
+                this.refreshDashboard({
+                    statsIncludeModel: false,
+                    statsIncludeVulnerability: false,
+                    statsIncludeSeverity: false,
+                    statsIncludeFormat: false,
+                    statsIncludeLanguage: false,
+                    statsIncludeProject: false,
+                });
                 if (typeof this.ensureRealtimeProgress === 'function') {
                     this.ensureRealtimeProgress();
                 } else {
@@ -310,6 +321,9 @@ const DashboardApp = {
                     projects: [],
                     dateRange: null
                 };
+                if (typeof self.clearModelFilterStorage === 'function') {
+                    self.clearModelFilterStorage();
+                }
                 if (typeof self.clearVulnerabilityFilterStorage === 'function') {
                     self.clearVulnerabilityFilterStorage();
                 }
